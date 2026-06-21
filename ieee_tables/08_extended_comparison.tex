@@ -1,0 +1,18 @@
+\begin{table}[h]
+\centering
+\caption{Extended baseline comparison: test accuracy.}
+\label{tab:extended}
+\begin{tabular}{lrrrrr}
+\toprule
+Dataset & KN(5) & PPM*(20) & LSTM(64) & Predictor & Forest \\
+\midrule
+Airline & 27.6\% & 27.6\% & 24.1\% & \textbf{41.4\%} & \textbf{41.4\%} \\
+Alice (15K) & \textbf{52.8\%} & \underline{51.8\%} & 39.9\% & 51.7\% & \underline{51.9\%} \\
+Moby Dick (50K) & \textbf{47.2\%} & 45.3\% & 38.6\% & \underline{46.2\%} & 46.1\% \\
+DNA (full 48K) & \underline{30.1\%} & 26.6\% & \textbf{32.5\%} & 29.1\% & 27.9\% \\
+Weather & \underline{50.9\%} & 48.2\% & 43.6\% & \textbf{52.7\%} & \underline{51.8\%} \\
+PRNG & \underline{15.0\%} & \textbf{18.0\%} & 10.0\% & 15.0\% & 14.0\% \\
+Electricity & \textbf{84.8\%} & 81.9\% & \textbf{84.8\%} & \underline{84.7\%} & \underline{84.6\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

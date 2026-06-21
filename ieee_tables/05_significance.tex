@@ -1,0 +1,20 @@
+\begin{table}[h]
+\centering
+\caption{Wilcoxon signed-rank test vs PPM-D(5).}
+\label{tab:significance}
+\begin{tabular}{l r rr rr}
+\toprule
+Dataset & $n$ & \multicolumn{2}{c}{Predictor vs PPM-D} & \multicolumn{2}{c}{Forest vs PPM-D} \\
+\midrule
+ & & Acc. $\Delta$ & $p$ & Acc. $\Delta$ & $p$ \\
+\midrule
+Airline & 29 & +13.8pp$^{}$ & 0.068 & +13.8pp$^{}$ & 0.068 \\
+Alice (15K) & 3000 & -0.1pp$^{}$ & 0.827 & -0.1pp$^{}$ & 0.833 \\
+Moby Dick (50K) & 10000 & -0.2pp$^{}$ & 0.459 & +0.1pp$^{}$ & 0.857 \\
+DNA (full 48K) & 9701 & -1.4pp$^{*}$ & 0.012 & -1.8pp$^{**}$ & 0.002 \\
+Weather & 110 & +4.5pp$^{}$ & 0.446 & +3.6pp$^{}$ & 0.527 \\
+PRNG & 100 & -4.0pp$^{}$ & 0.285 & -4.0pp$^{}$ & 0.344 \\
+Electricity & 9063 & -6.0pp$^{***}$ & 0.000 & -1.3pp$^{***}$ & 0.000 \\
+\bottomrule
+\end{tabular}
+\end{table}

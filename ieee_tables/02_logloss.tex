@@ -1,0 +1,18 @@
+\begin{table}[h]
+\centering
+\caption{Log-loss (bits/symbol). Lower is better.}
+\label{tab:logloss}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Dataset & Persistence & Majority & N-gram(5) & PPM-D(5) & CTW(5) & Predictor & Forest \\
+\midrule
+Airline & \textbf{300.00\%} & \textbf{300.00\%} & 390.08\% & 367.17\% & 380.43\% & 361.93\% & \textbf{300.00\%} \\
+Alice (15K) & 475.49\% & 475.49\% & 368.21\% & \underline{276.20\%} & 279.15\% & \textbf{269.66\%} & 475.49\% \\
+Moby Dick (50K) & 512.93\% & 512.93\% & 402.24\% & 296.85\% & \underline{296.51\%} & \textbf{293.21\%} & 512.93\% \\
+DNA (full 48K) & 200.00\% & 200.00\% & 200.67\% & 202.47\% & \textbf{197.96\%} & \underline{199.57\%} & 200.00\% \\
+Weather & 158.50\% & 158.50\% & \underline{135.44\%} & 164.41\% & 136.81\% & \textbf{135.17\%} & 158.50\% \\
+PRNG & \textbf{332.19\%} & \textbf{332.19\%} & 334.73\% & 393.52\% & 332.97\% & 352.70\% & \textbf{332.19\%} \\
+Electricity & 100.00\% & 100.00\% & 59.41\% & \underline{59.41\%} & \textbf{59.38\%} & 91.13\% & 100.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}

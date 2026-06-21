@@ -1,0 +1,15 @@
+\begin{table}[h]
+\centering
+\caption{Post-drift recovery: accuracy in first 120 steps after each concept change (within training partition). Higher = faster adaptation.}
+\label{tab:postdrift}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Stream & Persistence & Majority & N-gram(1) & PPM-D(1) & CTW(1) & Predictor & Forest \\
+\midrule
+Sudden (k=1) & 1.7\% & 26.7\% & 1.7\% & 1.7\% & 1.7\% & \textbf{80.0\%} & \underline{73.3\%} \\
+Gradual (k=1) & 0.0\% & 35.0\% & 25.0\% & 25.0\% & 25.0\% & \textbf{70.8\%} & \underline{69.2\%} \\
+Recurring (k=1) & 0.0\% & 7.5\% & 1.7\% & 1.7\% & 1.7\% & \textbf{78.3\%} & \underline{75.0\%} \\
+Fast (k=1) & 0.8\% & 0.0\% & 0.0\% & 0.0\% & 0.0\% & \textbf{79.2\%} & \underline{75.0\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

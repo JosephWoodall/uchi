@@ -1,0 +1,15 @@
+\begin{table}[h]
+\centering
+\caption{Test accuracy (\%) on concept-drift streams. All methods capped to order $k=1$ so the count-based methods cannot escape the drift via higher-order backoff. Sudden: reversal at step 500; Gradual: 200-step ramp; Recurring: $300$-step A$\to$B$\to$A cycles; Fast: reversal every 150 steps.}
+\label{tab:drift_accuracy}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Dataset & Persistence & Majority & N-gram(1) & PPM-D(1) & CTW(1) & Predictor & Forest \\
+\midrule
+Sudden (k=1) & 2.0\% & 33.5\% & 2.5\% & 2.5\% & 4.5\% & \textbf{97.0\%} & \textbf{97.0\%} \\
+Gradual (k=1) & 0.8\% & 32.9\% & 5.0\% & 5.0\% & 6.2\% & \textbf{98.3\%} & \textbf{98.3\%} \\
+Recurring (k=1) & 1.2\% & 33.3\% & 3.8\% & 3.3\% & 4.2\% & \textbf{97.5\%} & \textbf{97.5\%} \\
+Fast (k=1) & 1.2\% & 25.8\% & 40.0\% & 39.6\% & 40.4\% & \textbf{94.6\%} & \underline{93.3\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

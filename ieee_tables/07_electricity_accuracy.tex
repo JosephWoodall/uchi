@@ -1,0 +1,12 @@
+\begin{table}[h]
+\centering
+\caption{Test accuracy (\%) on the Electricity dataset (Harries 1999; $n=45,312$ steps, binary label: price UP/DOWN). All methods use context order $k=4$. \textbf{Bold} = best, \underline{underline} = second best.}
+\label{tab:electricity_accuracy}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Dataset & Persistence & Majority & N-gram(4) & PPM-D(4) & CTW(4) & Predictor & Forest \\
+\midrule
+Electricity & \textbf{84.8\%} & 54.9\% & \textbf{84.8\%} & \textbf{84.8\%} & \textbf{84.8\%} & \underline{84.7\%} & \underline{84.6\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

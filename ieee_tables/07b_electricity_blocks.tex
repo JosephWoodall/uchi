@@ -1,0 +1,32 @@
+\begin{table}[h]
+\centering
+\caption{Per-1000-step rolling accuracy (\%) on Electricity. First and last 10 blocks shown. Drift is gradual throughout the 2-year stream.}
+\label{tab:electricity_blocks}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Steps & Persistence & Majority & N-gram(4) & PPM-D(4) & CTW(4) & Predictor & Forest \\
+\midrule
+0K--1K & \textbf{86.0\%} & 50.0\% & 85.1\% & 85.2\% & \underline{85.6\%} & 83.3\% & 81.4\% \\
+1K--2K & \textbf{86.0\%} & 70.2\% & 85.9\% & \textbf{86.0\%} & \textbf{86.0\%} & 82.7\% & 82.2\% \\
+2K--3K & \textbf{81.4\%} & 58.9\% & 81.3\% & 81.2\% & \textbf{81.4\%} & 76.7\% & 72.1\% \\
+3K--4K & \textbf{83.1\%} & 61.0\% & \textbf{83.1\%} & \textbf{83.1\%} & \textbf{83.1\%} & 78.5\% & 76.8\% \\
+4K--5K & \textbf{84.0\%} & 64.6\% & \textbf{84.0\%} & \textbf{84.0\%} & \textbf{84.0\%} & 77.6\% & 79.6\% \\
+5K--6K & \textbf{84.8\%} & 58.2\% & \textbf{84.8\%} & \textbf{84.8\%} & \textbf{84.8\%} & 78.8\% & 81.9\% \\
+6K--7K & \textbf{80.8\%} & 57.9\% & \textbf{80.8\%} & \textbf{80.8\%} & \textbf{80.8\%} & 72.9\% & 75.7\% \\
+7K--8K & \textbf{82.9\%} & 47.4\% & \textbf{82.9\%} & \textbf{82.9\%} & \textbf{82.9\%} & 75.8\% & 78.8\% \\
+8K--9K & \textbf{82.9\%} & 47.5\% & \textbf{82.9\%} & \textbf{82.9\%} & \textbf{82.9\%} & 77.0\% & 80.6\% \\
+9K--10K & \textbf{85.7\%} & 50.4\% & \textbf{85.7\%} & \textbf{85.7\%} & \textbf{85.7\%} & 80.0\% & 83.8\% \\
+\multicolumn{8}{c}{$\vdots$} \\
+35K--36K & \textbf{84.5\%} & 69.3\% & \textbf{84.5\%} & \textbf{84.5\%} & \textbf{84.5\%} & 79.7\% & 84.2\% \\
+36K--37K & \textbf{83.9\%} & 65.0\% & \textbf{83.9\%} & \textbf{83.9\%} & \textbf{83.9\%} & 79.5\% & 82.9\% \\
+37K--38K & \textbf{85.8\%} & 66.1\% & \textbf{85.8\%} & \textbf{85.8\%} & \textbf{85.8\%} & 79.8\% & 84.6\% \\
+38K--39K & \textbf{86.9\%} & 53.1\% & \textbf{86.9\%} & \textbf{86.9\%} & \textbf{86.9\%} & 81.4\% & 85.2\% \\
+39K--40K & \textbf{85.4\%} & 44.6\% & \textbf{85.4\%} & \textbf{85.4\%} & \textbf{85.4\%} & 79.0\% & 84.5\% \\
+40K--41K & \textbf{81.5\%} & 47.0\% & \textbf{81.5\%} & \textbf{81.5\%} & \textbf{81.5\%} & 74.7\% & 79.8\% \\
+41K--42K & \textbf{84.1\%} & 49.3\% & \textbf{84.1\%} & \textbf{84.1\%} & \textbf{84.1\%} & 78.0\% & 83.0\% \\
+42K--43K & \textbf{87.2\%} & 53.5\% & \textbf{87.2\%} & \textbf{87.2\%} & \textbf{87.2\%} & 82.7\% & 86.6\% \\
+43K--44K & \textbf{81.6\%} & 63.3\% & \textbf{81.6\%} & \textbf{81.6\%} & \textbf{81.6\%} & 75.3\% & 79.8\% \\
+44K--45K & \textbf{87.0\%} & 57.6\% & \textbf{87.0\%} & \textbf{87.0\%} & \textbf{87.0\%} & 81.1\% & 85.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,17 @@
+\begin{table}[h]
+\centering
+\caption{Accuracy (\%) and wall-clock time (ms) vs sequence length $n$. Predictor creates $O(n)$ nodes; reported as node count at end of sequence.}
+\label{tab:scaling}
+\begin{tabular}{rrrrrrrrr}
+\toprule
+ & \multicolumn{2}{c}{N-gram(5)} & \multicolumn{2}{c}{PPM-D(5)} & \multicolumn{2}{c}{CTW(5)} & \multicolumn{2}{c}{Predictor} \\
+n & Acc.\% & ms & Acc.\% & ms & Acc.\% & ms & Acc.\% & ms \\
+\midrule
+250 & 10.0 & 1 & 12.0 & 2 & 12.0 & 6 & 12.0 & 4 \\
+500 & 16.0 & 3 & 14.0 & 5 & 15.0 & 12 & 12.0 & 8 \\
+1000 & 10.0 & 5 & 11.0 & 10 & 9.5 & 24 & 10.0 & 17 \\
+2500 & 9.8 & 12 & 9.4 & 25 & 10.6 & 59 & 11.0 & 43 \\
+5000 & 10.2 & 24 & 9.2 & 53 & 8.9 & 120 & 10.3 & 91 \\
+\bottomrule
+\end{tabular}
+\end{table}
