@@ -169,52 +169,7 @@ gen.augment(X, n_copies=5, temperature=1.1)  # augmented dataset
 
 The three generators (`SequenceGenerator`, `TabularGenerator`, `TimeSeriesGenerator`) share the same trie engine as the predictors. Generation is sampling from the learned conditional distribution rather than taking the argmax. All sampling controls (temperature, top-k, top-p, stop tokens) operate on that distribution at runtime.
 
-**Known limitations (and their active solutions):**
 
-1. **Hard context ceiling.** The model conditions on exactly the last k tokens — nothing before that is visible, regardless of how well the input is tokenized. For structured sequence prediction this is usually fine; for tasks with true long-range dependencies it is an architectural wall.
-   *Fix:* `OnlineTokenizer` — merges frequent token pairs into single tokens while the stream runs, no offline training required. Each of the k slots then covers more of the original sequence. Merge decisions are scored by whether they improve or hurt prediction accuracy and adjusted accordingly.
-
-2. **No cross-context generalization.** `"the cat sat"` and `"a cat sat"` are unrelated nodes in the trie. Evidence never transfers between structurally similar but lexically different contexts. Count-based methods (CTW, KN) share statistical strength through smoothing; the trie does not.
-   *Fix:* Similarity fallback — when exact context match fails at depth d, find trie nodes that share the most tokens with the current context and blend their distributions by token-overlap weight. Enabled via `use_similarity_fallback=True`.
-
-3. **Cold start.** The first ~800 tokens of any sequence are sparse. Predictions fall back to the KT/KN prior, which is weak. This is the dominant failure mode for short generation tasks.
-   *Fix:* `LongTermStore` — a persistent trie that never resets between runs. Before a new sequence begins it provides a warm prior. As the sequence-specific trie builds confidence it gradually takes over. Observable via `run_history()`.
-
-4. **Credibility cap stalls at scale.** `cred_max` freezes the blend weight λ before it reaches 1.0. On long stationary corpora, count-based methods keep sharpening indefinitely while the predictor plateaus. This is the source of the 1–2pp deficit against CTW on Alice and Moby Dick.
-   *Fix:* Adaptive cap — the ceiling rises slowly as a node accumulates observations, so well-evidenced nodes keep sharpening. Active (uncompressed) nodes have no hard cap; the cap only applies to archived compressed nodes. Enabled via `adaptive_cap=True`.
-
-5. **No cross-sequence memory.** Every `fit()` call starts from scratch. Patterns learned on one corpus leave no trace for the next. The model cannot accumulate prior knowledge across sessions.
-   *Fix:* `LongTermStore` replay — at the end of each sequence, high-confidence patterns from the short-term trie are written into the long-term store at a slow learning rate. Patterns that appear consistently across many sequences accumulate and strengthen. The store persists to disk as a gzip-compressed file.
-
-6. **Memory grows unbounded.** The trie stores every observed n-gram and never compresses converged nodes. Long training sequences produce large tries with no automatic pruning.
-   *Fix:* `NodeCompressor` — when a node has hit its credibility ceiling and its distribution has been stable, it is gzip-compressed and freed from active memory. Active learning nodes stay in full resolution. Compression decisions are scored over time: if a compressed node's accuracy degrades it is decompressed and allowed to keep learning.
-
-7. **Stationary/drift tradeoff.** Any parameter that improves generation quality on stationary data (higher `cred_max`, higher `lambda_power`) hurts adaptation speed on drifting data, and vice versa. This is architectural — it cannot be tuned away.
-   *Fix:* `DualPredictor` — two predictors run in parallel, one tuned for stability, one for fast drift recovery. A rolling error-rate window routes weight between them. When error rate spikes, weight shifts toward the drift predictor; when stable and low, toward the stability predictor.
-
-8. **Zero mass on unseen k-grams.** The trie assigns no probability to any context it has never observed. Even with KT/KN smoothing, it cannot infer that two structurally similar but lexically different contexts should produce similar outputs. A neural model interpolates across weight space; the trie has a hard zero and must rely entirely on backoff to shallower depths.
-   *Fix:* Three-layer fallback — (1) short-term trie at progressively shallower depths, (2) `LongTermStore` which has seen far more contexts and will match where the short-term trie cannot, (3) running unigram floor as the final backstop. With a well-populated long-term store the floor is rarely reached.
-
-9. **No selective gating.** All k sampled past tokens are weighted by credibility equally — the model cannot decide which parts of past context are relevant to the current prediction and suppress the rest. SSM-style selective state updates approximate this; credibility is a coarser proxy that operates at the node level, not the token level.
-   *Fix:* Positional weight table — the predictor tracks for each of the k context positions how often a match at that position contributed to a correct prediction. Positions that historically helped more get more influence. Updated after every feedback step. Enabled via `use_positional_weights=True`.
-
-10. **No joint optimization of compression and prediction.** If a compression layer (BPE, VQ codebook, adaptive discretization) is added upstream to extend the effective receptive field, it is trained separately from the trie. Errors in the compression step compound into the prediction step. Neural architectures train both end-to-end via backprop, so the tokenizer learns to produce tokens that are maximally predictable, not just maximally compact.
-    *Fix:* `OnlineTokenizer` merge scoring — after each merge, prediction accuracy on the immediately following tokens is measured. Merges that hurt accuracy are penalized; merges that help are reinforced. Over many sequences the tokenizer learns which compressions are genuinely useful for prediction, not just compact.
-
----
-
-## The "LLM/Random Forest Parity" Problem
-
-We recently sought to close the gap with deep learning models (LLMs on sequences, Random Forests on Tabular) using purely mathematical methods, specifically aiming to capture deep semantic embeddings and complex global feature interactions *without* offline neural pre-training.
-
-**The Solution:**
-1. **Continuous Hoeffding Tries:** We replaced discrete histogram counting with exact Gaussian Statistics ($N, \Sigma x, \Sigma x^2$) per feature and class. Candidate continuous numerical thresholds are dynamically evaluated using the Gaussian Cumulative Distribution Function (CDF).
-2. **Gaussian Naive Bayes Leaves:** At inference time, instead of taking a simple majority vote, leaf nodes calculate mathematically optimal Gaussian Naive Bayes probabilities: $P(y|X) \propto P(y) \prod P(x_i|y)$.
-
-**The Result:** Performance on strict literal benchmarks fundamentally achieved SOTA parity.
-- **Tabular:** The accuracy immediately spikes to **~86%**, identical to offline Random Forests, completely solving the initial problem of online models underperforming on small batches.
-- **Concept Drift:** When a sudden data shift hits, offline Random Forests crash to **44%**. Uchi dynamically adapts and recovers to **84-87%** instantly.
-- **Generative Sequences:** Utilizing pure CTW bounded prediction, Uchi processes the `enwik8` Wikipedia corpus stream and achieves compression ratios under **2.7 bits/char** (beating standard `gzip`) instantly without massive offline pre-computation.
 
 ---
 
