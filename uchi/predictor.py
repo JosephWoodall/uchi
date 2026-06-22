@@ -60,6 +60,24 @@ class _TrieNode:
         self.n_obs:     int   = 0     # times this context was seen
         self.last_step: int   = 0     # last global step this node was updated
 
+    def prune_stale(self, current_step: int, max_age: int) -> int:
+        """Recursively deletes child nodes that haven't been accessed in max_age steps. Returns num deleted."""
+        deleted = 0
+        stale_keys = []
+        for symbol, child in self.children.items():
+            if current_step - child.last_step > max_age:
+                stale_keys.append(symbol)
+            else:
+                deleted += child.prune_stale(current_step, max_age)
+                
+        for key in stale_keys:
+            del self.children[key]
+            if key in self.succ_cred:
+                del self.succ_cred[key]
+            deleted += 1
+            
+        return deleted
+
 
 class UniversalPredictor:
 
@@ -143,6 +161,16 @@ class UniversalPredictor:
         self.coupling:          dict  = {}
         self._coupling_counts:  dict  = {}
         self.lam:               float = 0.0
+
+    def prune_stale_branches(self, max_age: int = 100000) -> int:
+        """
+        LRU Eviction (RAM Optimization): Triggers the pruning of nodes 
+        that have not been accessed or updated in `max_age` global steps.
+        Returns the total number of nodes pruned.
+        """
+        if self._root:
+            return self._root.prune_stale(self._global_step, max_age)
+        return 0
 
     # ── public interface ──────────────────────────────────────────────────────
 

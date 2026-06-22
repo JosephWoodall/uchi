@@ -1,0 +1,2 @@
+[console_scripts]
+uchi = uchi.cli:main

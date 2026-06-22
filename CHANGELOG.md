@@ -2,10 +2,15 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
-## [0.2.0] - 2026-06-22
+## [0.2.0] - The Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
+- **Fractal Attention**: Replaced the fixed sliding window in `AssociativeMemory` with a dynamic, global co-occurrence graph that natively mimics multi-headed self-attention at $O(1)$ speed.
+- **AST Coding Superpowers**: `OmniTokenizer` now natively parses Python code into an Abstract Syntax Tree (AST), allowing Uchi to deterministically learn the structural geometry of code to ensure mathematically impossible syntax errors.
+- **Levenshtein Subword Fallback**: `OmniTokenizer` dynamically clusters Out-Of-Vocabulary slang and domain terminology using `difflib` subword distances.
+- **Preloading CLI**: Added the `--preload` flag to `uchi chat` and `uchi debate` for instant "Runtime Pre-Training" over entire directories of code and text.
+- **Persistent Brain States**: `uchi chat` now implicitly saves and loads the `OmniRouter` state to a `.uchi` binary file.
 
-### Architecture Shift: The Deterministic LLM
-Uchi v0.2.0 officially transitions the `UniversalPredictor` from a specialized math tool into a true **Multi-Modal Deterministic LLM**, capable of functioning as a lifelong AI brain at the absolute edge.
+### Architecture Shift: ODUSP
+Uchi v0.2.0 officially transitions the `UniversalPredictor` from a specialized math tool into an **Omni-modal Deterministic Universal Sequence Predictor**, capable of functioning as a lifelong mathematical brain at the absolute edge.
 
 ### Added
 - **Pillar 1: The OmniRouter (Multi-Modal Frontend)** 

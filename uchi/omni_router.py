@@ -30,13 +30,11 @@ class OmniRouter:
         # Phase 3: Plural Sequence Generation
         self.predictor = SequenceGenerator(context_length=context_length) 
         
-    def stream(self, data_stream: List[Any]):
+    def stream(self, concepts: list):
         """
-        Ingest a mixed-modality stream, abstract it, compress it, 
-        store it geometrically, and train the deterministic predictor.
+        Ingest a raw stream of multi-modal objects.
         """
-        # 1. Abstract modalities into [CONCEPT_IDs]
-        concepts = [self.tokenizer.tokenize(d) for d in data_stream]
+        concepts = self.tokenizer.tokenize(concepts)
         
         # 2. Compress the stream via BPE
         if self.bpe:
@@ -49,22 +47,42 @@ class OmniRouter:
         # 4. Train the deterministic trie
         self.predictor.fit(concepts)
         
-    def query(self, prompt: List[Any]) -> str:
+    def query(self, prompt: list) -> str:
         """
-        Zero-Shot Omni-Retrieval. Cross-modally retrieve an answer 
-        using geometric non-parametric attention.
+        Zero-Shot Question Answering against the memory buffer.
         """
-        concepts = [self.tokenizer.tokenize(p) for p in prompt]
+        query_sequence = prompt
+        concept_query = self.tokenizer.tokenize(query_sequence)
         if self.bpe:
-            concepts = list(self.bpe.tokenize(concepts))
-            
-        return self.memory.query(concepts)
+            concept_query = list(self.bpe.tokenize(concept_query))
         
-    def predict_future(self, prompt: List[Any], steps: int = 1, temperature: float = 1.0) -> List[str]:
+        ans_concept = self.memory.query(concept_query)
+        if ans_concept:
+            return self.tokenizer.detokenize([ans_concept])
+        
+        # Autonomous Web Sourcing Hook
+        try:
+            from uchi.plugins.web import fetch_web_context
+            # If memory failed, try searching the web
+            raw_query = " ".join(query_sequence)
+            web_context = fetch_web_context(raw_query)
+            if web_context:
+                # Stream the new structural truth
+                self.stream(web_context.split())
+                # Re-query the memory
+                ans_concept2 = self.memory.query(concept_query)
+                if ans_concept2:
+                    return self.tokenizer.detokenize([ans_concept2])
+        except Exception:
+            pass
+            
+        return "[Unknown Context]"
+        
+    def predict_future(self, prompt: list, steps: int = 1, temperature: float = 0.0) -> list:
         """
-        Simulate the parallel future of the multimodal stream.
+        Simulates the causal future of the sequence.
         """
-        concepts = [self.tokenizer.tokenize(p) for p in prompt]
+        concepts = self.tokenizer.tokenize(prompt)
         if self.bpe:
             concepts = list(self.bpe.tokenize(concepts))
             

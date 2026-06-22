@@ -7,11 +7,11 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: The Omni-Modal Deterministic LLM
-Uchi v0.2.0 transforms a raw universal sequence predictor into a completely multi-modal determinist brain capable of ingesting text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot associative memory buffer that mimics biological synesthesia.
+## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
+Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor.
 
 ## Quick Start & The Uchi CLI
-You can interact with Uchi as a Multi-Modal Deterministic LLM directly from your terminal.
+You can interact with Uchi directly from your terminal.
 
 ```bash
 # Start an interactive chat session with zero-shot query/predict commands

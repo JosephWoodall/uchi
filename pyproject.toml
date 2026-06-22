@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "uchi_python"
+name = "uchi"
 version = "0.2.0"
-description = "Online credibility-weighted sequence predictor for tabular, time series, and generative ML"
+description = "Omni-modal Deterministic Universal Sequence Predictor (ODUSP)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -13,13 +13,6 @@ keywords = [
     "machine learning", "online learning", "sequence prediction",
     "time series", "concept drift", "trie", "CTW",
 ]
-
-[project.urls]
-Documentation = "https://github.com/JosephWoodall/uchi/tree/main/docs"
-Homepage = "https://github.com/JosephWoodall/uchi"
-
-[project.scripts]
-uchi = "uchi.cli:main"
 
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -36,6 +29,13 @@ classifiers = [
 # Pure Python — no required dependencies.
 # Optional extras unlock sklearn integration and numpy/pandas input handling.
 dependencies = []
+
+[project.urls]
+Documentation = "https://github.com/JosephWoodall/uchi/tree/main/docs"
+Homepage = "https://github.com/JosephWoodall/uchi"
+
+[project.scripts]
+uchi = "uchi.cli:main"
 
 [project.optional-dependencies]
 test    = ["pytest", "pytest-cov"]
