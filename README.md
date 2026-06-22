@@ -7,9 +7,11 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-Online, instance-based sequence predictor. Given any stream of discrete observations, it learns to predict what comes next — for any symbol type, in any domain — without assuming a fixed distribution, a known alphabet, or a stationary process.
+**Uchi** is an advanced, online sequence predictor that functions as a lifelong simulation engine. 
 
-The `uchi` package extends this core engine to tabular classification, regression, multivariate time series forecasting, anomaly detection, and generative modeling. All classes are sklearn-compatible.
+Given any stream of discrete observations, Uchi learns to predict what comes next—for any symbol type, in any domain—without assuming a fixed distribution, a known alphabet, or a stationary process. When the underlying pattern shifts, Uchi adapts instantly. **No concept-drift detectors. No retraining loops. No explicit forgetting parameters.**
+
+The `uchi` package extends this core intuition engine to tabular classification, multivariate time series forecasting, anomaly detection, goal-directed generative modeling, and complex agent loop simulations. All classes are highly optimized and fully `scikit-learn` compatible.
 
 ---
 
