@@ -1,19 +1,10 @@
-![Uchi Logo](logo.png)
+# Simulation Engine & Advanced Architecture (v0.2.0)
 
-# Uchi Documentation
-
-Welcome to the comprehensive documentation for **Uchi** (Version 0.2.0). 
-This guide covers the usage of our core capabilities, emphasizing the latest architectural components that provide online intelligence extraction.
-
-## Table of Contents
-1. [Mathematical Simulation Stream (Phase 1)](#1-mathematical-simulation-stream)
-2. [Optimal Vector Retrieval (Phase 2)](#2-optimal-vector-retrieval)
-3. [Ontological Process Predictor (Phase 3)](#3-ontological-process-predictor)
-4. [Plural Simulation Engine (Phase 4)](#4-plural-simulation-engine)
+Version 0.2.0 introduced four major architectural extensions that take Uchi from a standard sequence predictor to a lifelong simulation engine.
 
 ---
 
-### 1. Mathematical Simulation Stream
+## 1. Mathematical Simulation Stream
 
 The engine learns arithmetic and algebraic rules completely online, extracting structure and intelligence purely through sequence prediction without any pre-training.
 
@@ -39,7 +30,7 @@ for char in math_stream:
 
 ---
 
-### 2. Optimal Vector Retrieval
+## 2. Optimal Vector Retrieval
 
 When the sequence generator encounters a novel context, it seamlessly falls back to an optimal geometric dense vector query, querying historical distributions rather than guessing randomly.
 
@@ -68,7 +59,7 @@ generated = generator.generate(max_tokens=100)
 
 ---
 
-### 3. Ontological Process Predictor
+## 3. Ontological Process Predictor
 
 Instead of predicting raw strings or numbers, the system can predict discrete, strictly-typed states and actions to model complex workflows, agent loops, or business logic.
 
@@ -95,7 +86,7 @@ predictor.feedback_action(a_sort)
 
 ---
 
-### 4. Plural Simulation Engine
+## 4. Plural Simulation Engine
 
 Simulate thousands of lives (or workflows) in parallel, accumulating their separate experiences into a unified meta-prediction intuition.
 

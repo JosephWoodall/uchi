@@ -13,13 +13,15 @@ theme:
       accent: deep purple
 
 nav:
-  - Home: README.md
+  - Home: index.md
   - API Reference:
-    - Universal Predictor: api/predictor.md
-    - Tabular Models: api/tabular.md
-    - Time Series Models: api/timeseries.md
-    - Generative Models: api/generative.md
-    - Simulation Engine: api/simulation.md
+    - Core Engine: core-engine.md
+    - Tabular Models: tabular.md
+    - Time Series Models: timeseries.md
+    - Generative Models: generative.md
+    - Simulation Engine (v0.2.0): simulation-engine.md
+  - Benchmarks: benchmarks.md
+  - Architecture: architecture.md
   - Contributing: CONTRIBUTING.md
   - Changelog: CHANGELOG.md
 

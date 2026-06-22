@@ -1,0 +1,32 @@
+---
+name: Release Readiness
+description: Executes the release readiness checklist - run regression tests, verify dual-layer documentation, check CI/CD pipelines, and safely push to the active branch.
+---
+
+# Release Readiness Checklist
+
+When invoked to perform a release readiness check (or "release checklist"), follow these exact steps in order:
+
+## 1. Regression Testing
+Run the comprehensive test suite to ensure zero regressions. 
+- Execute `make test` (or `pytest tests/`).
+- Verify that all tests pass successfully. If any tests fail, stop and fix them before proceeding.
+
+## 2. Documentation Verification
+Ensure the documentation architecture is pristine:
+- **Dual-Layer Strategy**: Verify that the root `README.md` remains a short, clean "elevator pitch" (logo, badges, brief summary, pip install, quickstart, and a link to `docs/`).
+- **Comprehensive Docs**: Ensure the `docs/` directory contains the exhaustive markdown files and that `mkdocs.yml` accurately maps to them.
+- **Changelog**: Verify that `CHANGELOG.md` is updated with the latest version features.
+
+## 3. Engineering Best Practices & CI/CD
+Ensure the repository adheres to elite open-source standards:
+- Verify that `.github/workflows/ci.yml` exists and runs `pytest`, `ruff`, and `mypy`.
+- Ensure `.pre-commit-config.yaml`, `CITATION.cff`, `SECURITY.md`, and `.github/FUNDING.yml` are present.
+- Ensure the `pyproject.toml` contains the necessary `dev` and `test` dependencies.
+
+## 4. Final Push
+Once all checks pass, push the changes to GitHub:
+- Stage all changes (`git add .`).
+- Commit with a descriptive message (e.g., "chore: final release readiness sweep").
+- Push to the current branch (`git push`).
+- *Note:* If GitHub rejects the push due to workflow scope restrictions, un-stage `.github/workflows/`, push the rest, and instruct the user to update the workflow via the GitHub Web UI.
