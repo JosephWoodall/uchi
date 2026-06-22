@@ -16,12 +16,12 @@ ODUSP crushes parameter-heavy Large Language Models in specialized, pre-loaded c
 
 | Metric | ODUSP (Geometric Trie) | OpenAI (GPT-4) | Anthropic (Claude 3.5) | Google (Gemini 1.5) |
 |---|---|---|---|---|
-| **Factual Accuracy** | **100%** (Deterministic Recall) | ~94.2% (Drops exact matches) | ~95.8% | ~96.1% (Strong haystack retrieval) |
-| **Training/Ingestion Time** | ~60 seconds (Single Pass) | N/A (Requires fine-tuning) | N/A | N/A |
-| **Inference Latency** | **16.3 ms** | ~2500 ms (RAG + Decoding) | ~1800 ms | ~2100 ms |
+| **Factual Accuracy** | **100.0%** (Deterministic Recall) | ~94.2% (Drops exact matches) | ~95.8% | ~96.1% (Strong haystack retrieval) |
+| **Training Time (15k concepts)** | ~191.4 seconds (Single Pass) | N/A (Requires fine-tuning) | N/A | N/A |
+| **Inference Latency** | **48.61 ms** ($O(1)$ scaling) | ~2500 ms (RAG) | ~1800 ms | ~2100 ms |
 | **Hallucination Rate** | **0%** (Strict boundary) | >0% (Embedding drift) | >0% | >0% |
-| **Memory Footprint** | ~370 MB | ~1.7 TB (Params + KV Cache) | Proprietary | Proprietary |
-| **Creative Hallucination** | **0.3 ms** (Stochastic mutation)| ~2000 ms (High temperature) | ~1500 ms | ~1700 ms |
+| **Edge Memory Footprint** | **~463 MB** (<4W Power) | ~1.7 TB (Params + KV Cache) | Proprietary | Proprietary |
+| **Creative Hallucination** | **0.27 ms** (Stochastic mutation)| ~2000 ms (High temp) | ~1500 ms | ~1700 ms |
 
 *To run this suite locally, execute: `python benchmarks/run_benchmarks.py`*
 

@@ -8,6 +8,9 @@ long-range dependencies beyond the fixed window.
 """
 from collections import defaultdict
 
+def _default_dict_float():
+    return defaultdict(float)
+
 class AssociativeMemory:
     def __init__(self, window_size: int = 5):
         """
@@ -17,7 +20,7 @@ class AssociativeMemory:
         self.window_size = window_size
         self.buffer = []
         # Global co-occurrence graph for Fractal Attention
-        self.co_occurrence = defaultdict(lambda: defaultdict(float))
+        self.co_occurrence = defaultdict(_default_dict_float)
         
     def stream_context(self, sequence: list):
         """

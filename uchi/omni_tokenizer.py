@@ -27,6 +27,20 @@ class OmniTokenizer:
             except ImportError:
                 self.use_wordnet = False
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state['_wn'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if self.use_wordnet:
+            try:
+                from nltk.corpus import wordnet
+                self._wn = wordnet
+            except ImportError:
+                self.use_wordnet = False
+
     def _cluster_image(self, path: str) -> str:
         """Plugin Architecture: Hooks into lightweight Vision encoders if available."""
         try:

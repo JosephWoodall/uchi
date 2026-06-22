@@ -75,12 +75,11 @@ import pickle
 import concurrent.futures
 
 ASCII_LOGO = r"""
-      |\_/\_/\_/|
-      |         |
-      |  O   O  |
-      |    ^    |
-       \  ___  /
-        \_____/
+       _  _
+      (o)(o)
+     /  __  \
+    |  \__/  |
+     \______/
 ODUSP Daemon v0.2.0
 """
 
@@ -221,7 +220,9 @@ def main():
                 else:
                     tokens = cmd.split()
                     router.stream(tokens)
-                    print(f"[{GREEN}+{RESET}] Streamed {len(tokens)} concepts.")
+                    # Automatically generate a response based on the newly streamed context
+                    pred = router.predict_future(tokens, steps=15, creativity=0.5)
+                    print_ai_msg("Reply", ' '.join(pred))
         except KeyboardInterrupt:
             pass
         finally:
