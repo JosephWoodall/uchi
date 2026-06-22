@@ -39,7 +39,7 @@ from .discretize import FeatureDiscretizer, LabelEncoder, _to_rows
 from .tabular    import _make_predictor, _apply_order, _build_orders, _LABEL_NS
 from .long_term_store import LongTermStore
 from .online_tokenizer import OnlineTokenizer
-from .semantic_tokenizer import SemanticTokenizer
+from .omni_tokenizer import OmniTokenizer
 
 try:
     from sklearn.base import BaseEstimator
@@ -322,7 +322,7 @@ class SequenceGenerator(BaseEstimator):
         if self.use_online_tokenizer:
             OT = _get_online_tokenizer()
             self._tokenizer = OT(max_merges=self.tokenizer_max_merges)
-        self.semantic_tokenizer = SemanticTokenizer() if self.use_semantic_hashing else None
+        self.omni_tokenizer = OmniTokenizer() if self.use_semantic_hashing else None
         self.is_fitted_ = True
         self._train_sequences(sequences)
         return self
@@ -404,8 +404,8 @@ class SequenceGenerator(BaseEstimator):
         if not tokens:
             return float('inf')
 
-        if self.semantic_tokenizer:
-            tokens = [self.semantic_tokenizer.tokenize(t) for t in tokens]
+        if self.omni_tokenizer:
+            tokens = [self.omni_tokenizer.tokenize(t) for t in tokens]
         
         saved  = self._pred.history[:]
         total  = 0.0

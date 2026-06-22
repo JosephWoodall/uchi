@@ -34,6 +34,8 @@ from .process           import ProcessPredictor, OntologicalState, OntologicalAc
 from .simulation_engine import LifelongSimulationEngine
 from .wrappers          import InfiniteContextPredictor
 from .memory            import AssociativeMemory
+from .omni_router       import OmniRouter
+from .omni_tokenizer    import OmniTokenizer
 
 __version__ = "0.2.0"
 
@@ -65,4 +67,6 @@ __all__ = [
     "OntologicalAction",
     "LifelongSimulationEngine",
     "InfiniteContextPredictor",
+    "OmniRouter",
+    "OmniTokenizer"
 ]
