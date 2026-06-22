@@ -58,7 +58,7 @@ class OmniRouter:
         
         ans_concept = self.memory.query(concept_query)
         if ans_concept:
-            return self.tokenizer.detokenize([ans_concept])
+            return str(ans_concept)
         
         # Autonomous Web Sourcing Hook
         try:
@@ -72,7 +72,7 @@ class OmniRouter:
                 # Re-query the memory
                 ans_concept2 = self.memory.query(concept_query)
                 if ans_concept2:
-                    return self.tokenizer.detokenize([ans_concept2])
+                    return str(ans_concept2)
         except Exception:
             pass
             
