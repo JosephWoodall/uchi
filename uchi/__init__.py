@@ -32,7 +32,7 @@ from .online_tokenizer  import OnlineTokenizer
 from .node_compressor   import NodeCompressor
 from .process           import ProcessPredictor, OntologicalState, OntologicalAction
 from .simulation_engine import LifelongSimulationEngine
-from .wrappers          import InfiniteContextPredictor
+
 from .memory            import AssociativeMemory
 from .omni_router       import OmniRouter
 from .omni_tokenizer    import OmniTokenizer
@@ -66,7 +66,7 @@ __all__ = [
     "OntologicalState",
     "OntologicalAction",
     "LifelongSimulationEngine",
-    "InfiniteContextPredictor",
+
     "OmniRouter",
     "OmniTokenizer"
 ]

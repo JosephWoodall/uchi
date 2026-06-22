@@ -16,6 +16,10 @@ keywords = [
 
 [project.urls]
 Documentation = "https://github.com/JosephWoodall/uchi/tree/main/docs"
+Homepage = "https://github.com/JosephWoodall/uchi"
+
+[project.scripts]
+uchi = "uchi.cli:main"
 
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -18,6 +18,7 @@ Uchi v0.2.0 officially transitions the `UniversalPredictor` from a specialized m
   `SequenceGenerator` now inherently builds plural future simulations over compressed BPE concepts.
 - **Pillar 5: Node Compressor (Storage Optimizer)** 
   Introduced `NodeCompressor` to freeze and compress stabilized nodes in the PredictorForest into binary encodings, destroying raw dicts to save 70% of long-term RAM.
+- **CLI & Multi-Agent Debate Simulator**: Added the `uchi` CLI providing `chat`, `ingest`, and `debate` modes. The multi-agent debate explicitly relies on BPE compression to prevent infinite $O(N)$ RAM explosions.
 - **Dedicated Documentation (`docs/`)**: Extensive documentation with interactive examples covering all 5 pillars of v0.2.0.
 - **Comprehensive Regression Suite**: Rewritten `tests/` utilizing Pytest for seamless regression validation including bAbI Reasoning Benchmarks.
 

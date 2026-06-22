@@ -1,6 +1,6 @@
 import pytest
 from uchi.memory import AssociativeMemory
-from uchi.semantic_tokenizer import SemanticTokenizer
+from uchi.omni_tokenizer import OmniTokenizer
 
 # A mock concept map to simulate an embedding model clustering synonyms
 CONCEPT_MAP = {

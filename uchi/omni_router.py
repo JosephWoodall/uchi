@@ -24,7 +24,7 @@ class OmniRouter:
         # Phase 5 (Frontend): Omni-Modal Abstraction
         self.tokenizer = OmniTokenizer(use_wordnet=True)
         # Phase 4: Infinite Context Compression
-        self.bpe = OnlineTokenizer(vocab_limit=50000) if use_bpe else None
+        self.bpe = OnlineTokenizer(max_merges=50000) if use_bpe else None
         # Phase 5 (Backend): Zero-Shot Associative Memory
         self.memory = AssociativeMemory(window_size=memory_window)
         # Phase 3: Plural Sequence Generation
@@ -40,7 +40,8 @@ class OmniRouter:
         
         # 2. Compress the stream via BPE
         if self.bpe:
-            concepts = list(self.bpe.encode(concepts))
+            self.bpe.update(concepts, predictor_accuracy=1.0)
+            concepts = list(self.bpe.tokenize(concepts))
             
         # 3. Store in the Zero-Shot Associative Memory buffer
         self.memory.stream_context(concepts)
@@ -55,7 +56,7 @@ class OmniRouter:
         """
         concepts = [self.tokenizer.tokenize(p) for p in prompt]
         if self.bpe:
-            concepts = list(self.bpe.encode(concepts))
+            concepts = list(self.bpe.tokenize(concepts))
             
         return self.memory.query(concepts)
         
@@ -65,7 +66,9 @@ class OmniRouter:
         """
         concepts = [self.tokenizer.tokenize(p) for p in prompt]
         if self.bpe:
-            concepts = list(self.bpe.encode(concepts))
+            concepts = list(self.bpe.tokenize(concepts))
             
-        predicted = self.predictor.generate(concepts, steps=steps, temperature=temperature)
-        return predicted
+        predicted = self.predictor.generate(n_tokens=steps, seed=concepts, temperature=temperature)
+        if self.bpe:
+            predicted = self.bpe.detokenize(predicted)
+        return [str(p) for p in predicted]

@@ -7,9 +7,22 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-**Uchi** is a Multi-Modal Deterministic LLM that functions as an infinite lifelong simulation engine. 
+## Core Mission: The Omni-Modal Deterministic LLM
+Uchi v0.2.0 transforms a raw universal sequence predictor into a completely multi-modal determinist brain capable of ingesting text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot associative memory buffer that mimics biological synesthesia.
 
-By routing Text, Audio, Images, Math Telemetry, and Python Agent code through a singular `OmniRouter`, Uchi natively translates messy multi-modal data into clean, abstract geometry. It learns to perfectly predict the future of the stream and achieves zero-shot cross-modal ad-hoc question answering.
+## Quick Start & The Uchi CLI
+You can interact with Uchi as a Multi-Modal Deterministic LLM directly from your terminal.
+
+```bash
+# Start an interactive chat session with zero-shot query/predict commands
+uchi chat
+
+# Feed massive context (like server logs or books) into the compressed BPE engine
+uchi ingest data.txt
+
+# Spawn a multi-agent Deterministic Debate Simulator
+uchi debate "AI should be open source"
+```
 
 Unlike probabilistic neural networks, Uchi has **zero neural weights, zero pre-training, no 128k context limits, and absolutely zero risk of hallucination**. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.
 
