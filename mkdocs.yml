@@ -15,13 +15,14 @@ theme:
 nav:
   - Home: index.md
   - API Reference:
+    - Multi-Modal Router: omni-router.md
     - Core Engine: core-engine.md
     - Tabular Models: tabular.md
     - Time Series Models: timeseries.md
-    - Generative Models: generative.md
-    - Simulation Engine (v0.2.0): simulation-engine.md
-  - Benchmarks: benchmarks.md
+    - Generative Sequences: generative.md
+    - Simulation Engine: simulation-engine.md
   - Architecture: architecture.md
+  - Benchmarks: benchmarks.md
   - Contributing: CONTRIBUTING.md
   - Changelog: CHANGELOG.md
 

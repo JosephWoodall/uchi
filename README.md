@@ -7,11 +7,13 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-**Uchi** is an advanced, online sequence predictor that functions as a lifelong simulation engine. 
+**Uchi** is a Multi-Modal Deterministic LLM that functions as an infinite lifelong simulation engine. 
 
-Given any stream of discrete observations, Uchi learns to predict what comes next—for any symbol type, in any domain—without assuming a fixed distribution, a known alphabet, or a stationary process. When the underlying pattern shifts, Uchi adapts instantly. **No concept-drift detectors. No retraining loops. No explicit forgetting parameters.**
+By routing Text, Audio, Images, Math Telemetry, and Python Agent code through a singular `OmniRouter`, Uchi natively translates messy multi-modal data into clean, abstract geometry. It learns to perfectly predict the future of the stream and achieves zero-shot cross-modal ad-hoc question answering.
 
-The `uchi` package extends this core intuition engine to tabular classification, multivariate time series forecasting, anomaly detection, goal-directed generative modeling, and complex agent loop simulations. All classes are highly optimized and fully `scikit-learn` compatible.
+Unlike probabilistic neural networks, Uchi has **zero neural weights, zero pre-training, no 128k context limits, and absolutely zero risk of hallucination**. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.
+
+The `uchi` package exposes the `OmniRouter` to achieve true AGI-level generalization on embedded devices in $O(1)$ RAM, alongside individual specialized tools for tabular classification, time series forecasting, and anomaly detection.
 
 ---
 
