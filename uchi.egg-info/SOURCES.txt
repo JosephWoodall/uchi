@@ -26,7 +26,6 @@ uchi/distributional.py
 uchi/dual_predictor.py
 uchi/forest.py
 uchi/generative.py
-uchi/harness.py
 uchi/hoeffding.py
 uchi/long_term_store.py
 uchi/memory.py

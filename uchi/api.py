@@ -49,8 +49,13 @@ class PredictRequest(BaseModel):
 
 def load_brain(path: str = "brain.uchi") -> OmniRouter:
     if os.path.exists(path):
-        with open(path, "rb") as f:
-            return pickle.load(f)
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            print(f"[-] Failed to load {path}: {e}")
+            # Fall back to new router if file is corrupted
+            pass
     return OmniRouter(use_bpe=True, memory_window=5)
 
 @app.on_event("startup")
