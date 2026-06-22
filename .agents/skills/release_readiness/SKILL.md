@@ -25,7 +25,12 @@ Ensure the repository adheres to elite open-source standards:
 - Ensure `.pre-commit-config.yaml`, `CITATION.cff`, `SECURITY.md`, and `.github/FUNDING.yml` are present.
 - Ensure the `pyproject.toml` contains the necessary `dev` and `test` dependencies.
 
-## 4. Final Push
+## 4. Fresh Install Test
+Ensure that the codebase works perfectly for a new user:
+- Verify that all core dependencies required to run the CLI, API Harness, and tests are explicitly defined in `pyproject.toml` (e.g., `fastapi`, `uvicorn`, `requests`, `beautifulsoup4`, `tqdm`).
+- Run a simulated installation (`pip install -e .`) to guarantee that the `uchi` entrypoint binds correctly without missing external packages.
+
+## 5. Final Push
 Once all checks pass, push the changes to GitHub:
 - Stage all changes (`git add .`).
 - Commit with a descriptive message (e.g., "chore: final release readiness sweep").

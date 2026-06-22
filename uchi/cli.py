@@ -3,21 +3,26 @@ import sys
 import os
 from .omni_router import OmniRouter
 
-def ingest_file(router, filepath):
+from tqdm import tqdm
+
+def ingest_file(router, filepath, quiet=False):
     """Injects massive context from a file into the OmniRouter."""
     if not os.path.exists(filepath):
-        print(f"Error: File '{filepath}' not found.")
+        if not quiet:
+            print(f"Error: File '{filepath}' not found.")
         return
         
-    print(f"[*] Ingesting massive context from {filepath}...")
-    with open(filepath, "r", encoding="utf-8") as f:
-        # Simple word tokenization for the demo
-        text = f.read().split()
-        
-    router.stream(text)
-    print(f"[+] Successfully injected {len(text)} tokens into the Deterministic LLM.")
-
-
+    if not quiet:
+        print(f"[*] Ingesting massive context from {filepath}...")
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read().split()
+        router.stream(text)
+        if not quiet:
+            print(f"[+] Successfully injected {len(text)} tokens into the Deterministic LLM.")
+    except Exception as e:
+        if not quiet:
+            print(f"[-] Failed to ingest {filepath}: {e}")
 
 def debate_loop(topic: str, rounds: int = 10):
     """
@@ -107,7 +112,6 @@ def preload_context(router, path: str):
         print(f"Error: Preload path '{path}' not found.")
         return
         
-    print(f"[*] Pre-training ODUSP from {path} in parallel...")
     if os.path.isfile(path):
         ingest_file(router, path)
     else:
@@ -118,10 +122,9 @@ def preload_context(router, path: str):
                 if file.endswith((".txt", ".md", ".py", ".cpp", ".js", ".json")):
                     filepaths.append(filepath)
         
+        print(f"[*] Pre-training ODUSP from {path} in parallel...")
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Tokenization isn't perfectly thread safe for BPE state if done totally asynchronously,
-            # but we use ThreadPool as a pseudo-async loader for basic I/O speedup.
-            executor.map(lambda f: ingest_file(router, f), filepaths)
+            list(tqdm(executor.map(lambda f: ingest_file(router, f, quiet=True), filepaths), total=len(filepaths), desc="Ingesting files"))
 
 def main():
     parser = argparse.ArgumentParser(description="Uchi Omni-modal Deterministic Universal Sequence Predictor (ODUSP) CLI")

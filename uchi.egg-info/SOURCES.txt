@@ -1,6 +1,7 @@
 LICENSE
 README.md
 pyproject.toml
+tests/test_api_harness.py
 tests/test_distributional.py
 tests/test_dual_predictor.py
 tests/test_forest.py
@@ -15,8 +16,10 @@ tests/test_simple.py
 tests/test_simulation_engine.py
 tests/test_timeseries.py
 tests/test_tokenizers.py
+tests/test_web_plugin.py
 tests/tests.py
 uchi/__init__.py
+uchi/api.py
 uchi/cli.py
 uchi/discretize.py
 uchi/distributional.py
@@ -41,3 +44,5 @@ uchi.egg-info/dependency_links.txt
 uchi.egg-info/entry_points.txt
 uchi.egg-info/requires.txt
 uchi.egg-info/top_level.txt
+uchi/plugins/__init__.py
+uchi/plugins/web.py

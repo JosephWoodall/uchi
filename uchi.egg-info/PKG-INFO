@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
 Name: uchi
-Version: 0.3.0
-Summary: A Deterministic Cognitive Engine (DCE) for infinite multi-modal reasoning
+Version: 0.2.0
+Summary: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
 License: MIT
 Project-URL: Documentation, https://github.com/JosephWoodall/uchi/tree/main/docs
 Project-URL: Homepage, https://github.com/JosephWoodall/uchi
@@ -56,8 +56,8 @@ Dynamic: license-file
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: The Omni-Modal Deterministic Cognitive Engine (DCE)
-Uchi v0.3.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Cognitive Engine. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a Large Concept Model.
+## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
+Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor.
 
 ## Quick Start & The Uchi CLI
 You can interact with Uchi directly from your terminal.
