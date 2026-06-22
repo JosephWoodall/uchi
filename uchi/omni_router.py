@@ -61,7 +61,7 @@ class OmniRouter:
         self.memory.stream_context(concepts)
         
         # 4. Train the deterministic trie
-        self.predictor.fit(concepts)
+        self.predictor.partial_fit(concepts)
         
     def query(self, prompt: list) -> str:
         """
@@ -72,8 +72,8 @@ class OmniRouter:
         if self.bpe:
             concept_query = list(self.bpe.tokenize(concept_query))
         
-        ans_concept = self.memory.query(concept_query)
-        if ans_concept:
+        ans_concept, ans_score = self.memory.query(concept_query)
+        if ans_concept and ans_score >= 1.5:
             return str(ans_concept)
         
         # Autonomous Web Sourcing Hook
@@ -86,8 +86,8 @@ class OmniRouter:
                 # Stream the new structural truth
                 self.stream(web_context.split())
                 # Re-query the memory
-                ans_concept2 = self.memory.query(concept_query)
-                if ans_concept2:
+                ans_concept2, ans_score2 = self.memory.query(concept_query)
+                if ans_concept2 and ans_score2 >= 1.5:
                     return str(ans_concept2)
         except Exception:
             pass

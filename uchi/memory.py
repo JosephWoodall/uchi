@@ -85,5 +85,5 @@ class AssociativeMemory:
                 best_score = score
                 best_target = target
                 
-        return best_target
+        return best_target, best_score
 

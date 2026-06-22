@@ -6,7 +6,7 @@ from .omni_router import OmniRouter
 from tqdm import tqdm
 
 def ingest_file(router, filepath, quiet=False):
-    """Injects massive context from a file into the OmniRouter."""
+    """Injects massive context from a file into the OmniRouter with structural bounds."""
     if not os.path.exists(filepath):
         if not quiet:
             print(f"Error: File '{filepath}' not found.")
@@ -17,9 +17,12 @@ def ingest_file(router, filepath, quiet=False):
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             text = f.read().split()
-        router.stream(text)
+            
+        filename = os.path.basename(filepath)
+        bounded_text = [f"<|file:{filename}|>"] + text + ["<|/file|>"]
+        router.stream(bounded_text)
         if not quiet:
-            print(f"[+] Successfully injected {len(text)} tokens into the Deterministic LLM.")
+            print(f"[+] Successfully injected {len(bounded_text)} bounded tokens into the Deterministic LLM.")
     except Exception as e:
         if not quiet:
             print(f"[-] Failed to ingest {filepath}: {e}")
@@ -148,102 +151,69 @@ def print_help():
 
 def main():
     parser = argparse.ArgumentParser(description="Uchi Omni-modal Deterministic Universal Sequence Predictor (ODUSP) CLI")
-    subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
-    
-    chat_parser = subparsers.add_parser("chat", help="Start the interactive ODUSP chat loop")
-    chat_parser.add_argument("--preload", type=str, default=None, help="Directory or file to preload context from")
-    chat_parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
-    
-    serve_parser = subparsers.add_parser("serve", help="Start the FastAPI daemon harness with the Web UI")
-    serve_parser.add_argument("--port", type=int, default=8000, help="Port to run the API on")
+    parser.add_argument("--preload", type=str, default=None, help="Directory or file to preload context from")
+    parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
     
     args = parser.parse_args()
     
-    if args.command == "chat":
-        router = load_brain(args.brain)
-        if router is None:
-            router = OmniRouter(use_bpe=False, memory_window=5)
-            
-        if args.preload:
-            preload_context(router, args.preload)
-            
-        print(ASCII_LOGO)
-        print("===============================================================")
-        print(f" {CYAN}{BOLD}Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor{RESET}")
-        print(" Type '/help' for a list of commands, or start typing to stream.")
-        print("===============================================================")
+    router = load_brain(args.brain)
+    if router is None:
+        router = OmniRouter(use_bpe=False, memory_window=5)
         
-        try:
-            while True:
-                try:
-                    cmd = input(f"{YELLOW}uchi>{RESET} ").strip()
-                except EOFError:
-                    break
-                if not cmd: continue
-                if cmd.lower() in ["/quit", "/exit"]: break
-                if cmd.lower() == "/help":
-                    print_help()
-                elif cmd.startswith("/load "):
-                    ingest_file(router, cmd.split(" ", 1)[1])
-                elif cmd.startswith("/query "):
-                    ans = router.query(cmd.split(" ", 1)[1].split())
-                    print_ai_msg("Query", ans)
-                elif cmd.startswith("/predict "):
-                    parts = cmd.split(" ")
-                    steps = 5
-                    temperature = 0.0
-                    creativity = 0.0
-                    
-                    if len(parts) > 1 and parts[1].isdigit():
-                        steps = int(parts[1])
-                    
-                    if "--temp" in parts:
-                        idx = parts.index("--temp")
-                        if idx + 1 < len(parts):
-                            temperature = float(parts[idx+1])
-                    if "--creativity" in parts:
-                        idx = parts.index("--creativity")
-                        if idx + 1 < len(parts):
-                            creativity = float(parts[idx+1])
-                            
-                    pred = router.predict_future([], steps=steps, temperature=temperature, creativity=creativity)
-                    print_ai_msg("Predict", ' '.join(pred))
-                elif cmd.startswith("/save"):
-                    save_brain(router, args.brain)
-                else:
-                    # Native instruction-tuning format: "<|user|> <input> <|assistant|>"
-                    formatted_input = f"<|user|> {cmd} <|assistant|>"
-                    tokens = formatted_input.split()
-                    
-                    # We use deterministic Top-K branching instead of stochastic noise for creativity
-                    # If creativity flag was passed, it maps to temperature instead.
-                    # Default temp=0.0 means 100% deterministic argmax.
-                    pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
-                    
-                    # Filter out any tokens that might bleed into the next interaction
-                    reply = []
-                    for p in pred:
-                        if p == "<|user|>":
-                            break
-                        reply.append(p)
-                        
-                    # Now stream the complete interaction into memory so it learns it
-                    router.stream(tokens + reply)
-                        
-                    print_ai_msg("Reply", ' '.join(reply))
-        except KeyboardInterrupt:
-            pass
-        finally:
-            save_brain(router, args.brain)
-            
-    elif args.command == "serve":
-        import uvicorn
-        print(ASCII_LOGO)
-        print(f"[*] Booting FastAPI Harness and Web UI on port {args.port}...")
-        uvicorn.run("uchi.api:app", host="0.0.0.0", port=args.port, reload=False)
+    if args.preload:
+        preload_context(router, args.preload)
+        
+    print(ASCII_LOGO)
+    print("===============================================================")
+    print(f" {CYAN}{BOLD}Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor{RESET}")
+    print(" Type '/help' for a list of commands, or start typing to stream.")
+    print("===============================================================")
+    
+    try:
+        while True:
+            try:
+                cmd = input(f"{YELLOW}uchi>{RESET} ").strip()
+            except EOFError:
+                break
+            if not cmd: continue
+            if cmd.lower() in ["/quit", "/exit"]: break
+            if cmd.lower() == "/help":
+                print_help()
+            elif cmd.startswith("/load "):
+                ingest_file(router, cmd.split(" ", 1)[1])
+            elif cmd.startswith("/save"):
+                save_brain(router, args.brain)
+            else:
+                # 1. First Pass: Associative Graph Retrieval (RAG without Vector DBs)
+                query_tokens = cmd.split()
+                retrieved_context = router.query(query_tokens)
                 
-    else:
-        parser.print_help()
+                # Native instruction-tuning format: "<|user|> <input> <|assistant|>"
+                formatted_input = f"<|user|> {cmd} <|assistant|>"
+                tokens = formatted_input.split()
+                
+                # If the graph retrieved a high-confidence match, inject it as a pre-seed
+                if retrieved_context != "[Unknown Context]":
+                    tokens.append(retrieved_context)
+                
+                # 2. Second Pass: Generative Continuation
+                pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
+                
+                # Filter out any tokens that might bleed into the next interaction
+                reply = []
+                for p in pred:
+                    if p == "<|user|>":
+                        break
+                    reply.append(p)
+                    
+                # Now stream the complete interaction into memory so it learns it
+                router.stream(tokens + reply)
+                    
+                print_ai_msg("Reply", ' '.join(reply))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        save_brain(router, args.brain)
 
 if __name__ == "__main__":
     main()

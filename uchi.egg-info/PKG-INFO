@@ -83,14 +83,11 @@ ODUSP crushes parameter-heavy Large Language Models in specialized, pre-loaded c
 You can interact with Uchi directly from your terminal.
 
 ```bash
-# Start an interactive chat session with zero-shot query/predict commands
-uchi chat
+# Start an interactive fluid chat session (Dual-Pass Routing enabled)
+uchi
 
-# Feed massive context (like server logs or books) into the compressed BPE engine
-uchi ingest data.txt
-
-# Spawn a multi-agent Deterministic Debate Simulator
-uchi debate "AI should be open source"
+# Pre-train the compressed engine with massive context (like server logs or codebases)
+uchi --preload data.txt
 ```
 
 Unlike probabilistic neural networks, Uchi has **zero neural weights, zero pre-training, no 128k context limits, and absolutely zero risk of hallucination**. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.

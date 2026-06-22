@@ -2,6 +2,7 @@ LICENSE
 README.md
 pyproject.toml
 tests/test_api_harness.py
+tests/test_chat.py
 tests/test_distributional.py
 tests/test_dual_predictor.py
 tests/test_forest.py
