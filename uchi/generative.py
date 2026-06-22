@@ -146,7 +146,10 @@ def _generate_from_predictor(
     Optional: tokenizer applies merge rules to seed tokens.
     Optional: long_term_store provides three-layer fallback blending.
     """
+    # To prevent context contamination from training data, we clear history
+    # before observing the new seed tokens.
     saved = p.history[:]
+    p.history.clear()
 
     if seed:
         seed_tokens = tokenizer.tokenize(seed) if tokenizer else seed

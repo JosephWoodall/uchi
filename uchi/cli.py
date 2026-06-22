@@ -162,7 +162,7 @@ def main():
     if args.command == "chat":
         router = load_brain(args.brain)
         if router is None:
-            router = OmniRouter(use_bpe=True, memory_window=5)
+            router = OmniRouter(use_bpe=False, memory_window=5)
             
         if args.preload:
             preload_context(router, args.preload)
@@ -211,17 +211,19 @@ def main():
                 elif cmd.startswith("/save"):
                     save_brain(router, args.brain)
                 else:
-                    # Native instruction-tuning format: "[user] <input> [uchi]"
-                    formatted_input = f"[user] {cmd} [uchi]"
+                    # Native instruction-tuning format: "<|user|> <input> <|assistant|>"
+                    formatted_input = f"<|user|> {cmd} <|assistant|>"
                     tokens = formatted_input.split()
                     
-                    # Predict future BEFORE streaming, so we don't teach it an incomplete sequence!
-                    pred = router.predict_future(tokens, steps=25, creativity=0.0)
+                    # We use deterministic Top-K branching instead of stochastic noise for creativity
+                    # If creativity flag was passed, it maps to temperature instead.
+                    # Default temp=0.0 means 100% deterministic argmax.
+                    pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
                     
                     # Filter out any tokens that might bleed into the next interaction
                     reply = []
                     for p in pred:
-                        if p == "[user]":
+                        if p == "<|user|>":
                             break
                         reply.append(p)
                         
