@@ -12,7 +12,12 @@ Run the comprehensive test suite to ensure zero regressions.
 - Execute `make test` (or `pytest tests/`).
 - Verify that all tests pass successfully. If any tests fail, stop and fix them before proceeding.
 
-## 2. Documentation Verification
+## 2. Performance Benchmarks
+Run the benchmarking suite to verify the model maintains its compute and memory efficiency advantages.
+- Execute `python benchmarks/run_benchmarks.py`
+- Verify that inference latency and training throughput meet architectural expectations.
+
+## 3. Documentation Verification
 Ensure the documentation architecture is pristine:
 - **Dual-Layer Strategy**: Verify that the root `README.md` remains a short, clean "elevator pitch" (logo, badges, brief summary, pip install, quickstart, and a link to `docs/`).
 - **Comprehensive Docs**: Ensure the `docs/` directory contains the exhaustive markdown files and that `mkdocs.yml` accurately maps to them.

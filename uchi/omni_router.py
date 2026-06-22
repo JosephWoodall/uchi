@@ -78,13 +78,30 @@ class OmniRouter:
             
         return "[Unknown Context]"
         
-    def predict_future(self, prompt: list, steps: int = 1, temperature: float = 0.0) -> list:
+    def predict_future(self, prompt: list, steps: int = 1, temperature: float = 0.0, creativity: float = 0.0) -> list:
         """
         Simulates the causal future of the sequence.
+        If creativity > 0.0, Stochastic Context Mutation is applied.
         """
+        import random
         concepts = self.tokenizer.tokenize(prompt)
         if self.bpe:
             concepts = list(self.bpe.tokenize(concepts))
+            
+        # Stochastic Context Mutation
+        if creativity > 0.0 and concepts:
+            mutated_concepts = []
+            vocab = list(self.memory.G.nodes) if hasattr(self.memory, 'G') and len(self.memory.G.nodes) > 0 else []
+            for c in concepts:
+                # creativity maps 0.0 to 1.0. At 1.0, 50% chance to drop or swap.
+                roll = random.random()
+                if roll < (creativity * 0.25):
+                    continue # drop token
+                elif roll < (creativity * 0.5) and vocab:
+                    mutated_concepts.append(random.choice(vocab)) # swap token
+                else:
+                    mutated_concepts.append(c)
+            concepts = mutated_concepts
             
         predicted = self.predictor.generate(n_tokens=steps, seed=concepts, temperature=temperature)
         if self.bpe:

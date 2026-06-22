@@ -5,11 +5,20 @@ const modeBtns = document.querySelectorAll('.mode-btn');
 
 let currentMode = 'stream';
 
+const parametersPanel = document.getElementById('parameters-panel');
+const tempSlider = document.getElementById('temp-slider');
+const tempVal = document.getElementById('temp-val');
+const creativitySlider = document.getElementById('creativity-slider');
+const creativityVal = document.getElementById('creativity-val');
+
 // Adjust textarea height automatically
 promptInput.addEventListener('input', function() {
     this.style.height = '56px';
     this.style.height = (this.scrollHeight) + 'px';
 });
+
+tempSlider.addEventListener('input', (e) => tempVal.textContent = e.target.value);
+creativitySlider.addEventListener('input', (e) => creativityVal.textContent = e.target.value);
 
 // Handle mode switching
 modeBtns.forEach(btn => {
@@ -17,6 +26,13 @@ modeBtns.forEach(btn => {
         modeBtns.forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentMode = btn.dataset.mode;
+        
+        // Show/hide parameter sliders only in Predict mode
+        if (currentMode === 'predict') {
+            parametersPanel.style.display = 'flex';
+        } else {
+            parametersPanel.style.display = 'none';
+        }
         
         // Update placeholder based on mode
         if (currentMode === 'stream') promptInput.placeholder = 'Enter sequence tokens to train...';
@@ -115,7 +131,12 @@ inputForm.addEventListener('submit', async (e) => {
             response = await fetch('/predict', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ context: tokens, steps: 10 })
+                body: JSON.stringify({ 
+                    context: tokens, 
+                    steps: 10,
+                    temperature: parseFloat(tempSlider.value),
+                    creativity: parseFloat(creativitySlider.value)
+                })
             });
             result = await response.json();
             if (response.ok) {

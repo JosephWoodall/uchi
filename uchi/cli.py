@@ -128,9 +128,28 @@ def preload_context(router, path: str):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             list(tqdm(executor.map(lambda f: ingest_file(router, f, quiet=True), filepaths), total=len(filepaths), desc="Ingesting files"))
 
+# ANSI Color Codes
+CYAN = '\033[96m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+RESET = '\033[0m'
+BOLD = '\033[1m'
+
+def print_ai_msg(prefix, msg):
+    print(f"\n{CYAN}{BOLD}ODUSP ({prefix}):{RESET} {msg}\n")
+
+def print_help():
+    print(f"\n{YELLOW}{BOLD}Available Commands:{RESET}")
+    print(f"  {GREEN}/help{RESET}             Show this help menu")
+    print(f"  {GREEN}/load <file>{RESET}      Dynamically stream a new file into the Geometric Trie")
+    print(f"  {GREEN}/query <text>{RESET}     Execute Zero-Shot Q&A against the Associative Memory")
+    print(f"  {GREEN}/predict <steps>{RESET}  Force the engine to hallucinate forward <steps> tokens")
+    print(f"  {GREEN}/save{RESET}             Force serialize the current brain state to disk")
+    print(f"  {GREEN}/quit{RESET}             Exit the session and save\n")
+
 def main():
     parser = argparse.ArgumentParser(description="Uchi Omni-modal Deterministic Universal Sequence Predictor (ODUSP) CLI")
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
     
     chat_parser = subparsers.add_parser("chat", help="Start the interactive ODUSP chat loop")
     chat_parser.add_argument("--preload", type=str, default=".", help="Directory or file to preload context from (defaults to current directory)")
@@ -142,52 +161,67 @@ def main():
     ingest_parser = subparsers.add_parser("ingest", help="Ingest a file to build massive context")
     ingest_parser.add_argument("filepath", type=str, help="Path to the file to ingest")
     
-    debate_parser = subparsers.add_parser("debate", help="Spawn two OmniRouter agents to debate infinitely")
-    debate_parser.add_argument("topic", type=str, help="The initial context/topic to debate")
+    debate_parser = subparsers.add_parser("debate", help="Spawn two agents to debate a topic")
+    debate_parser.add_argument("topic", type=str, help="Initial topic to seed the agents")
     debate_parser.add_argument("--rounds", type=int, default=10, help="Number of debate rounds")
-    debate_parser.add_argument("--preload", type=str, help="Directory or file to preload shared context from")
     
     args = parser.parse_args()
     
     if args.command == "chat":
-        # Check for persistent brain state
-        router = None
-        if os.path.exists(args.brain):
-            router = load_brain(args.brain)
-            
+        router = load_brain(args.brain)
         if router is None:
             router = OmniRouter(use_bpe=True, memory_window=5)
-            if args.preload:
-                preload_context(router, args.preload)
-                
+            
+        if args.preload:
+            preload_context(router, args.preload)
+            
         print(ASCII_LOGO)
         print("===============================================================")
-        print(" Uchi v0.2.0 - Omni-modal Deterministic Universal Sequence Predictor")
+        print(f" {CYAN}{BOLD}Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor{RESET}")
+        print(" Type '/help' for a list of commands, or start typing to stream.")
         print("===============================================================")
+        
         try:
             while True:
                 try:
-                    cmd = input("\nuchi> ").strip()
+                    cmd = input(f"{YELLOW}uchi>{RESET} ").strip()
                 except EOFError:
                     break
                 if not cmd: continue
                 if cmd.lower() in ["/quit", "/exit"]: break
-                if cmd.startswith("/load "):
+                if cmd.lower() == "/help":
+                    print_help()
+                elif cmd.startswith("/load "):
                     ingest_file(router, cmd.split(" ", 1)[1])
                 elif cmd.startswith("/query "):
                     ans = router.query(cmd.split(" ", 1)[1].split())
-                    print(f"-> {ans}")
+                    print_ai_msg("Query", ans)
                 elif cmd.startswith("/predict "):
                     parts = cmd.split(" ")
-                    steps = int(parts[1]) if len(parts) > 1 else 5
-                    pred = router.predict_future([], steps=steps)
-                    print(f"-> {' '.join(pred)}")
+                    steps = 5
+                    temperature = 0.0
+                    creativity = 0.0
+                    
+                    if len(parts) > 1 and parts[1].isdigit():
+                        steps = int(parts[1])
+                    
+                    if "--temp" in parts:
+                        idx = parts.index("--temp")
+                        if idx + 1 < len(parts):
+                            temperature = float(parts[idx+1])
+                    if "--creativity" in parts:
+                        idx = parts.index("--creativity")
+                        if idx + 1 < len(parts):
+                            creativity = float(parts[idx+1])
+                            
+                    pred = router.predict_future([], steps=steps, temperature=temperature, creativity=creativity)
+                    print_ai_msg("Predict", ' '.join(pred))
                 elif cmd.startswith("/save"):
                     save_brain(router, args.brain)
                 else:
                     tokens = cmd.split()
                     router.stream(tokens)
-                    print(f"[+] Streamed {len(tokens)} concepts.")
+                    print(f"[{GREEN}+{RESET}] Streamed {len(tokens)} concepts.")
         except KeyboardInterrupt:
             pass
         finally:

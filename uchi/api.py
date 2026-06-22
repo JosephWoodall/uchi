@@ -46,6 +46,8 @@ class QueryRequest(BaseModel):
 class PredictRequest(BaseModel):
     context: list[str] = []
     steps: int = 5
+    temperature: float = 0.0
+    creativity: float = 0.0
 
 def load_brain(path: str = "brain.uchi") -> OmniRouter:
     if os.path.exists(path):
@@ -80,5 +82,5 @@ async def query_memory(req: QueryRequest):
 
 @app.post("/predict")
 async def predict_future(req: PredictRequest):
-    pred = router.predict_future(req.context, steps=req.steps)
+    pred = router.predict_future(req.context, steps=req.steps, temperature=req.temperature, creativity=req.creativity)
     return {"prediction": pred}

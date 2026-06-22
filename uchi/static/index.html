@@ -43,6 +43,17 @@
                 <button class="mode-btn" data-mode="predict">Predict</button>
             </div>
             
+            <div id="parameters-panel" style="display: none; display: flex; gap: 20px; align-items: center; color: var(--text-secondary); font-size: 0.9rem;">
+                <div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">
+                    <label for="temp-slider">Temperature: <span id="temp-val" style="color: var(--accent);">0.0</span></label>
+                    <input type="range" id="temp-slider" min="0" max="2" step="0.1" value="0.0">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px; flex: 1;">
+                    <label for="creativity-slider">Creativity (Noise): <span id="creativity-val" style="color: var(--accent);">0.0</span></label>
+                    <input type="range" id="creativity-slider" min="0" max="1" step="0.1" value="0.0">
+                </div>
+            </div>
+            
             <form id="input-form">
                 <textarea id="prompt-input" rows="1" placeholder="Enter sequence tokens..."></textarea>
                 <button type="submit" id="send-btn">
