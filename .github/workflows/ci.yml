@@ -1,0 +1,42 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev,all]"
+        
+    - name: Check formatting and linting (Ruff)
+      continue-on-error: true
+      run: |
+        ruff check uchi/
+        
+    - name: Static type checking (MyPy)
+      continue-on-error: true
+      run: |
+        mypy uchi/
+        
+    - name: Run comprehensive test suite with coverage
+      run: |
+        pytest tests/ --cov=uchi --cov-report=xml --cov-report=term
