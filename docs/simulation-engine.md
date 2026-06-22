@@ -1,6 +1,6 @@
 # Simulation Engine & Advanced Architecture (v0.2.0)
 
-Version 0.2.0 introduced five major architectural extensions that take Uchi from a standard sequence predictor to a lifelong simulation engine.
+Version 0.2.0 introduced six major architectural extensions that take Uchi from a standard sequence predictor to a lifelong simulation engine.
 
 ---
 
@@ -139,3 +139,42 @@ stats = compressor.compress_pass(predictor._root, cred_max=6.05)
 
 ### The Ultimate Benefit
 Phase 5 unshackles the engine from the physical boundaries of hardware memory and fixed-time horizons. It guarantees that Uchi can run in an **Infinite Lifelong Learning** loop, dynamically compressing history and pruning memory without human intervention.
+
+---
+
+## 6. Semantic Concept Abstraction (Phase 6)
+
+LLMs achieve massive creative capabilities because they don't learn exact words; they learn the underlying semantic geometry of concepts. Phase 6 brings this exact capability to the deterministic prefix trie using the `SemanticTokenizer`. 
+
+Instead of feeding raw words to the engine, the stream is tokenized into abstract **Concept IDs** (e.g., mapping "king", "emperor", and "monarch" into a single abstract token: `[CONCEPT_RULER]`). Uchi learns the sequential *grammar of concepts* rather than words. During generative decoding, Uchi predicts the next abstract Concept ID, and the detokenizer randomly samples a surface-level vocabulary word from that concept cluster.
+
+```python
+from uchi.semantic_tokenizer import SemanticTokenizer
+from uchi.generative import SequenceGenerator
+
+# 1. Initialize the semantic abstraction layer
+tokenizer = SemanticTokenizer(embedding_model="fast-local-embeddings")
+generator = SequenceGenerator(context_length=6)
+
+# 2. Text is abstracted into semantic Concept IDs before learning
+raw_text = "The emperor decreed a new law."
+concept_stream = tokenizer.tokenize(raw_text)
+
+# 3. Uchi learns the abstract grammar of concepts natively
+for concept_id in concept_stream:
+    generator.observe(concept_id)
+    generator.feedback(concept_id)
+
+# 4. Generate novel, highly creative text it has never seen before
+# (e.g., it might output: "The monarch proclaimed a novel rule.")
+abstract_prediction = generator.generate(max_tokens=10)
+creative_text = tokenizer.detokenize(abstract_prediction, temperature=0.8)
+```
+
+### Realistic Use Cases
+1. **Creative Text Generation**: Generate highly diverse, grammatically perfect long-form text (like poetry or Shakespeare) by letting the engine map the mathematical structure of the story while introducing massive surface-level word variance during detokenization.
+2. **Zero-Shot Synonym Replacement**: Automatically rewrite an entire article or document into a different tone or reading level by shifting the sampling temperature on the semantic detokenizer without altering the underlying logical meaning.
+3. **Cross-Lingual Grammar Mapping**: Train the trie on the semantic concept stream of English text, and immediately detokenize the predicted concepts into French vocabulary words, achieving structural translation with zero neural weights.
+
+### The Ultimate Benefit
+Phase 6 replaces the LLM's competitive advantage—**abstract semantic generalization and creativity**—without requiring billions of parameters. It allows Uchi to generate infinitely diverse, perfectly coherent outputs that it has never explicitly seen in training, mimicking true "understanding" via an abstract conceptual grammar layer.
