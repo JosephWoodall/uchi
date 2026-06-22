@@ -113,11 +113,11 @@ Phase 4 unshackles the engine from the physical boundaries of hardware memory an
 
 ---
 
-## 5. Semantic Concept Abstraction (Phase 5)
+## 5. Semantic Abstraction & Associative Memory (Phase 5)
 
-LLMs achieve massive creative capabilities because they don't learn exact words; they learn the underlying semantic geometry of concepts. Phase 5 brings this exact capability to the deterministic prefix trie using the `SemanticTokenizer`. 
+LLMs achieve massive creative capabilities because they don't learn exact words; they learn the underlying semantic geometry of concepts, and they use Attention to bind ad-hoc variables. Phase 5 brings this exact capability to the deterministic prefix trie using the `SemanticTokenizer` backed by **Non-Parametric Associative Memory**.
 
-Instead of feeding raw words to the engine, the stream is tokenized into abstract **Concept IDs** (e.g., mapping "king", "emperor", and "monarch" into a single abstract token: `[CONCEPT_RULER]`). Uchi learns the sequential *grammar of concepts* rather than words. During generative decoding, Uchi predicts the next abstract Concept ID, and the detokenizer randomly samples a surface-level vocabulary word from that concept cluster.
+Instead of feeding raw words to the engine, the stream is tokenized into abstract **Concept IDs** (e.g., mapping "king", "emperor", and "monarch" into a single abstract token: `[CONCEPT_RULER]`). Simultaneously, these hashed concepts are stored in a geometric Key-Value buffer. When Uchi is asked a question about a novel, ad-hoc context, the non-parametric attention mechanism mathematically queries the buffer to dynamically bind exact variables (like "red" or "orange") directly to the generative output stream, completely bypassing the trie's static memory constraints.
 
 ```python
 from uchi.semantic_tokenizer import SemanticTokenizer
@@ -143,9 +143,9 @@ creative_text = tokenizer.detokenize(abstract_prediction, temperature=0.8)
 ```
 
 ### Realistic Use Cases
-1. **Creative Text Generation**: Generate highly diverse, grammatically perfect long-form text (like poetry or Shakespeare) by letting the engine map the mathematical structure of the story while introducing massive surface-level word variance during detokenization.
-2. **Zero-Shot Synonym Replacement**: Automatically rewrite an entire article or document into a different tone or reading level by shifting the sampling temperature on the semantic detokenizer without altering the underlying logical meaning.
+1. **Zero-Shot Ad-Hoc Question Answering**: Inject a novel context (e.g., *"Context: The child was wearing a red hat, and had an orange in his hand..."*) and immediately prompt Uchi with *"What was the child holding, and what color was their hat?"*. The associative memory perfectly extracts `orange` and `red` in $O(1)$ inference time with zero neural weights.
+2. **Creative Text Generation**: Generate highly diverse, grammatically perfect long-form text by letting the engine map the mathematical structure of the story while introducing massive surface-level word variance during detokenization.
 3. **Cross-Lingual Grammar Mapping**: Train the trie on the semantic concept stream of English text, and immediately detokenize the predicted concepts into French vocabulary words, achieving structural translation with zero neural weights.
 
 ### The Ultimate Benefit
-Phase 5 replaces the LLM's competitive advantage—**abstract semantic generalization and creativity**—without requiring billions of parameters. It allows Uchi to generate infinitely diverse, perfectly coherent outputs that it has never explicitly seen in training, mimicking true "understanding" via an abstract conceptual grammar layer.
+Phase 5 replaces the LLM's final competitive advantages—**abstract semantic generalization, creativity, and ad-hoc context binding**—without requiring billions of parameters. It grants Uchi the ability to perform zero-shot Question Answering on massive contexts while relying on Phase 4 to organically compress the $O(N^2)$ memory footprint.
