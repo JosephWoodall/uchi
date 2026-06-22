@@ -33,6 +33,7 @@ from .node_compressor   import NodeCompressor
 from .process           import ProcessPredictor, OntologicalState, OntologicalAction
 from .simulation_engine import LifelongSimulationEngine
 from .wrappers          import InfiniteContextPredictor
+from .memory            import AssociativeMemory
 
 __version__ = "0.2.0"
 
