@@ -84,6 +84,11 @@ def _sample_dist(
     tokens = list(dist.keys())
     probs  = list(dist.values())
 
+    if temperature == 0.0:
+        # Deterministic argmax
+        best_idx = max(range(len(probs)), key=lambda i: probs[i])
+        return tokens[best_idx]
+
     # Temperature: reshape p_i ← p_i^(1/T)
     if temperature != 1.0 and temperature > 0:
         inv_t = 1.0 / temperature

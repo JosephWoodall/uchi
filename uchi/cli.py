@@ -211,11 +211,24 @@ def main():
                 elif cmd.startswith("/save"):
                     save_brain(router, args.brain)
                 else:
-                    tokens = cmd.split()
-                    router.stream(tokens)
-                    # Automatically generate a response based on the newly streamed context
-                    pred = router.predict_future(tokens, steps=15, creativity=0.5)
-                    print_ai_msg("Reply", ' '.join(pred))
+                    # Native instruction-tuning format: "[user] <input> [uchi]"
+                    formatted_input = f"[user] {cmd} [uchi]"
+                    tokens = formatted_input.split()
+                    
+                    # Predict future BEFORE streaming, so we don't teach it an incomplete sequence!
+                    pred = router.predict_future(tokens, steps=25, creativity=0.0)
+                    
+                    # Filter out any tokens that might bleed into the next interaction
+                    reply = []
+                    for p in pred:
+                        if p == "[user]":
+                            break
+                        reply.append(p)
+                        
+                    # Now stream the complete interaction into memory so it learns it
+                    router.stream(tokens + reply)
+                        
+                    print_ai_msg("Reply", ' '.join(reply))
         except KeyboardInterrupt:
             pass
         finally:

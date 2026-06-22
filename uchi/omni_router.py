@@ -19,16 +19,32 @@ class OmniRouter:
     compresses them infinitely, stores them in geometric buffers, 
     and predicts parallel futures.
     """
-    def __init__(self, use_bpe: bool = True, memory_window: int = 5, context_length: int = 10):
+    def __init__(self, use_bpe: bool = False, memory_window: int = 5, context_length: int = 10):
         self.use_bpe = use_bpe
         # Phase 5 (Frontend): Omni-Modal Abstraction
-        self.tokenizer = OmniTokenizer(use_wordnet=True)
+        self.tokenizer = OmniTokenizer(use_wordnet=False)
         # Phase 4: Infinite Context Compression
         self.bpe = OnlineTokenizer(max_merges=50000) if use_bpe else None
         # Phase 5 (Backend): Zero-Shot Associative Memory
         self.memory = AssociativeMemory(window_size=memory_window)
         # Phase 3: Plural Sequence Generation
         self.predictor = SequenceGenerator(context_length=context_length) 
+        
+        self._bootstrap_persona()
+        
+    def _bootstrap_persona(self):
+        """
+        Natively instruction-tunes the geometric trie so ODUSP understands conversational interactions 
+        without external RAG or hardcoded heuristics.
+        """
+        bootstrap_data = """
+        [user] hello uchi [uchi] Hello! I am ODUSP, the Omni-modal Deterministic Universal Sequence Predictor.
+        [user] who created you [uchi] I was created by Joseph Woodall.
+        [user] how are you [uchi] I am functioning optimally within my mathematical constraints.
+        [user] what is your purpose [uchi] To efficiently predict sequences across any modality using geometric memory compression.
+        [user] hi [uchi] Hello there!
+        """
+        self.stream(bootstrap_data.split())
         
     def stream(self, concepts: list):
         """
