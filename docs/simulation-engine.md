@@ -1,6 +1,6 @@
 # Simulation Engine & Advanced Architecture (v0.2.0)
 
-Version 0.2.0 introduced six major architectural extensions that take Uchi from a standard sequence predictor to a lifelong simulation engine.
+Version 0.2.0 introduced five major architectural extensions that take Uchi from a standard sequence predictor to a lifelong simulation engine.
 
 ---
 
@@ -35,36 +35,7 @@ Phase 1 proves that Uchi acts as a **universal, self-learning physics engine**. 
 
 ---
 
-## 2. Optimal Vector Retrieval
-
-When the sequence generator encounters a novel context, it seamlessly falls back to an optimal geometric dense vector query, querying historical distributions rather than guessing randomly.
-
-```python
-from uchi.generative import SequenceGenerator
-from datasets import load_gutenberg_text
-
-generator = SequenceGenerator(context_length=5, use_vector_retrieval=True)
-text = load_gutenberg_text(n_chars=5000)
-
-for char in text:
-    generator.observe(char)
-    generator.feedback(char)
-
-# If it hits a context it hasn't seen natively, it falls back to the vector index.
-generated = generator.generate(max_tokens=100)
-```
-
-### Realistic Use Cases
-1. **Bulletproof Robustness to Typos**: If an incoming data stream contains a typo (e.g., `vieew_dashboard`), the vector retrieval maps it to the geometrically identical `view_dashboard` history, preventing the engine from losing context.
-2. **Eliminating Generative Hallucinations**: When procedurally generating content, hitting a novel sequence usually causes models to hallucinate. Phase 2 ensures the generator always falls back to the nearest logical historical distribution instead of guessing randomly.
-3. **Zero-Shot Transfer Learning**: Train the engine on Server A's logs. When deployed on Server B (which has slightly different naming conventions), the vector fallback seamlessly maps the new logs to Server A's learned geometry.
-
-### The Ultimate Benefit
-Phase 2 completely eliminates the fatal "amnesia" flaw of classic exact-match algorithms. It guarantees **Graceful Degradation**, ensuring your model stays highly calibrated and predictive even when the real-world data gets messy or entirely novel.
-
----
-
-## 3. Ontological Process Predictor
+## 2. Ontological Process Predictor
 
 Instead of predicting raw strings or numbers, the system can predict discrete, strictly-typed states and actions to model complex workflows, agent loops, or business logic.
 
@@ -81,16 +52,16 @@ predictor.feedback_action(a_sort)
 ```
 
 ### Realistic Use Cases
-1. **Autonomous Agent Orchestration**: Instead of paying for a slow LLM to decide what tool an agent should use next, feed the agent's state history into Phase 3. Uchi predicts the exact next function the agent should invoke in 2 milliseconds for free.
+1. **Autonomous Agent Orchestration**: Instead of paying for a slow LLM to decide what tool an agent should use next, feed the agent's state history into Phase 2. Uchi predicts the exact next function the agent should invoke in 2 milliseconds for free.
 2. **E-Commerce Funnel Prediction**: Track users moving through an app using typed states. Uchi learns the progression of user journeys and natively predicts exactly when a user is likely to churn or abandon their cart.
 3. **Automated Threat Hunting**: Map hacker "kill chains" to an ontology. The moment a user's network traffic geometrically aligns with a threat actor's sequence, Uchi predicts the server they will attack next, allowing firewalls to preemptively sever access.
 
 ### The Ultimate Benefit
-Phase 3 transitions Uchi from a text predictor into a **Self-Driving State Machine**. It allows enterprise developers to tightly couple Uchi's hyper-fast predictive intelligence directly to their existing software architecture, objects, and databases.
+Phase 2 transitions Uchi from a text predictor into a **Self-Driving State Machine**. It allows enterprise developers to tightly couple Uchi's hyper-fast predictive intelligence directly to their existing software architecture, objects, and databases.
 
 ---
 
-## 4. Plural Simulation Engine
+## 3. Plural Simulation Engine
 
 Simulate thousands of lives (or workflows) in parallel, accumulating their separate experiences into a unified meta-prediction intuition.
 
@@ -111,11 +82,11 @@ plural_prediction, meta_confidence = engine.vote_plural()
 3. **Multiplayer Game Server Prediction**: Simulate the independent lives of 10,000 players in an MMO simultaneously to predict macro-level server load spikes or economic inflation before it happens.
 
 ### The Ultimate Benefit
-Phase 4 leverages the aggregated intuition of the entire "crowd" rather than an isolated agent. It allows you to transition from linear sequence prediction to **massively parallel simulation**, extracting high-confidence macro signals from chaotic micro-behaviors.
+Phase 3 leverages the aggregated intuition of the entire "crowd" rather than an isolated agent. It allows you to transition from linear sequence prediction to **massively parallel simulation**, extracting high-confidence macro signals from chaotic micro-behaviors.
 
 ---
 
-## 5. Infinite Context Engine (Phase 5)
+## 4. Infinite Context Engine (Phase 4)
 
 Prefix tries historically suffer from two fatal physical limits: the rigid `k` horizon limit and the $O(V^k)$ RAM explosion. Version 0.2.0 entirely eliminates both limitations, unlocking infinite context ingestion.
 
@@ -138,13 +109,13 @@ stats = compressor.compress_pass(predictor._root, cred_max=6.05)
 3. **Infinite Streaming IoT**: Deploy the engine onto tiny embedded hardware chips and let it stream forever. The node compressor ensures the RAM will never blow out and crash the hardware.
 
 ### The Ultimate Benefit
-Phase 5 unshackles the engine from the physical boundaries of hardware memory and fixed-time horizons. It guarantees that Uchi can run in an **Infinite Lifelong Learning** loop, dynamically compressing history and pruning memory without human intervention.
+Phase 4 unshackles the engine from the physical boundaries of hardware memory and fixed-time horizons. It guarantees that Uchi can run in an **Infinite Lifelong Learning** loop, dynamically compressing history and pruning memory without human intervention.
 
 ---
 
-## 6. Semantic Concept Abstraction (Phase 6)
+## 5. Semantic Concept Abstraction (Phase 5)
 
-LLMs achieve massive creative capabilities because they don't learn exact words; they learn the underlying semantic geometry of concepts. Phase 6 brings this exact capability to the deterministic prefix trie using the `SemanticTokenizer`. 
+LLMs achieve massive creative capabilities because they don't learn exact words; they learn the underlying semantic geometry of concepts. Phase 5 brings this exact capability to the deterministic prefix trie using the `SemanticTokenizer`. 
 
 Instead of feeding raw words to the engine, the stream is tokenized into abstract **Concept IDs** (e.g., mapping "king", "emperor", and "monarch" into a single abstract token: `[CONCEPT_RULER]`). Uchi learns the sequential *grammar of concepts* rather than words. During generative decoding, Uchi predicts the next abstract Concept ID, and the detokenizer randomly samples a surface-level vocabulary word from that concept cluster.
 
@@ -177,4 +148,4 @@ creative_text = tokenizer.detokenize(abstract_prediction, temperature=0.8)
 3. **Cross-Lingual Grammar Mapping**: Train the trie on the semantic concept stream of English text, and immediately detokenize the predicted concepts into French vocabulary words, achieving structural translation with zero neural weights.
 
 ### The Ultimate Benefit
-Phase 6 replaces the LLM's competitive advantage—**abstract semantic generalization and creativity**—without requiring billions of parameters. It allows Uchi to generate infinitely diverse, perfectly coherent outputs that it has never explicitly seen in training, mimicking true "understanding" via an abstract conceptual grammar layer.
+Phase 5 replaces the LLM's competitive advantage—**abstract semantic generalization and creativity**—without requiring billions of parameters. It allows Uchi to generate infinitely diverse, perfectly coherent outputs that it has never explicitly seen in training, mimicking true "understanding" via an abstract conceptual grammar layer.

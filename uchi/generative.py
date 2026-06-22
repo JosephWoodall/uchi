@@ -40,7 +40,6 @@ from .tabular    import _make_predictor, _apply_order, _build_orders, _LABEL_NS
 from .long_term_store import LongTermStore
 from .online_tokenizer import OnlineTokenizer
 from .semantic_tokenizer import SemanticTokenizer
-from .vector_search import NumpyVectorIndex
 
 try:
     from sklearn.base import BaseEstimator
@@ -134,7 +133,6 @@ def _generate_from_predictor(
     stop_tokens: set | None = None,
     tokenizer=None,
     long_term_store=None,
-    vector_index=None,
 ) -> list:
     """
     Auto-regressively sample n_tokens from predictor p.
@@ -159,31 +157,6 @@ def _generate_from_predictor(
         if long_term_store is not None and hasattr(p, 'history') and p.history:
             ctx = tuple(p.history[-p.k:]) if len(p.history) >= p.k else tuple(p.history)
             dist = long_term_store.blend(dist, ctx, p._vocab)
-
-        # Semantic retrieval fallback (Phase 2)
-        if vector_index is not None and hasattr(p, 'history') and p.history:
-            max_d = min(2, len(p.history))
-            shallow_ctx = tuple(p.history[-max_d:])
-            
-            saved_hist = p.history[:]
-            p.history = list(shallow_ctx)
-            p.predict()
-            shallow_dist = dict(p._last_distribution)
-            p.history = saved_hist
-            
-            query = {p._vocab.index(k): v for k, v in shallow_dist.items() if k in p._vocab}
-            
-            results = vector_index.search(query, top_k=3)
-            if results:
-                # Blend retrieved distributions
-                for retrieved_dist, score in results:
-                    for idx, val in retrieved_dist.items():
-                        if idx < len(p._vocab):
-                            tok = p._vocab[idx]
-                            dist[tok] = dist.get(tok, 0.0) + (val * score * 0.5)
-                
-                total = sum(dist.values()) or 1.0
-                dist = {k: v / total for k, v in dist.items()}
 
         token = _sample_dist(dist, temperature, top_k, top_p, rng)
         if token is None:
@@ -306,7 +279,6 @@ class SequenceGenerator(BaseEstimator):
         use_positional_weights: bool = False,
         use_semantic_hashing: bool = False,
         use_skip_grams: bool = False,
-        use_vector_retrieval: bool = False,
     ):
         self.context_length = context_length
         self.temperature    = temperature
@@ -324,8 +296,6 @@ class SequenceGenerator(BaseEstimator):
         self.use_positional_weights = use_positional_weights
         self.use_semantic_hashing = use_semantic_hashing
         self.use_skip_grams = use_skip_grams
-        self.use_vector_retrieval = use_vector_retrieval
-        self._vector_index = None
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -355,7 +325,6 @@ class SequenceGenerator(BaseEstimator):
         self.semantic_tokenizer = SemanticTokenizer() if self.use_semantic_hashing else None
         self.is_fitted_ = True
         self._train_sequences(sequences)
-        self._build_vector_index()
         return self
 
     def partial_fit(self, sequences, y=None) -> 'SequenceGenerator':
@@ -397,7 +366,6 @@ class SequenceGenerator(BaseEstimator):
             set(stop_tokens) if stop_tokens else None,
             tokenizer=getattr(self, '_tokenizer', None),
             long_term_store=self.long_term_store,
-            vector_index=self._vector_index,
         )
 
     def generate_text(
@@ -471,43 +439,6 @@ class SequenceGenerator(BaseEstimator):
     def _check_fitted(self):
         if not hasattr(self, '_pred'):
             raise RuntimeError("Call fit() first.")
-
-    def _build_vector_index(self):
-        if not self.use_vector_retrieval or not hasattr(self, '_pred'):
-            return
-        self._vector_index = NumpyVectorIndex(vocab_size=len(self._pred._vocab))
-        
-        # BFS to find deep, high-credibility nodes
-        from collections import deque
-        queue = deque([(self._pred.root, 0, tuple())])
-        
-        while queue:
-            node, depth, path = queue.popleft()
-            
-            # Add to vector index if credibility is high and depth is sufficient
-            if depth >= 2 and node.node_cred > 4.0:
-                max_d = min(2, len(path))
-                shallow_path = path[-max_d:]
-                
-                saved = self._pred.history[:]
-                
-                self._pred.history = list(shallow_path)
-                self._pred.predict()
-                shallow_dist = dict(self._pred._last_distribution)
-                
-                self._pred.history = list(path)
-                self._pred.predict()
-                deep_dist = dict(self._pred._last_distribution)
-                
-                self._pred.history = saved
-                
-                query_vec = {self._pred._vocab.index(k): v for k, v in shallow_dist.items() if k in self._pred._vocab}
-                payload_vec = {self._pred._vocab.index(k): v for k, v in deep_dist.items() if k in self._pred._vocab}
-                
-                self._vector_index.add(query_vec, payload_vec)
-                
-            for sym, child in node.children.items():
-                queue.append((child, depth + 1, path + (sym,)))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
