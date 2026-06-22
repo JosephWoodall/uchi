@@ -106,4 +106,7 @@ class OmniRouter:
         predicted = self.predictor.generate(n_tokens=steps, seed=concepts, temperature=temperature)
         if self.bpe:
             predicted = self.bpe.detokenize(predicted)
+        
+        # Translate WordNet concepts back to readable strings
+        predicted = self.tokenizer.detokenize(predicted)
         return [str(p) for p in predicted]

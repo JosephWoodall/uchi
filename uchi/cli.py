@@ -151,18 +151,11 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
     
     chat_parser = subparsers.add_parser("chat", help="Start the interactive ODUSP chat loop")
-    chat_parser.add_argument("--preload", type=str, default=".", help="Directory or file to preload context from (defaults to current directory)")
+    chat_parser.add_argument("--preload", type=str, default=None, help="Directory or file to preload context from")
     chat_parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
     
     serve_parser = subparsers.add_parser("serve", help="Start the FastAPI daemon harness with the Web UI")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port to run the API on")
-    
-    ingest_parser = subparsers.add_parser("ingest", help="Ingest a file to build massive context")
-    ingest_parser.add_argument("filepath", type=str, help="Path to the file to ingest")
-    
-    debate_parser = subparsers.add_parser("debate", help="Spawn two agents to debate a topic")
-    debate_parser.add_argument("topic", type=str, help="Initial topic to seed the agents")
-    debate_parser.add_argument("--rounds", type=int, default=10, help="Number of debate rounds")
     
     args = parser.parse_args()
     
@@ -234,12 +227,6 @@ def main():
         print(f"[*] Booting FastAPI Harness and Web UI on port {args.port}...")
         uvicorn.run("uchi.api:app", host="0.0.0.0", port=args.port, reload=False)
                 
-    elif args.command == "ingest":
-        router = OmniRouter()
-        ingest_file(router, args.filepath)
-        print("Done. Use 'uchi chat' and the '/load' command to interact with context dynamically.")
-    elif args.command == "debate":
-        debate_loop(args.topic, args.rounds)
     else:
         parser.print_help()
 

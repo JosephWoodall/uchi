@@ -158,6 +158,13 @@ def _generate_from_predictor(
             ctx = tuple(p.history[-p.k:]) if len(p.history) >= p.k else tuple(p.history)
             dist = long_term_store.blend(dist, ctx, p._vocab)
 
+        # Repetition Penalty to prevent loops
+        repetition_penalty = 1.5
+        recent_tokens = (seed_tokens if seed else []) + generated
+        for tok in set(recent_tokens[-20:]):
+            if tok in dist:
+                dist[tok] /= repetition_penalty
+
         token = _sample_dist(dist, temperature, top_k, top_p, rng)
         if token is None:
             break

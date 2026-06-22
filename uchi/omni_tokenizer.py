@@ -139,9 +139,25 @@ class OmniTokenizer:
                         if closest:
                             concept = closest[0]
             
-            self._known_concepts.add(concept)
             self._cache[data] = concept
+            self._known_concepts.add(concept)
             return [concept]
             
         return [str(data)]
 
+    def detokenize(self, concepts: list[str]) -> list[str]:
+        """
+        Translates structural concepts (like hello.n.01) back to human-readable strings.
+        """
+        out = []
+        for c in concepts:
+            # Check if it looks like a wordnet synset (word.pos.id)
+            if c and isinstance(c, str):
+                parts = c.split('.')
+                if len(parts) == 3 and parts[1] in ['n', 'v', 'a', 'r', 's'] and parts[2].isdigit():
+                    out.append(parts[0])
+                else:
+                    out.append(c)
+            else:
+                out.append(str(c))
+        return out
