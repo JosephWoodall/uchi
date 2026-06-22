@@ -107,3 +107,31 @@ engine.stream_parallel([life_1, life_2])
 plural_prediction, meta_confidence = engine.vote_plural()
 print(f"Wisdom of the crowd prediction: {plural_prediction} (Conf: {meta_confidence:.2f})")
 ```
+
+---
+
+## 5. Infinite Context Engine (Phase 5)
+
+Prefix tries historically suffer from two fatal physical limits: the rigid `k` horizon limit (inability to see past a fixed window) and the $O(V^k)$ RAM explosion (memory limits). Version 0.2.0 entirely eliminates both limitations, unlocking infinite context ingestion.
+
+### 1. Beating the Horizon Limit (`OnlineTokenizer`)
+Instead of predicting character-by-character, the `OnlineTokenizer` continuously monitors the stream and uses Byte Pair Encoding (BPE) heuristics to merge frequent adjacent pairs into single semantic tokens on the fly. By actively compressing the stream, each of the `k` context slots now covers significantly more of the original sequence, extending the effective context window indefinitely without increasing the model's physical order.
+
+```python
+from uchi.online_tokenizer import OnlineTokenizer
+
+tokenizer = OnlineTokenizer(max_merges=64)
+# The tokenizer learns and compresses the stream continuously
+compressed_stream = tokenizer.tokenize(["h", "e", "l", "l", "o"]) 
+```
+
+### 2. Bounding the RAM Explosion (`NodeCompressor`)
+To solve the $O(V^k)$ memory explosion, the `NodeCompressor` introduces a two-tier memory architecture. When a deep node in the trie converges and becomes highly confident, it is frozen into a tiny snapshot of its probability distribution. The heavy Python dictionary of its children is destroyed, freeing up massive amounts of RAM. If the stream ever experiences concept drift, the node seamlessly decompresses and resumes learning.
+
+```python
+from uchi.node_compressor import NodeCompressor
+
+# Frees up memory by converting stable nodes into tiny frozen snapshots
+compressor = NodeCompressor()
+stats = compressor.compress_pass(predictor._root, cred_max=6.05)
+```
