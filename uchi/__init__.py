@@ -32,6 +32,7 @@ from .online_tokenizer  import OnlineTokenizer
 from .node_compressor   import NodeCompressor
 from .process           import ProcessPredictor, OntologicalState, OntologicalAction
 from .simulation_engine import LifelongSimulationEngine
+from .wrappers          import InfiniteContextPredictor
 
 __version__ = "0.2.0"
 
@@ -62,4 +63,5 @@ __all__ = [
     "OntologicalState",
     "OntologicalAction",
     "LifelongSimulationEngine",
+    "InfiniteContextPredictor",
 ]
