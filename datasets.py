@@ -187,10 +187,98 @@ def load_math_corpus(n_chars: int | None = 50_000, seed: int = 42) -> list[str]:
         total = coef * ans
         return f"{coef}{var}={total},{var}={ans};"
         
+    def generate_exponentiation():
+        a = rng.randint(2, 9)
+        b = rng.randint(2, 4)
+        return f"{a}^{b}={a**b};"
+        
+    def generate_modulo():
+        a = rng.randint(10, 50)
+        b = rng.randint(2, 9)
+        return f"{a}%{b}={a%b};"
+        
+    def generate_division():
+        ans = rng.randint(1, 20)
+        divisor = rng.randint(2, 10)
+        total = ans * divisor
+        return f"{total}/{divisor}={ans};"
+        
+    def generate_boolean_logic():
+        a = rng.choice(['T', 'F'])
+        b = rng.choice(['T', 'F'])
+        op = rng.choice(['&', '|', '^'])
+        if op == '&': res = 'T' if a == 'T' and b == 'T' else 'F'
+        elif op == '|': res = 'T' if a == 'T' or b == 'T' else 'F'
+        else: res = 'T' if a != b else 'F'
+        return f"{a}{op}{b}={res};"
+        
+    def generate_derivatives():
+        coef = rng.randint(2, 9)
+        power = rng.randint(2, 5)
+        new_coef = coef * power
+        new_power = power - 1
+        term = f"x^{new_power}" if new_power > 1 else "x"
+        return f"d/dx({coef}x^{power})={new_coef}{term};"
+        
+    def generate_integrals():
+        coef = rng.randint(1, 5)
+        power = rng.randint(1, 4)
+        new_power = power + 1
+        new_coef = coef * new_power
+        term = f"x^{power}" if power > 1 else "x"
+        return f"int({new_coef}{term})={coef}x^{new_power};"
+        
+    def generate_trigonometry():
+        pairs = [
+            ("sin(0)", "0"), ("cos(0)", "1"), ("tan(0)", "0"),
+            ("sin(90)", "1"), ("cos(90)", "0"),
+            ("sin(180)", "0"), ("cos(180)", "-1"), ("tan(180)", "0"),
+            ("sin(270)", "-1"), ("cos(270)", "0")
+        ]
+        q, a = rng.choice(pairs)
+        return f"{q}={a};"
+        
+    def generate_logarithm():
+        base = rng.choice([2, 10])
+        ans = rng.randint(1, 5) if base == 10 else rng.randint(1, 8)
+        val = base ** ans
+        return f"log{base}({val})={ans};"
+        
+    def generate_fractions():
+        num = rng.randint(1, 5)
+        den = rng.randint(2, 6)
+        if num >= den: den = num + rng.randint(1, 4)
+        factor = rng.randint(2, 5)
+        big_num = num * factor
+        big_den = den * factor
+        return f"{big_num}/{big_den}={num}/{den};"
+        
+    def generate_inequalities():
+        a = rng.randint(1, 50)
+        b = rng.randint(1, 50)
+        if a == b: b += 1
+        op = rng.choice(['<', '>'])
+        if op == '<': res = 'T' if a < b else 'F'
+        else: res = 'T' if a > b else 'F'
+        return f"{a}{op}{b}={res};"
+        
+    generators = [
+        generate_arithmetic,
+        generate_algebra,
+        generate_exponentiation,
+        generate_modulo,
+        generate_division,
+        generate_boolean_logic,
+        generate_derivatives,
+        generate_integrals,
+        generate_trigonometry,
+        generate_logarithm,
+        generate_fractions,
+        generate_inequalities
+    ]
+
     while len(seq) < (n_chars or 100_000):
-        if rng.random() < 0.5:
-            seq.extend(list(generate_arithmetic()))
-        else:
-            seq.extend(list(generate_algebra()))
+        func = rng.choice(generators)
+        seq.extend(list(func()))
             
     return seq[:n_chars] if n_chars is not None else seq

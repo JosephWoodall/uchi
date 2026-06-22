@@ -16,6 +16,14 @@ API: `observe(x)` → `predict()` → `feedback(x)`. Set `min_confidence` to abs
 
 Abstaining does not penalize the node: `node_cred` is unchanged. The successor distribution still updates so learning continues. This makes the warmup period implicit — early steps where the predictor is near-uniform simply produce no output rather than noisy guesses.
 
+### Realistic Use Cases
+1. **Online DNA Sequence Mapping**: Stream genomic characters (`A, C, T, G`) directly into the engine. Because it requires no batching or chunking, it instantly maps the local distributions and flags anomalies.
+2. **High-Frequency Trading Signal Extraction**: Pipe raw order-book strings into the predictor to extract non-stationary pricing momentum geometries in sub-milliseconds without waiting for a feature engineering loop.
+3. **Ultra-Fast Algorithmic Text Compression**: Actively compress logs or communications on edge devices by transmitting highly predictive index references instead of raw ASCII text, utilizing minimal CPU.
+
+### The Ultimate Benefit
+The `UniversalPredictor` gives you **O(k) speed and instant drift adaptation without drift detectors**. It is the absolute fastest way to learn an underlying sequential structure with zero epochs, zero weights, and zero complex infrastructure overhead.
+
 ## PredictorForest
 
 **`PredictorForest`**
@@ -35,3 +43,11 @@ Ensemble of `UniversalPredictor` instances with four diversity mechanisms: heter
 - **Mode-focused distribution** (`_tree_dist`) — only the most-probable successor at each depth, weighted by node credibility. Used in the *product* component: maximally decisive agreement signal for high-persistence or low-entropy data where unanimous tree confidence should dominate.
 
 The adaptive blend computes `α × product(mode-focused) + (1−α) × mixture(full)` where `α` is the mean per-tree confidence — high confidence drives product-mode behaviour, uncertainty drives mixture-mode behaviour.
+
+### Realistic Use Cases
+1. **High-Variance Multi-Scale Sensor Fusion**: Merge telemetry from sensors that operate at wildly different frequencies. The heterogeneous `k` lengths ensure that both micro-second vibrations and macro-minute trends are captured simultaneously.
+2. **Adversarial Robust Decision Making**: In competitive gaming or security, an opponent might try to "poison" the learning stream with fake patterns. Feedback dropout ensures no single malicious sequence can capture the entire forest.
+3. **Ensemble-Based Security Log Parsing**: Combine multiple trees reading server logs at staggered offsets to prevent sudden, orchestrated cyber-attacks from overwriting the entire historical distribution of normal activity.
+
+### The Ultimate Benefit
+The `PredictorForest` achieves **massive robustness and perfectly calibrated confidence intervals** by mixing independent streams of memory. It ensures that your predictions are never brittle to local noise or singular adversarial events.

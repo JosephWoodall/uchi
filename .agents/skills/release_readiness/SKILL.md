@@ -16,6 +16,7 @@ Run the comprehensive test suite to ensure zero regressions.
 Ensure the documentation architecture is pristine:
 - **Dual-Layer Strategy**: Verify that the root `README.md` remains a short, clean "elevator pitch" (logo, badges, brief summary, pip install, quickstart, and a link to `docs/`).
 - **Comprehensive Docs**: Ensure the `docs/` directory contains the exhaustive markdown files and that `mkdocs.yml` accurately maps to them.
+- **Enterprise Layout Requirement**: Verify that every module/service documented in `docs/` explicitly contains a `### Realistic Use Cases` section (with exactly 3 concrete examples) followed by a `### The Ultimate Benefit` paragraph.
 - **Changelog**: Verify that `CHANGELOG.md` is updated with the latest version features.
 
 ## 3. Engineering Best Practices & CI/CD
