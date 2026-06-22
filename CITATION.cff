@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "Uchi: Universal Sequence Predictor"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: "Woodall"
+    given-names: "Joseph"
+    # orcid: "https://orcid.org/0000-0000-0000-0000" # Uncomment and replace with your ORCID if you have one
+repository-code: "https://github.com/JosephWoodall/uchi"
+url: "https://github.com/JosephWoodall/uchi"
+abstract: >-
+  Online, instance-based sequence predictor. Given any stream of discrete
+  observations, it learns to predict what comes next — for any symbol type,
+  in any domain — without assuming a fixed distribution, a known alphabet,
+  or a stationary process.
+keywords:
+  - machine-learning
+  - online-learning
+  - sequence-prediction
+  - context-tree-weighting
+  - time-series
+  - anomaly-detection
+license: MIT
+version: "0.2.0"
+date-released: "2026-06-22"
