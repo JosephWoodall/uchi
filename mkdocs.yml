@@ -1,0 +1,33 @@
+site_name: Uchi Documentation
+site_url: https://github.com/JosephWoodall/uchi
+repo_url: https://github.com/JosephWoodall/uchi
+repo_name: JosephWoodall/uchi
+
+theme:
+  name: material
+  logo: docs/logo.png
+  favicon: docs/logo.png
+  palette:
+    - scheme: slate
+      primary: cyan
+      accent: deep purple
+
+nav:
+  - Home: README.md
+  - API Reference:
+    - Universal Predictor: api/predictor.md
+    - Tabular Models: api/tabular.md
+    - Time Series Models: api/timeseries.md
+    - Generative Models: api/generative.md
+    - Simulation Engine: api/simulation.md
+  - Contributing: CONTRIBUTING.md
+  - Changelog: CHANGELOG.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - tables

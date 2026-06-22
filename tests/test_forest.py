@@ -16,7 +16,7 @@ Forest architectural tests — one claim per test.
 from forest import PredictorForest
 from similarity import gaussian, hamming
 from datasets import load_airline_passengers, random_integers
-from run_experiments import discretize, normalize
+from .tests import discretize, normalize
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

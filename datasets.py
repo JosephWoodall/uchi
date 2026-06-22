@@ -162,3 +162,35 @@ def load_electricity(n: int | None = None) -> list[int]:
         with open(cache, 'wb') as f:
             pickle.dump(labels, f)
     return labels[:n] if n is not None else labels
+
+def load_math_corpus(n_chars: int | None = 50_000, seed: int = 42) -> list[str]:
+    """
+    Generates a stream of mathematical and logical reasoning steps.
+    Includes basic arithmetic and simple algebraic simplifications.
+    """
+    rng = random.Random(seed)
+    seq = []
+    
+    def generate_arithmetic():
+        op = rng.choice(['+', '-', '*'])
+        a = rng.randint(1, 20)
+        b = rng.randint(1, 20)
+        if op == '+': c = a + b
+        elif op == '-': c = a - b
+        else: c = a * b
+        return f"{a}{op}{b}={c};"
+        
+    def generate_algebra():
+        var = rng.choice(['x', 'y', 'z', 'a', 'b'])
+        coef = rng.randint(2, 9)
+        ans = rng.randint(1, 10)
+        total = coef * ans
+        return f"{coef}{var}={total},{var}={ans};"
+        
+    while len(seq) < (n_chars or 100_000):
+        if rng.random() < 0.5:
+            seq.extend(list(generate_arithmetic()))
+        else:
+            seq.extend(list(generate_algebra()))
+            
+    return seq[:n_chars] if n_chars is not None else seq

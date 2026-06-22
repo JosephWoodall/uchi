@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uchi_python"
-version = "0.1.0"
+version = "0.2.0"
 description = "Online credibility-weighted sequence predictor for tabular, time series, and generative ML"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,10 @@ keywords = [
     "machine learning", "online learning", "sequence prediction",
     "time series", "concept drift", "trie", "CTW",
 ]
+
+[project.urls]
+Documentation = "https://github.com/JosephWoodall/uchi/tree/main/docs"
+
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -30,12 +34,14 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+test    = ["pytest", "pytest-cov"]
+dev     = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "mkdocs-material"]
 sklearn = ["scikit-learn>=1.0"]
 numpy   = ["numpy>=1.20"]
 pandas  = ["pandas>=1.3"]
 pyspark = ["pyspark>=3.0.0"]
 optuna  = ["optuna>=3.0.0"]
-all     = ["scikit-learn>=1.0", "numpy>=1.20", "pandas>=1.3", "pyspark>=3.0.0", "optuna>=3.0.0"]
+all     = ["scikit-learn>=1.0", "numpy>=1.20", "pandas>=1.3", "pyspark>=3.0.0", "optuna>=3.0.0", "pytest"]
 
 [tool.setuptools.packages.find]
 where   = ["."]
@@ -43,3 +49,14 @@ include = ["uchi*"]
 
 [tool.setuptools.package-data]
 uchi = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".git", ".venv", "__pycache__"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true
