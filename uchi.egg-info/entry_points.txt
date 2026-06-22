@@ -1,2 +1,3 @@
 [console_scripts]
-uchi = uchi.cli:main
+uchi-cli = uchi.cli:main
+uchi-harness = uchi.harness:main

@@ -116,7 +116,9 @@ def preload_context(router, path: str):
         ingest_file(router, path)
     else:
         filepaths = []
-        for root, _, files in os.walk(path):
+        for root, dirs, files in os.walk(path):
+            # Skip virtual environments, hidden folders, and cache directories
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env', 'uchi.egg-info']]
             for file in files:
                 filepath = os.path.join(root, file)
                 if file.endswith((".txt", ".md", ".py", ".cpp", ".js", ".json")):
@@ -134,7 +136,7 @@ def main():
     chat_parser.add_argument("--preload", type=str, default=".", help="Directory or file to preload context from (defaults to current directory)")
     chat_parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
     
-    serve_parser = subparsers.add_parser("serve", help="Start the FastAPI daemon harness")
+    serve_parser = subparsers.add_parser("serve", help="Start the FastAPI daemon harness with the Web UI")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port to run the API on")
     
     ingest_parser = subparsers.add_parser("ingest", help="Ingest a file to build massive context")
@@ -194,7 +196,7 @@ def main():
     elif args.command == "serve":
         import uvicorn
         print(ASCII_LOGO)
-        print(f"[*] Booting FastAPI Harness on port {args.port}...")
+        print(f"[*] Booting FastAPI Harness and Web UI on port {args.port}...")
         uvicorn.run("uchi.api:app", host="0.0.0.0", port=args.port, reload=False)
                 
     elif args.command == "ingest":

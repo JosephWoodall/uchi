@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ODUSP Web Harness - The Omni-modal Deterministic Universal Sequence Predictor">
+    <title>ODUSP Harness</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="glass-container">
+        <header>
+            <div class="logo">
+                <svg width="40" height="40" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M50 10 L90 30 L90 70 L50 90 L10 70 L10 30 Z" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round"/>
+                    <circle cx="35" cy="45" r="5" fill="var(--accent)"/>
+                    <circle cx="65" cy="45" r="5" fill="var(--accent)"/>
+                    <path d="M40 70 L50 60 L60 70" stroke="var(--accent)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <h1>ODUSP <span>Harness</span></h1>
+            </div>
+            <div class="status-indicator">
+                <span class="dot"></span> Online
+            </div>
+        </header>
+
+        <main id="chat-window">
+            <div class="message system-message">
+                <div class="message-content">
+                    <strong>[System Boot]</strong> Geometric Trie active. BPE Compressor active. 
+                    <br>Select an action below to interact with the engine.
+                </div>
+            </div>
+        </main>
+
+        <div class="controls-panel">
+            <div class="mode-selector">
+                <button class="mode-btn active" data-mode="stream">Stream</button>
+                <button class="mode-btn" data-mode="query">Query</button>
+                <button class="mode-btn" data-mode="predict">Predict</button>
+            </div>
+            
+            <form id="input-form">
+                <textarea id="prompt-input" rows="1" placeholder="Enter sequence tokens..."></textarea>
+                <button type="submit" id="send-btn">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                </button>
+            </form>
+        </div>
+    </div>
+    <script src="/app.js"></script>
+</body>
+</html>

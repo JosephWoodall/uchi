@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from .omni_router import OmniRouter
 import os
@@ -15,6 +17,24 @@ ODUSP Daemon v0.2.0
 """
 
 app = FastAPI(title="ODUSP Brain API")
+
+# Mount UI Harness static files
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/")
+async def serve_ui():
+    if os.path.exists(os.path.join(STATIC_DIR, "index.html")):
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return {"message": "ODUSP API is running, but UI is missing."}
+@app.get("/style.css")
+async def serve_css():
+    return FileResponse(os.path.join(STATIC_DIR, "style.css"))
+@app.get("/app.js")
+async def serve_js():
+    return FileResponse(os.path.join(STATIC_DIR, "app.js"))
+
 router = None
 
 class StreamRequest(BaseModel):
