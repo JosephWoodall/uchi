@@ -1,0 +1,224 @@
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Input, RichLog
+from textual import work
+
+class UchiApp(App):
+    CSS = """
+    #chat-log {
+        height: 1fr;
+        border: solid cyan;
+        background: $surface;
+    }
+    #input-box {
+        dock: bottom;
+        margin: 1 0;
+    }
+    """
+    
+    BINDINGS = [
+        ("ctrl+c", "quit", "Quit Uchi"),
+        ("ctrl+s", "save", "Save Brain"),
+    ]
+
+    def __init__(self, brain_path, preload_path):
+        super().__init__()
+        self.router = None
+        self.brain_path = brain_path
+        self.preload_path = preload_path
+        self.pending_sequence = None
+        self.active_learning_word = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield RichLog(id="chat-log", markup=True)
+        yield Input(placeholder="Initializing ODUSP...", id="input-box", disabled=True)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        log = self.query_one(RichLog)
+        log.write("[bold cyan]===============================================================[/bold cyan]")
+        log.write("[bold cyan] Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor[/bold cyan]")
+        log.write("[bold cyan]===============================================================[/bold cyan]")
+        log.write("Type '/help' for a list of commands, or start typing to stream.\n")
+        self.initialize_brain()
+
+    @work(thread=True)
+    def initialize_brain(self) -> None:
+        self.call_from_thread(self.write_log, f"[*] Loading persistent brain state from {self.brain_path}...")
+        
+        # We handle imports here to prevent circular dependencies with CLI
+        from uchi.cli import load_brain, preload_context, save_brain, ingest_file
+        from uchi.omni_router import OmniRouter
+        from uchi.node_compressor import NodeCompressor
+
+        # Redirect standard output to the RichLog natively to prevent stderr / multiprocessing issues
+        import builtins
+        original_print = builtins.print
+        def ui_print(*args, **kwargs):
+            msg = " ".join(str(a) for a in args)
+            self.call_from_thread(self.write_log, msg)
+        builtins.print = ui_print
+        
+        try:
+            router = load_brain(self.brain_path)
+            if router is None:
+                self.call_from_thread(self.write_log, "[-] Failed to load brain, creating new instance...")
+                router = OmniRouter(use_bpe=False, memory_window=5)
+                compressor = NodeCompressor()
+                self.call_from_thread(self.write_log, "[*] Compressing hyper-reinforced persona memory...")
+                pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
+                self.call_from_thread(self.write_log, f"[+] Compressed {pruned} foundational concept nodes.")
+                
+            if self.preload_path:
+                preload_context(router, self.preload_path)
+            
+            self.router = router
+            self.call_from_thread(self.on_brain_ready)
+        except Exception as e:
+            self.call_from_thread(self.write_log, f"[bold red]Initialization Error:[/bold red] {e}")
+        finally:
+            builtins.print = original_print
+
+    def write_log(self, msg: str) -> None:
+        self.query_one(RichLog).write(msg)
+
+    def on_brain_ready(self) -> None:
+        input_box = self.query_one(Input)
+        input_box.disabled = False
+        input_box.placeholder = "Type your message..."
+        input_box.focus()
+        
+    def action_save(self) -> None:
+        if self.router:
+            from uchi.cli import save_brain
+            save_brain(self.router, self.brain_path)
+            self.query_one(RichLog).write("[green]Brain saved.[/green]")
+        
+    def action_quit(self) -> None:
+        if self.router:
+            from uchi.cli import save_brain
+            save_brain(self.router, self.brain_path)
+        self.exit()
+
+    async def on_input_submitted(self, message: Input.Submitted) -> None:
+        cmd = message.value.strip()
+        input_box = self.query_one(Input)
+        input_box.value = ""
+        log = self.query_one(RichLog)
+        
+        if not cmd:
+            return
+            
+        log.write(f"\n[yellow]uchi>[/yellow] {cmd}")
+        
+        if cmd.lower() in ["/quit", "/exit"]:
+            self.action_quit()
+            return
+            
+        if cmd.lower() == "/help":
+            log.write("[bold yellow]Available Commands:[/bold yellow]")
+            log.write("  /help             Show this help menu")
+            log.write("  /load <file>      Dynamically stream a new file")
+            log.write("  /save             Force serialize brain")
+            log.write("  /quit             Exit session")
+            return
+            
+        if cmd.startswith("/load "):
+            from uchi.cli import ingest_file
+            ingest_file(self.router, cmd.split(" ", 1)[1])
+            log.write("[green]File ingested.[/green]")
+            return
+            
+        if cmd.startswith("/save"):
+            self.action_save()
+            return
+
+        if self.active_learning_word is not None:
+            ans = cmd
+            word = self.active_learning_word
+            self.router.tokenizer.ontology.add_mapping(word, ans)
+            log.write(f"[green][+] Learned: '{word}' maps to '{ans}'. Re-evaluating...[/green]")
+            self.active_learning_word = None
+            input_box.placeholder = "Type your message..."
+            return
+            
+        # RL check
+        negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
+        cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
+        
+        if self.pending_sequence:
+            if cmd_words.intersection(negative_cues):
+                log.write("[red][Implicit RL] Discarding previous hallucination.[/red]")
+                self.pending_sequence = None
+            else:
+                self.router.stream(self.pending_sequence)
+                self.pending_sequence = None
+
+        input_box.disabled = True
+        input_box.placeholder = "ODUSP is predicting..."
+        self.process_command(cmd)
+
+    @work(thread=True)
+    def process_command(self, cmd: str) -> None:
+        from uchi.omni_tokenizer import UnknownConcept
+        
+        # Intercept novel words for Active Learning before querying
+        query_tokens = cmd.split()
+        concepts = self.router.tokenizer.tokenize(query_tokens, is_inference=True)
+        unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
+        
+        if unknowns:
+            word = unknowns[0]
+            self.call_from_thread(self.prompt_active_learning, word)
+            return
+
+        retrieved_context = self.router.query(query_tokens)
+        
+        formatted_input = f"<|user|> {cmd}"
+        tokens = formatted_input.split()
+        
+        injected_context = False
+        if retrieved_context != "[Unknown Context]":
+            tokens.append("<|assistant|>")
+            tokens.append(retrieved_context)
+            injected_context = True
+        else:
+            tokens.append("<|assistant|>")
+            
+        pred = self.router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
+        
+        reply = []
+        recording = True 
+        
+        if injected_context:
+            reply.append(retrieved_context)
+            
+        for p in pred:
+            if recording and p in ("<|user|>", "<|assistant|>"):
+                break
+            if recording:
+                reply.append(p)
+                
+        if reply:
+            canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
+            self.pending_sequence = canonical
+            
+        reply_text = ' '.join(reply)
+        self.call_from_thread(self.display_reply, reply_text)
+
+    def prompt_active_learning(self, word: str) -> None:
+        self.active_learning_word = word
+        log = self.query_one(RichLog)
+        log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] I am unfamiliar with the word '{word}'. What is a synonym for it?")
+        input_box = self.query_one(Input)
+        input_box.placeholder = f"uchi (teaching '{word}')> "
+        input_box.disabled = False
+        input_box.focus()
+
+    def display_reply(self, reply_text: str) -> None:
+        log = self.query_one(RichLog)
+        log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] {reply_text}")
+        input_box = self.query_one(Input)
+        input_box.placeholder = "Type your message..."
+        input_box.disabled = False
+        input_box.focus()
