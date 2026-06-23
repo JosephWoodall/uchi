@@ -4,6 +4,9 @@ import os
 from .omni_router import OmniRouter
 
 from tqdm import tqdm
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, Input, Log
+from textual import work
 
 def ingest_file(router, filepath, quiet=False):
     """Injects massive context from a file into the OmniRouter with structural bounds."""
@@ -169,105 +172,196 @@ def main():
     if args.preload:
         preload_context(router, args.preload)
         
-    print(ASCII_LOGO)
-    print("===============================================================")
-    print(f" {CYAN}{BOLD}Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor{RESET}")
-    print(" Type '/help' for a list of commands, or start typing to stream.")
-    print("===============================================================")
+class UchiApp(App):
+    CSS = """
+    #chat-log {
+        height: 1fr;
+        border: solid cyan;
+        background: $surface;
+    }
+    #input-box {
+        dock: bottom;
+        margin: 1 0;
+    }
+    """
     
-    try:
-        pending_sequence = None
-        while True:
-            try:
-                cmd = input(f"{YELLOW}uchi>{RESET} ").strip()
-            except EOFError:
-                break
-            if not cmd: continue
-            if cmd.lower() in ["/quit", "/exit"]: break
-            if cmd.lower() == "/help":
-                print_help()
-            elif cmd.startswith("/load "):
-                ingest_file(router, cmd.split(" ", 1)[1])
-            elif cmd.startswith("/save"):
-                save_brain(router, args.brain)
-            else:
-                # --- SEAMLESS IMPLICIT RL (Deferred Memory Streaming) ---
-                negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
-                cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
-                
-                if pending_sequence:
-                    if cmd_words.intersection(negative_cues):
-                        # Implicit Negative RL: Discard the hallucination.
-                        pending_sequence = None
-                    else:
-                        # Implicit Positive RL: Lock the previous turn into the brain.
-                        router.stream(pending_sequence)
-                        pending_sequence = None
-                # ---------------------------------------------------------
+    BINDINGS = [
+        ("ctrl+c", "quit", "Quit Uchi"),
+        ("ctrl+s", "save", "Save Brain"),
+    ]
 
-                while True:
-                    # Intercept novel words for Active Learning before querying
-                    from .omni_tokenizer import UnknownConcept
-                    query_tokens = cmd.split()
-                    concepts = router.tokenizer.tokenize(query_tokens, is_inference=True)
-                    unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
-                    
-                    if unknowns:
-                        word = unknowns[0]
-                        print_ai_msg("Reply", f"I am unfamiliar with the word '{word}'. What is a synonym for it?")
-                        try:
-                            ans = input(f"{YELLOW}uchi (teaching '{word}')>{RESET} ").strip()
-                            if ans:
-                                router.tokenizer.ontology.add_mapping(word, ans)
-                                print(f"{GREEN}[+] Learned: '{word}' maps to '{ans}'. Re-evaluating...{RESET}")
-                                continue
-                            else:
-                                break
-                        except EOFError:
-                            break
+    def __init__(self, router, brain_path):
+        super().__init__()
+        self.router = router
+        self.brain_path = brain_path
+        self.pending_sequence = None
+        self.active_learning_word = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Log(id="chat-log", markup=True)
+        yield Input(placeholder="Type your message...", id="input-box")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        log = self.query_one(Log)
+        log.write("[bold cyan]===============================================================[/bold cyan]")
+        log.write("[bold cyan] Uchi v0.2.0 - Omni-modal Deterministic Sequence Predictor[/bold cyan]")
+        log.write("[bold cyan]===============================================================[/bold cyan]")
+        log.write("Type '/help' for a list of commands, or start typing to stream.\n")
+        
+    def action_save(self) -> None:
+        save_brain(self.router, self.brain_path)
+        self.query_one(Log).write("[green]Brain saved.[/green]")
+        
+    def action_quit(self) -> None:
+        save_brain(self.router, self.brain_path)
+        self.exit()
+
+    async def on_input_submitted(self, message: Input.Submitted) -> None:
+        cmd = message.value.strip()
+        input_box = self.query_one(Input)
+        input_box.value = ""
+        log = self.query_one(Log)
+        
+        if not cmd:
+            return
+            
+        log.write(f"\n[yellow]uchi>[/yellow] {cmd}")
+        
+        if cmd.lower() in ["/quit", "/exit"]:
+            self.action_quit()
+            return
+            
+        if cmd.lower() == "/help":
+            log.write("[bold yellow]Available Commands:[/bold yellow]")
+            log.write("  /help             Show this help menu")
+            log.write("  /load <file>      Dynamically stream a new file")
+            log.write("  /save             Force serialize brain")
+            log.write("  /quit             Exit session")
+            return
+            
+        if cmd.startswith("/load "):
+            ingest_file(self.router, cmd.split(" ", 1)[1])
+            log.write("[green]File ingested.[/green]")
+            return
+            
+        if cmd.startswith("/save"):
+            self.action_save()
+            return
+
+        if self.active_learning_word is not None:
+            ans = cmd
+            word = self.active_learning_word
+            self.router.tokenizer.ontology.add_mapping(word, ans)
+            log.write(f"[green][+] Learned: '{word}' maps to '{ans}'. Re-evaluating...[/green]")
+            self.active_learning_word = None
+            input_box.placeholder = "Type your message..."
+            return
+            
+        # RL check
+        negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
+        cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
+        
+        if self.pending_sequence:
+            if cmd_words.intersection(negative_cues):
+                log.write("[red][Implicit RL] Discarding previous hallucination.[/red]")
+                self.pending_sequence = None
+            else:
+                self.router.stream(self.pending_sequence)
+                self.pending_sequence = None
+
+        input_box.disabled = True
+        input_box.placeholder = "ODUSP is predicting..."
+        self.process_command(cmd)
+
+    @work(thread=True)
+    def process_command(self, cmd: str) -> None:
+        from .omni_tokenizer import UnknownConcept
+        
+        # Intercept novel words for Active Learning before querying
+        query_tokens = cmd.split()
+        concepts = self.router.tokenizer.tokenize(query_tokens, is_inference=True)
+        unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
+        
+        if unknowns:
+            word = unknowns[0]
+            self.call_from_thread(self.prompt_active_learning, word)
+            return
+
+        retrieved_context = self.router.query(query_tokens)
+        
+        formatted_input = f"<|user|> {cmd}"
+        tokens = formatted_input.split()
+        
+        injected_context = False
+        if retrieved_context != "[Unknown Context]":
+            tokens.append("<|assistant|>")
+            tokens.append(retrieved_context)
+            injected_context = True
+        else:
+            tokens.append("<|assistant|>")
+            
+        pred = self.router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
+        
+        reply = []
+        recording = True 
+        
+        if injected_context:
+            reply.append(retrieved_context)
+            
+        for p in pred:
+            if recording and p in ("<|user|>", "<|assistant|>"):
+                break
+            if recording:
+                reply.append(p)
+                
+        if reply:
+            canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
+            self.pending_sequence = canonical
+            
+        reply_text = ' '.join(reply)
+        self.call_from_thread(self.display_reply, reply_text)
+
+    def prompt_active_learning(self, word: str) -> None:
+        self.active_learning_word = word
+        log = self.query_one(Log)
+        log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] I am unfamiliar with the word '{word}'. What is a synonym for it?")
+        input_box = self.query_one(Input)
+        input_box.placeholder = f"uchi (teaching '{word}')> "
+        input_box.disabled = False
+        input_box.focus()
+
+    def display_reply(self, reply_text: str) -> None:
+        log = self.query_one(Log)
+        log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] {reply_text}")
+        input_box = self.query_one(Input)
+        input_box.placeholder = "Type your message..."
+        input_box.disabled = False
+        input_box.focus()
+
+def main():
+    parser = argparse.ArgumentParser(description="Uchi Omni-modal Deterministic Universal Sequence Predictor (ODUSP) CLI")
+    parser.add_argument("--preload", type=str, default=None, help="Directory or file to preload context from")
+    parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
     
-                    # 1. First Pass: Associative Graph Retrieval (RAG without Vector DBs)
-                    retrieved_context = router.query(query_tokens)
-                    
-                    # Natural Autocomplete: feed "<|user|> <input>" and let the trie
-                    # predict through the <|assistant|> boundary on its own.
-                    formatted_input = f"<|user|> {cmd}"
-                    tokens = formatted_input.split()
-                    
-                    injected_context = False
-                    if retrieved_context != "[Unknown Context]":
-                        tokens.append("<|assistant|>")
-                        tokens.append(retrieved_context)
-                        injected_context = True
-                    else:
-                        tokens.append("<|assistant|>")
-                    
-                    # 2. Second Pass: Generative Continuation
-                    pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
-                    
-                    reply = []
-                    recording = True 
-                    
-                    if injected_context:
-                        reply.append(retrieved_context)
-                        
-                    for p in pred:
-                        if recording and p in ("<|user|>", "<|assistant|>"):
-                            break
-                        if recording:
-                            reply.append(p)
-                        
-                    # Hold the canonical turn in memory, deferred until the user's NEXT prompt.
-                    if reply:
-                        canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
-                        pending_sequence = canonical
-                        
-                    print_ai_msg("Reply", ' '.join(reply))
-                    break # Break the active learning loop once successful
-    except KeyboardInterrupt:
-        pass
-    finally:
-        save_brain(router, args.brain)
+    args = parser.parse_args()
+    
+    router = load_brain(args.brain)
+    if router is None:
+        router = OmniRouter(use_bpe=False, memory_window=5)
+        # Cold Start: Freeze and compress the hyper-reinforced persona nodes
+        from uchi.node_compressor import NodeCompressor
+        compressor = NodeCompressor()
+        print("[*] Compressing hyper-reinforced persona memory...")
+        pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
+        print(f"[+] Compressed {pruned} foundational concept nodes.")
+        
+    if args.preload:
+        preload_context(router, args.preload)
+        
+    app = UchiApp(router, args.brain)
+    app.run()
 
 if __name__ == "__main__":
     main()
