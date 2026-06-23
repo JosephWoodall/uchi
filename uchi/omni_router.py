@@ -37,19 +37,28 @@ class OmniRouter:
         Natively instruction-tunes the geometric trie so ODUSP understands conversational interactions 
         without external RAG or hardcoded heuristics.
         
-        Each turn is trained as an isolated sequence so the trie learns tight
-        <|user|> X <|assistant|> Y associations rather than one long run.
+        Loads conversation turns from persona.txt and trains each turn as an
+        isolated sequence so the trie learns tight <|user|> X <|assistant|> Y associations.
         """
-        turns = [
-            "<|user|> hello uchi <|assistant|> hello! i am odusp the omni-modal deterministic universal sequence predictor",
-            "<|user|> hello <|assistant|> hello there! i am odusp created by joseph woodall",
-            "<|user|> hi <|assistant|> hello there!",
-            "<|user|> who created you <|assistant|> i was created by joseph woodall",
-            "<|user|> who are you <|assistant|> i am odusp the omni-modal deterministic universal sequence predictor created by joseph woodall",
-            "<|user|> how are you <|assistant|> i am functioning optimally within my mathematical constraints",
-            "<|user|> what is your purpose <|assistant|> to efficiently predict sequences across any modality using geometric memory compression",
-            "<|user|> what can you do <|assistant|> i can predict sequences across any modality using deterministic geometric memory and compression",
-        ]
+        import os
+        persona_path = os.path.join(os.path.dirname(__file__), "persona.txt")
+        
+        turns = []
+        try:
+            with open(persona_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "<|user|>" in line and "<|assistant|>" in line:
+                        turns.append(line)
+        except FileNotFoundError:
+            # Fallback minimal persona if file is missing
+            turns = [
+                "<|user|> hello <|assistant|> hello there how can i help you today",
+                "<|user|> who are you <|assistant|> i am uchi a deterministic sequence predictor",
+            ]
+        
         # Repeat turns to strengthen patterns against future context dilution
         for _ in range(3):
             for turn in turns:

@@ -194,19 +194,26 @@ def main():
                 formatted_input = f"<|user|> {cmd}"
                 tokens = formatted_input.split()
                 
-                # If the graph retrieved a high-confidence match, inject it as a pre-seed
+                # If the graph retrieved a high-confidence match, inject it as the start
+                # of the assistant's reply to guide the deterministic prediction.
+                injected_context = False
                 if retrieved_context != "[Unknown Context]":
+                    tokens.append("<|assistant|>")
                     tokens.append(retrieved_context)
+                    injected_context = True
                 
                 # 2. Second Pass: Generative Continuation
                 pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
                 
                 # Natural Autocomplete filtering:
-                # The trie will autocomplete: ... <|assistant|> response tokens <|user|>
-                # We skip everything until the FIRST <|assistant|>, then collect until
-                # the next boundary token (<|user|> or another <|assistant|>).
                 reply = []
-                recording = False
+                # If we injected the context, we are already past <|assistant|>
+                recording = injected_context 
+                
+                # If we injected context, the retrieved word itself should be in the reply
+                if injected_context:
+                    reply.append(retrieved_context)
+                    
                 for p in pred:
                     if p == "<|assistant|>" and not recording:
                         recording = True

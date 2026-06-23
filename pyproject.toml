@@ -58,7 +58,7 @@ where   = ["."]
 include = ["uchi*"]
 
 [tool.setuptools.package-data]
-uchi = ["py.typed"]
+uchi = ["py.typed", "persona.txt"]
 
 [tool.ruff]
 line-length = 100

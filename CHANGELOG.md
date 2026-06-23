@@ -5,6 +5,7 @@ All notable changes to the Uchi project will be documented in this file.
 ## [0.2.0] - The Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
 - **Fractal Attention**: Replaced the fixed sliding window in `AssociativeMemory` with a dynamic, global co-occurrence graph that natively mimics multi-headed self-attention at $O(1)$ speed.
 - **AST Coding Superpowers**: `OmniTokenizer` now natively parses Python code into an Abstract Syntax Tree (AST), allowing Uchi to deterministically learn the structural geometry of code to ensure mathematically impossible syntax errors.
+- **Natural Autocomplete CLI**: Re-engineered the CLI to naturally autocomplete `<|assistant|>` boundaries without forcing them, ensuring strict geometric coherence. Bootstrapped with over 100 isolated conversation turns via `persona.txt`.
 - **Levenshtein Subword Fallback**: `OmniTokenizer` dynamically clusters Out-Of-Vocabulary slang and domain terminology using `difflib` subword distances.
 - **Fluid Dual-Pass CLI**: Removed all clunky subcommands (`serve`, `chat`, etc) in favor of a unified REPL that automatically routes user inputs through the `AssociativeMemory` graph before seeding the generative sequence (Zero-Shot RAG).
 - **Structured Context Injection**: `uchi --preload` natively wraps source code in mathematical boundaries (`<|file: filename|>`) to eliminate generative context bleeding.

@@ -34,6 +34,7 @@ uchi/node_compressor.py
 uchi/omni_router.py
 uchi/omni_tokenizer.py
 uchi/online_tokenizer.py
+uchi/persona.txt
 uchi/predictor.py
 uchi/process.py
 uchi/simulation_engine.py
