@@ -4,6 +4,7 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 tqdm>=4.66.0
 textual>=0.50.0
+torch>=2.0.0
 
 [all]
 scikit-learn>=1.0
@@ -21,6 +22,7 @@ mypy
 pre-commit
 mkdocs-material
 nltk
+psutil
 
 [numpy]
 numpy>=1.20
@@ -40,3 +42,4 @@ scikit-learn>=1.0
 [test]
 pytest
 pytest-cov
+psutil

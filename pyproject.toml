@@ -35,6 +35,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "tqdm>=4.66.0",
     "textual>=0.50.0",
+    "torch>=2.0.0",
 ]
 
 [project.urls]
@@ -45,8 +46,8 @@ Homepage = "https://github.com/JosephWoodall/uchi"
 uchi = "uchi.cli:main"
 
 [project.optional-dependencies]
-test    = ["pytest", "pytest-cov"]
-dev     = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "mkdocs-material", "nltk"]
+test    = ["pytest", "pytest-cov", "psutil"]
+dev     = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "mkdocs-material", "nltk", "psutil"]
 sklearn = ["scikit-learn>=1.0"]
 numpy   = ["numpy>=1.20"]
 pandas  = ["pandas>=1.3"]

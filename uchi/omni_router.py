@@ -159,7 +159,7 @@ class OmniRouter:
             import os as _os
             _script = _os.path.join(_os.path.dirname(__file__), '..', 'scripts', 'bootstrap_specialist.py')
             _script = _os.path.normpath(_script)
-            if _os.path.exists(_script):
+            if _os.path.exists(_script) and not _os.path.exists("brain_code.uchi"):
                 _sp.Popen(
                     [_sys.executable, _script, "--domain", "all"],
                     stdout=_sp.DEVNULL,

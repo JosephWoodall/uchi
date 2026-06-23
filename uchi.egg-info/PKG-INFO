@@ -24,9 +24,11 @@ Requires-Dist: requests>=2.31.0
 Requires-Dist: beautifulsoup4>=4.12.0
 Requires-Dist: tqdm>=4.66.0
 Requires-Dist: textual>=0.50.0
+Requires-Dist: torch>=2.0.0
 Provides-Extra: test
 Requires-Dist: pytest; extra == "test"
 Requires-Dist: pytest-cov; extra == "test"
+Requires-Dist: psutil; extra == "test"
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"
@@ -35,6 +37,7 @@ Requires-Dist: mypy; extra == "dev"
 Requires-Dist: pre-commit; extra == "dev"
 Requires-Dist: mkdocs-material; extra == "dev"
 Requires-Dist: nltk; extra == "dev"
+Requires-Dist: psutil; extra == "dev"
 Provides-Extra: sklearn
 Requires-Dist: scikit-learn>=1.0; extra == "sklearn"
 Provides-Extra: numpy
@@ -64,7 +67,7 @@ Dynamic: license-file
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
 ## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
-Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor.
+Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor. v0.3.0 adds a routing layer with intent-based query dispatch via `ProceduralMemory` and a trainable SSM confidence signal that improves prediction quality without introducing an LLM dependency.
 
 ## 🚀 Benchmarks (ODUSP vs LLMs)
 
@@ -81,28 +84,15 @@ ODUSP crushes parameter-heavy Large Language Models in specialized, pre-loaded c
 
 *To run this suite locally, execute: `python benchmarks/run_benchmarks.py`*
 
-## Quick Start & The Uchi CLI
-You can interact with Uchi directly from your terminal.
-
-```bash
-# Start an interactive fluid chat session (Dual-Pass Routing enabled)
-uchi
-
-# Pre-train the compressed engine with massive context (like server logs or codebases)
-uchi --preload data.txt
-```
-
-Unlike probabilistic neural networks, Uchi has **zero neural weights, zero pre-training, no 128k context limits, and absolutely zero risk of hallucination**. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.
-
-The `uchi` package exposes the `OmniRouter` to achieve true AGI-level generalization on embedded devices in $O(1)$ RAM, alongside individual specialized tools for tabular classification, time series forecasting, and anomaly detection.
+Unlike probabilistic neural networks, Uchi's core reasoning engine is a pure mathematical sequence predictor (trie) augmented by a small trainable confidence signal — no LLM, no pre-training on proprietary data, no API calls. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.
 
 ---
 
 > [!NOTE]
 > **Comprehensive Documentation & API Reference**
-> 
-> For interactive examples, API documentation, and to see the newest v0.2.0 capabilities (including online Math Learning, Vector Retrievals, and the Simulation Engine), please see our full documentation website.
-> 
+>
+> For interactive examples, API documentation, and to see the newest capabilities (including online Math Learning, Vector Retrievals, and the Simulation Engine), please see our full documentation website.
+>
 > **[Read the Full Documentation →](https://github.com/JosephWoodall/uchi/tree/main/docs)**
 
 ---
@@ -110,23 +100,95 @@ The `uchi` package exposes the `OmniRouter` to achieve true AGI-level generaliza
 ## Installation
 
 ```bash
-pip install -e .                  # editable install (no required deps)
-pip install -e ".[all]"           # with scikit-learn, numpy, pandas
+pip install -e ".[all]"
 ```
+
+On first launch, Uchi runs a one-time bootstrap (Python stdlib patterns + Wikipedia facts) and saves the result to `brain.uchi`. Subsequent launches are instant.
 
 ## Quickstart
 
-```python
-from uchi import UniversalPredictor
+Uchi has two entry points that share the same `brain.uchi` — every interaction in either one improves the other.
 
-predictor = UniversalPredictor(depth=3)
+### 1. Terminal UI (TUI)
 
-# Train on a sequence of characters
-sequence = "hello world! hello python! hello uchi!"
-for char in sequence:
-    predictor.observe(char)
-
-# Predict the next character given a prefix
-probabilities = predictor.predict("hell")
-print("Probabilities after 'hell':", probabilities)
+```bash
+uchi                        # launch interactive chat
+uchi --preload data.txt     # pre-train with a file before chatting
+uchi --brain /path/to/brain.uchi   # use a specific brain file
 ```
+
+Inside the TUI:
+
+| Command | Description |
+|---|---|
+| Just type | Chat with Uchi — it learns from every turn |
+| `/load <file>` | Stream any file into the knowledge base |
+| `/save` | Force-save the current brain state to disk |
+| `Ctrl+S` | Save brain |
+| `Ctrl+C` | Save and quit |
+
+Uchi gives positive/negative feedback signals to improve itself — type "good", "correct", "yes" to reinforce a response, or "wrong", "bad", "no" to prune it.
+
+### 2. REST API
+
+```bash
+uvicorn uchi.api_server:app --host 0.0.0.0 --port 8000
+```
+
+**POST /chat**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "what is the capital of France?"}'
+# {"reply": "paris", "entropy": 3.2}
+```
+
+**GET /metrics**
+```bash
+curl http://localhost:8000/metrics
+# {"status": "online", "memory_records": 1024, "mode": "deterministic"}
+```
+
+**GET /debug/walk**
+```bash
+curl http://localhost:8000/debug/walk
+# Returns trie walk data from the last prediction (depth, contributions, similarity)
+```
+
+### 3. Python API
+
+```python
+from uchi.omni_router import OmniRouter
+from uchi.cli import load_brain, save_brain
+
+# Load existing brain or create a new one
+router = load_brain("brain.uchi") or OmniRouter()
+
+# Chat
+reply = router.chat("what is the capital of France?")
+print(reply)  # → "paris"
+
+# Teach it something new
+router.stream(["<|user|>", "what", "is", "the", "capital", "of", "germany",
+               "<|assistant|>", "berlin"])
+
+# Save
+save_brain(router, "brain.uchi")
+```
+
+### 4. Offline Knowledge Bootstrapping
+
+To scale Uchi's knowledge base beyond the cold-start defaults, run these scripts once before distributing your `brain.uchi`:
+
+```bash
+# Ingest Wikipedia + code_search_net via HuggingFace (requires: pip install datasets)
+python scripts/bootstrap_knowledge.py --limit 10000
+
+# Ingest Python stdlib function patterns via AST (no internet required)
+python scripts/bootstrap_code.py
+
+# Ingest Wikipedia fact triples via spaCy SVO extraction (requires: pip install wikipedia spacy)
+python scripts/bootstrap_wikidata.py
+```
+
+The resulting `brain.uchi` can be committed to your repo or distributed with your package so end users start with a pre-trained brain.
