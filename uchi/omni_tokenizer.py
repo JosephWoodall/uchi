@@ -122,6 +122,10 @@ class OmniTokenizer:
             if data.startswith("<|") or data.startswith("[SYS_"):
                 self._known_concepts.add(data)
                 return [data]
+                
+            if data.replace('.', '', 1).isdigit():
+                self._known_concepts.add(data)
+                return [data]
 
             if data in self._cache:
                 return [self._cache[data]]

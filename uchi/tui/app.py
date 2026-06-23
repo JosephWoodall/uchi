@@ -30,6 +30,9 @@ class UchiApp(App):
         self.preload_path = preload_path
         self.pending_sequence = None
         self.active_learning_word = None
+        self.active_learning_cmd = None
+        import time
+        self.last_activity = time.time()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -45,6 +48,11 @@ class UchiApp(App):
         log.write("[bold cyan]===============================================================[/bold cyan]")
         log.write("Type '/help' for a list of commands, or start typing to stream.\n")
         self.initialize_brain()
+        self.set_interval(10.0, self.trigger_dream_cycle)
+        
+    def on_input_changed(self, event: Input.Changed) -> None:
+        import time
+        self.last_activity = time.time()
 
     @work(thread=True)
     def initialize_brain(self) -> None:
@@ -109,6 +117,26 @@ class UchiApp(App):
         bar = self.query_one("#rl-progress", ProgressBar)
         bar.add_class("hidden")
         
+    def trigger_dream_cycle(self) -> None:
+        import time
+        if self.router and time.time() - self.last_activity > 15.0 and self.pending_sequence is None and self.active_learning_word is None:
+            input_box = self.query_one(Input)
+            if not input_box.value.strip() and not input_box.disabled:
+                self.run_dream_task()
+
+    @work(thread=True)
+    def run_dream_task(self) -> None:
+        try:
+            pred = self.router.predict_future(["<|user|>"], steps=20, temperature=0.8, creativity=0.3)
+            if pred and len(pred) > 3:
+                self.router.stream(pred)
+                self.call_from_thread(self._log_dream)
+        except Exception:
+            pass
+            
+    def _log_dream(self) -> None:
+        self.query_one(RichLog).write("[blue][dim]... (offline RL dreaming) ...[/dim][/blue]")
+        
     def action_save(self) -> None:
         if self.router:
             from uchi.cli import save_brain
@@ -160,7 +188,11 @@ class UchiApp(App):
             self.router.tokenizer.ontology.add_mapping(word, ans)
             log.write(f"[green][+] Learned: '{word}' maps to '{ans}'. Re-evaluating...[/green]")
             self.active_learning_word = None
-            input_box.placeholder = "Type your message..."
+            
+            input_box.disabled = True
+            input_box.placeholder = "ODUSP is predicting..."
+            self.process_command(self.active_learning_cmd)
+            self.active_learning_cmd = None
             return
             
         # RL check
@@ -190,6 +222,7 @@ class UchiApp(App):
         
         if unknowns:
             word = unknowns[0]
+            self.active_learning_cmd = cmd
             self.call_from_thread(self.prompt_active_learning, word)
             return
 
