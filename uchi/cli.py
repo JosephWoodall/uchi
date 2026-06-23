@@ -159,6 +159,12 @@ def main():
     router = load_brain(args.brain)
     if router is None:
         router = OmniRouter(use_bpe=False, memory_window=5)
+        # Cold Start: Freeze and compress the hyper-reinforced persona nodes
+        from uchi.node_compressor import NodeCompressor
+        compressor = NodeCompressor()
+        print("[*] Compressing hyper-reinforced persona memory...")
+        pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
+        print(f"[+] Compressed {pruned} foundational concept nodes.")
         
     if args.preload:
         preload_context(router, args.preload)

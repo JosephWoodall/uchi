@@ -59,8 +59,8 @@ class OmniRouter:
                 "<|user|> who are you <|assistant|> i am uchi a deterministic sequence predictor",
             ]
         
-        # Repeat turns to strengthen patterns against future context dilution
-        for _ in range(3):
+        # Simulate Massive Positive Reinforcement RL during cold start
+        for _ in range(25):
             for turn in turns:
                 tokens = turn.split()
                 self.stream(tokens)
@@ -81,6 +81,27 @@ class OmniRouter:
         
         # 4. Train the deterministic trie
         self.predictor.partial_fit(concepts)
+        
+    def retrieve_context(self, sequence: list) -> str:
+        """
+        Retrieves the most likely long-term memory association.
+        """
+        try:
+            concepts = self.tokenizer.tokenize(sequence, is_inference=True)
+            if self.bpe:
+                concepts = list(self.bpe.tokenize(concepts))
+            
+            ans_concept, raw_score = self.memory.query(concepts)
+            
+            # Normalize score by query length to prevent long conversational 
+            # queries from artificially inflating the score via cumulative common words.
+            normalized_score = raw_score / max(1, len(concepts)) if raw_score is not None else 0.0
+            
+            if ans_concept and normalized_score >= 1.5:
+                return str(ans_concept)
+        except Exception:
+            pass
+        return "[Unknown Context]"
         
     def query(self, prompt: list) -> str:
         """
@@ -129,7 +150,7 @@ class OmniRouter:
         If creativity > 0.0, Stochastic Context Mutation is applied.
         """
         import random
-        concepts = self.tokenizer.tokenize(prompt)
+        concepts = self.tokenizer.tokenize(prompt, is_inference=True)
         if self.bpe:
             concepts = list(self.bpe.tokenize(concepts))
             
