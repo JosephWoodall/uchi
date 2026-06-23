@@ -119,7 +119,8 @@ class UchiApp(App):
         import os
         script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts", "background_rl.py")
         if os.path.exists(script_path):
-            self.rl_process = subprocess.Popen(["python", script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import sys
+            self.rl_process = subprocess.Popen([sys.executable, script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.query_one(RichLog).write("[cyan][*] Continuous RL Background Daemon Started.[/cyan]")
         
     def _update_progress(self, current: int, total: int) -> None:

@@ -147,6 +147,22 @@ class OmniRouter:
         except Exception:
             pass
 
+        # Bootstrap specialist brains automatically on cold start
+        try:
+            import sys as _sys
+            import subprocess as _sp
+            import os as _os
+            _script = _os.path.join(_os.path.dirname(__file__), '..', 'scripts', 'bootstrap_specialist.py')
+            _script = _os.path.normpath(_script)
+            if _os.path.exists(_script):
+                _sp.Popen(
+                    [_sys.executable, _script, "--domain", "all"],
+                    stdout=_sp.DEVNULL,
+                    stderr=_sp.DEVNULL,
+                )
+        except Exception:
+            pass
+
         # Persist SSM weights so they survive across restarts
         try:
             import torch

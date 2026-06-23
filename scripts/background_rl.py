@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import subprocess
 import tempfile
@@ -53,7 +54,7 @@ def run_rl_loop(router):
             temp_path = f.name
             
         try:
-            result = subprocess.run(["python", temp_path], capture_output=True, text=True, timeout=3)
+            result = subprocess.run([sys.executable, temp_path], capture_output=True, text=True, timeout=3)
             sequence = tokens + reply
             
             # Neural SSM Tuning

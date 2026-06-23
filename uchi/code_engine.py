@@ -11,6 +11,7 @@ When all candidates fail: emit ??HOLE:desc?? markers the user can fill in.
 import ast
 import concurrent.futures
 import subprocess
+import sys
 import tempfile
 import os
 import re
@@ -35,7 +36,7 @@ class REPLOracle:
 
         try:
             result = subprocess.run(
-                ["python", "-m", "py_compile", path],
+                [sys.executable, "-m", "py_compile", path],
                 capture_output=True,
                 timeout=timeout,
             )
