@@ -139,13 +139,24 @@ class UchiApp(App):
         try:
             pred = self.router.predict_future(["<|user|>"], steps=20, temperature=0.8, creativity=0.3)
             if pred and len(pred) > 3:
-                self.router.stream(pred)
-                self.call_from_thread(self._log_dream)
+                score = self.router.predictor.score(pred)
+                
+                if score < 8.0:
+                    # Coherent Dream: Reinforce it
+                    self.router.stream(pred)
+                    self.call_from_thread(self._log_dream)
+                elif score > 12.0:
+                    # Fever Dream (Gibberish): Prune the path
+                    self.router.predictor.unlearn(pred)
+                    self.call_from_thread(self._log_fever_dream)
         except Exception:
             pass
             
     def _log_dream(self) -> None:
-        self.query_one(RichLog).write("[blue][dim]... (offline RL dreaming) ...[/dim][/blue]")
+        self.query_one(RichLog).write("[blue][dim]... (offline RL dreaming: reinforced coherent path) ...[/dim][/blue]")
+        
+    def _log_fever_dream(self) -> None:
+        self.query_one(RichLog).write("[magenta][dim]... (offline RL dreaming: pruned fever dream) ...[/dim][/magenta]")
         
     def action_save(self) -> None:
         if self.router:
