@@ -91,9 +91,19 @@ class OmniRouter:
         if self.bpe:
             concept_query = list(self.bpe.tokenize(concept_query))
         
-        ans_concept, ans_score = self.memory.query(concept_query)
-        if ans_concept and ans_score >= 1.5:
+        ans_concept, raw_score = self.memory.query(concept_query)
+        
+        # Normalize score by query length to prevent long conversational 
+        # queries from artificially inflating the score via cumulative common words.
+        normalized_score = raw_score / max(1, len(concept_query)) if raw_score is not None else 0.0
+        
+        if ans_concept and normalized_score >= 1.5:
             return str(ans_concept)
+            
+        # If it's a known sequence in the trie (raw_score > 0) but didn't meet the 
+        # RAG threshold, it's just a conversational turn. Skip web sourcing.
+        if raw_score is not None and raw_score > 0:
+            return "[Unknown Context]"
         
         # Autonomous Web Sourcing Hook
         try:

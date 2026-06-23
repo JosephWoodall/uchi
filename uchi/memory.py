@@ -36,13 +36,18 @@ class AssociativeMemory:
             window = sequence[start:i] + sequence[i+1:end]
             target = sequence[i]
             
+            # Do not allow structural boundary tokens to be stored as semantic targets
+            if target.startswith("<|") and target.endswith("|>"):
+                continue
+            
             # Store the local window for exact matching
             self.buffer.append((set(window), target))
             
             # Update the global Fractal Attention graph
             for w in window:
-                self.co_occurrence[target][w] += 1.0
-                self.co_occurrence[w][target] += 1.0 # Symmetric relationship
+                if not (w.startswith("<|") and w.endswith("|>")):
+                    self.co_occurrence[target][w] += 1.0
+                    self.co_occurrence[w][target] += 1.0 # Symmetric relationship
                 
     def _expand_query(self, q_sequence: list, top_k: int = 3) -> dict:
         """
@@ -66,7 +71,7 @@ class AssociativeMemory:
         Calculates the mathematical overlap using Fractal Attention weights.
         """
         if not self.buffer:
-            return None
+            return None, None
             
         # 1. Expand the query dynamically using global attention weights
         q_weights = self._expand_query(q_sequence)
