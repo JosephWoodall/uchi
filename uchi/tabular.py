@@ -53,6 +53,7 @@ def _make_predictor(
     k: int, lr: float, cred_max: float, lp: float,
     use_similarity_fallback: bool = False,
     use_positional_weights: bool = False,
+    min_context_length: int = 1,
 ) -> UniversalPredictor:
     return UniversalPredictor(
         k, None,
@@ -60,11 +61,12 @@ def _make_predictor(
         vigilance=0.3,
         adaptive_cap=True,
         binary_correction_scale=0.05,
-        cred_max=cred_max,
+        cred_max_base=cred_max,
         lambda_power=lp,
         cont_count_min_vocab=4,
         use_similarity_fallback=use_similarity_fallback,
         use_positional_weights=use_positional_weights,
+        min_context_length=min_context_length,
     )
 
 

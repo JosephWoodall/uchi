@@ -1,23 +1,34 @@
 import pytest
+from unittest.mock import patch
+
+# Patch _bootstrap_knowledge before api_server imports OmniRouter at module level.
+# The bootstrap runs the full stdlib walk which is too slow for unit tests.
+with patch("uchi.omni_router.OmniRouter._bootstrap_knowledge"):
+    from uchi.api_server import app
+
 from fastapi.testclient import TestClient
-from uchi.api import app
 
-def test_api_stream():
-    with TestClient(app) as client:
-        response = client.post("/stream", json={"tokens": ["hello", "world"]})
-        assert response.status_code == 200
-        assert response.json() == {"status": "success", "processed": 2}
 
-def test_api_query():
+def test_metrics_returns_online():
     with TestClient(app) as client:
-        client.post("/stream", json={"tokens": ["hello", "world"]})
-        response = client.post("/query", json={"tokens": ["hello"]})
+        response = client.get("/metrics")
         assert response.status_code == 200
-        assert "answer" in response.json()
+        data = response.json()
+        assert data["status"] == "online"
+        assert "memory_records" in data
 
-def test_api_predict():
+
+def test_chat_returns_reply():
     with TestClient(app) as client:
-        client.post("/stream", json={"tokens": ["hello", "world"]})
-        response = client.post("/predict", json={"context": ["hello"], "steps": 1})
+        response = client.post("/chat", json={"message": "hello"})
         assert response.status_code == 200
-        assert "prediction" in response.json()
+        data = response.json()
+        assert "reply" in data
+        assert isinstance(data["reply"], str)
+        assert len(data["reply"]) > 0
+
+
+def test_chat_empty_message_returns_400():
+    with TestClient(app) as client:
+        response = client.post("/chat", json={"message": ""})
+        assert response.status_code == 400

@@ -90,18 +90,25 @@ ODUSP Daemon v0.2.0
 """
 
 def save_brain(router, path: str = "brain.uchi"):
-    """Serializes the entire Deterministic Cognitive Engine to disk."""
+    """Serializes the entire Deterministic Cognitive Engine to disk (gzip-compressed)."""
+    import gzip
     print(f"\n[+] Saving neural state to {path}...")
     try:
-        with open(path, "wb") as f:
-            pickle.dump(router, f)
-        print(f"[+] Brain successfully persisted. ({os.path.getsize(path)} bytes)")
+        with gzip.open(path, "wb", compresslevel=6) as f:
+            pickle.dump(router, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"[+] Brain successfully persisted. ({os.path.getsize(path) / 1024 / 1024:.1f} MB)")
     except Exception as e:
         print(f"[-] Failed to save brain: {e}")
 
 def load_brain(path: str = "brain.uchi") -> OmniRouter:
-    """Deserializes the Cognitive Engine from disk."""
+    """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle."""
+    import gzip
     print(f"[*] Loading persistent brain state from {path}...")
+    try:
+        with gzip.open(path, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        pass
     try:
         with open(path, "rb") as f:
             return pickle.load(f)

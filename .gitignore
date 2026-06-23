@@ -3,3 +3,18 @@ __pycache__/
 *.pyo
 *.mp4
 .claude/
+.venv/
+# Runtime state regenerated at startup
+uchi_cpu_memory_index.json
+uchi_cpu_memory_vectors.npy
+uchi_procedural_memory.json
+# PyTorch weights checkpoint
+ssm_dynamics.pt
+# Dev / one-off root scripts
+api_code_test.py
+api_example.py
+debug_chat.py
+fix_indent.py
+patch_mcts.py
+test_gen.py
+test_tui.py

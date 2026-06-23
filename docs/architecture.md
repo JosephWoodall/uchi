@@ -86,3 +86,17 @@ Expanding from small samples to full datasets exposed a fundamental architectura
 **The exception is noisy and drifting data.** Weather improved from 41% to 52.7% — the Predictor leads on Weather because noisy, high-variance datasets are exactly where count-based methods overfit to stale patterns.
 
 **The CRED_MAX cap is a design choice, not a bug.** A node with unbounded credibility would adapt from drift in O(n) steps. The cap guarantees O(1/CRED_MAX) adaptation speed. The trade-off is explicit: fast drift recovery at the cost of long-term convergence on stationary data.
+
+---
+
+## Routing Layer
+
+v0.3.0 fixes four root problems that existed in the original `chat()` pipeline.
+
+**Problem 1: No intent extraction.** All queries entered the trie through a single pipeline regardless of whether they were code requests, math questions, or conversational turns, causing the trie to blend incompatible prediction contexts. Fix: `ProceduralMemory` classifies intent via keyword matching before tokenization and prepends a routing hint to the token stream.
+
+**Problem 2: Untrained SSM value head.** The SSM value head was initialized with random weights and never trained, making the hallucination gate produce random confidence scores. Fix: the `AgenticBaseline` GRPO loop trains the value head online after every turn using sentiment and code evaluation signals as reward.
+
+**Problem 3: Stream-before-answer bug.** The trie was trained on partial `<|user|> query` sequences before the assistant response was generated, corrupting the context-to-response association. Fix: `stream()` is now called only after generation completes, on the full `<|user|> X <|assistant|> Y` sequence.
+
+**Problem 4: No knowledge corpus.** The trie started cold with only the persona turns, giving it no factual or structural knowledge to draw on. Fix: `_bootstrap_knowledge()` runs once on cold start, ingesting Python stdlib function docstrings and Wikipedia fact triples into the trie before the first user query is served.

@@ -22,10 +22,27 @@ By wrapping the `OmniTokenizer`, `OnlineTokenizer`, `AssociativeMemory`, and `Se
 ### The Ultimate Benefit
 The `OmniRouter` fundamentally transforms Uchi from a statistical math tool into a **Deterministic LLM**. It grants enterprises the ability to achieve LLM-level creative generalization, Multi-Modal ad-hoc question answering, and infinite lifelong context—all running in $O(1)$ RAM on an edge device with absolutely zero risk of neural hallucination.
 
-### Realistic Use Cases
-1. Example 1: Real-time autonomous classification.
-2. Example 2: Instant edge-device inference without internet.
-3. Example 3: Deterministic data validation in a secure environment.
+## Routing Layer (v0.3.0)
 
-### The Ultimate Benefit
-The ultimate benefit is absolute mathematical certainty and (1)$ memory usage, completely eliminating the hallucinations, latency, and massive hardware costs associated with standard neural architectures.
+v0.3.0 adds a structured routing layer that sits in front of the trie and the SSM, improving intent handling, retrieval quality, and cold-start knowledge.
+
+### ProceduralMemory
+
+`ProceduralMemory` is a keyword/synonym-based intent classifier that runs before the trie sees a query. When a user sends a message, `chat()` calls `procedural.retrieve(message)` first. If a known intent is detected (e.g., `code`, `math`), the intent label is prepended to the token stream as a routing hint, directing the trie toward the correct prediction path. Unknown intents (conversational greetings, etc.) return `None` and bypass the classifier entirely.
+
+### CPUVectorMemory
+
+`CPUVectorMemory` is a persistent numpy/JSON vector store that replaces the in-memory `AssociativeMemory` buffer for SSM state vectors. Each SSM hidden state vector is stored on disk and survives process restarts. Retrieval uses cosine similarity over all stored vectors, returning the top-k most semantically similar past states. This makes the system's long-term memory durable without requiring a database.
+
+### GRPO Value Head
+
+The SSM carries a value head that is trained online via Group Relative Policy Optimization (the method introduced in DeepSeek-R1). After each chat turn, user sentiment (positive/negative keywords) and code evaluation signals (syntax check via `py_compile`) are converted to scalar rewards. The `AgenticBaseline` tracks a running mean and standard deviation so the advantage signal is normalized before each value head update. This replaces the random-initialized value head that previously acted as a hallucination gate with random noise.
+
+### Execution Order in `chat()`
+
+1. `ProceduralMemory.retrieve(message)` — intent routing
+2. Sentiment scoring against previous turn — GRPO value update
+3. `query(concepts)` — CPUVectorMemory cosine retrieval
+4. `predict_future(tokens)` — trie generation
+5. SSM value head confidence check — hallucination gate
+6. `stream(last_sequence)` — trie training on the complete `<|user|> X <|assistant|> Y` sequence (after generation, not before)

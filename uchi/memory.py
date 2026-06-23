@@ -7,6 +7,8 @@ to mathematically mimic Multi-Headed Self-Attention, allowing Uchi to bridge
 long-range dependencies beyond the fixed window.
 """
 from collections import defaultdict
+import torch
+from .cpu_memory import CPUVectorMemory
 
 def _default_dict_float():
     return defaultdict(float)
@@ -18,9 +20,20 @@ class AssociativeMemory:
             window_size: The local context window size.
         """
         self.window_size = window_size
-        self.buffer = []
+        self.cpu_mem = CPUVectorMemory()
         # Global co-occurrence graph for Fractal Attention
         self.co_occurrence = defaultdict(_default_dict_float)
+
+    def __setstate__(self, state):
+        """Forward-compatibility: initialize attributes added in newer versions after unpickling."""
+        self.__dict__.update(state)
+        if not hasattr(self, 'cpu_mem'):
+            self.cpu_mem = CPUVectorMemory()
+        if not hasattr(self, 'co_occurrence'):
+            self.co_occurrence = defaultdict(_default_dict_float)
+        # Old versions stored buffer list — no longer used, safe to drop
+        if hasattr(self, 'buffer'):
+            del self.buffer
         
     def stream_context(self, sequence: list):
         """
@@ -29,6 +42,18 @@ class AssociativeMemory:
         if len(sequence) <= self.window_size:
             return
             
+        from uchi.neuro_symbolic import get_ssm
+        ssm = get_ssm()
+            
+        # We store the full sequence as the retrieved target to provide complete context.
+        # This solves the issue where single-word targets like 'understand' would tie with the actual answer.
+        full_sentence = ' '.join([str(s) for s in sequence if not (isinstance(s, str) and s.startswith('<|'))])
+        
+        # Get semantic state vector
+        state_vec = ssm.get_state(sequence)
+        
+        self.cpu_mem.add_memory(full_sentence, state_vec.detach().cpu().numpy())
+        
         for i in range(len(sequence)):
             start = max(0, i - self.window_size)
             end = min(len(sequence), i + self.window_size + 1)
@@ -36,16 +61,9 @@ class AssociativeMemory:
             window = sequence[start:i] + sequence[i+1:end]
             target = sequence[i]
             
-            # Do not allow structural boundary tokens to be stored as semantic targets
-            if target.startswith("<|") and target.endswith("|>"):
-                continue
-            
-            # Store the local window for exact matching
-            self.buffer.append((set(window), target))
-            
             # Update the global Fractal Attention graph
             for w in window:
-                if not (w.startswith("<|") and w.endswith("|>")):
+                if not (isinstance(w, str) and w.startswith("<|") and w.endswith("|>")):
                     self.co_occurrence[target][w] += 1.0
                     self.co_occurrence[w][target] += 1.0 # Symmetric relationship
                 
@@ -66,29 +84,22 @@ class AssociativeMemory:
                         
         return q_weights
             
-    def query(self, q_sequence: list) -> str:
+    def query(self, q_sequence: list) -> tuple:
         """
-        Calculates the mathematical overlap using Fractal Attention weights.
+        Retrieves best matching memory using SSM cosine similarity.
+        Returns (text, cosine_score) where score is in [-1, 1].
+        A score >= 0.5 is a confident match; caller should threshold accordingly.
         """
-        if not self.buffer:
-            return None, None
-            
-        # 1. Expand the query dynamically using global attention weights
-        q_weights = self._expand_query(q_sequence)
-        
-        best_score = -1
-        best_target = None
-        
-        # 2. Score against the buffer
-        for window_set, target in self.buffer:
-            score = 0.0
-            for w in window_set:
-                if w in q_weights:
-                    score += q_weights[w]
-                    
-            if score > best_score:
-                best_score = score
-                best_target = target
-                
-        return best_target, best_score
+        from uchi.neuro_symbolic import get_ssm
 
+        if not self.cpu_mem.records:
+            return None, None
+
+        ssm = get_ssm()
+        q_state = ssm.get_state(q_sequence)
+
+        results = self.cpu_mem.retrieve_with_scores(q_state.detach().cpu().numpy(), top_k=1)
+        if results:
+            text, score = results[0]
+            return text, score
+        return None, None

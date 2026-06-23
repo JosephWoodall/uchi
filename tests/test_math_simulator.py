@@ -2,7 +2,7 @@ import time
 import math
 from uchi.predictor import UniversalPredictor
 from uchi.forest import PredictorForest
-from datasets import load_math_corpus
+from uchi_datasets import load_math_corpus
 
 def test_math_simulation():
     print("Loading math corpus...")

@@ -28,19 +28,19 @@ def test_omni_router_multimodal():
     # "CRITICAL" state with the surrounding math telemetry.
     ans = router.query(["why", "CRITICAL", "?"])
     
-    # Depending on the geometric slice, it will retrieve the mathematical anomaly or the agent action.
-    assert ans is not None
-    
+    # query() returns a string — either a retrieved concept or "[Unknown Context]"
+    assert isinstance(ans, str)
+
 def test_omni_image_audio():
     router = OmniRouter(use_bpe=False)
-    
+
     stream = [
-        "user", "uploaded", "dog_photo.jpg", 
-        "dog_bark.wav", 
+        "user", "uploaded", "dog_photo.jpg",
+        "dog_bark.wav",
         "classifier", "said", "dog"
     ]
     router.stream(stream)
-    
+
     # Query what was uploaded
     ans = router.query(["what", "uploaded", "?"])
-    assert ans is not None
+    assert isinstance(ans, str)

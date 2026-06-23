@@ -93,11 +93,20 @@ class OmniTokenizer:
         except SyntaxError:
             return []
 
-    def tokenize(self, data, is_inference: bool = False) -> list:
+    def tokenize(self, data, is_inference: bool = False, _in_code_block: bool = False) -> list:
         if isinstance(data, list):
             out = []
+            in_code = _in_code_block
             for item in data:
-                out.extend(self.tokenize(item, is_inference))
+                if isinstance(item, str) and item.strip() == "```python":
+                    in_code = True
+                    out.append("```python")
+                    continue
+                elif isinstance(item, str) and item.strip() == "```" and in_code:
+                    in_code = False
+                    out.append("```")
+                    continue
+                out.extend(self.tokenize(item, is_inference, _in_code_block=in_code))
             return out
 
         if isinstance(data, str) and data.lower().endswith((".png", ".jpg", ".jpeg")):
@@ -113,12 +122,8 @@ class OmniTokenizer:
                 return [f"[ACTION_{data.name}_{data.target}]"]
             return [f"[ACTION_{data.name}]"]
             
-        if isinstance(data, str) and ("def " in data or "import " in data):
-            ast_concepts = self._hash_ast(data)
-            if ast_concepts:
-                return ast_concepts
-            
         if isinstance(data, str):
+            # Special tokens pass through immediately
             if data.startswith("<|") or data.startswith("[SYS_"):
                 self._known_concepts.add(data)
                 return [data]
@@ -127,11 +132,35 @@ class OmniTokenizer:
                 self._known_concepts.add(data)
                 return [data]
 
-            if data in self._cache:
+            if data in self._cache and not _in_code_block:
                 return [self._cache[data]]
                 
-            concept = data.lower().strip(",.")
+            # ── CODE MODE: strict literal pass-through ──
+            if _in_code_block:
+                self._known_concepts.add(data)
+                return [data]
             
+            # ── CONVERSATION MODE: semantic mapping active ──
+            concept = data.lower().strip(".,!?")
+            
+            # Still bypass WordNet for Python keywords even in conversation
+            _CODE_KEYWORDS = {
+                "def", "class", "return", "import", "from", "self",
+                "while", "for", "if", "else", "elif", "try", "except",
+                "finally", "with", "as", "yield", "lambda", "pass",
+                "break", "continue", "and", "or", "not", "in", "is",
+                "none", "true", "false", "print", "len", "range",
+                "async", "await", "raise", "assert", "del", "global",
+                "nonlocal", "```python", "```",
+                "a", "b", "c", "d", "e", "f", "x", "y", "z", "n", "s",
+                "add", "subtract", "multiply", "divide", "max", "min", "sum",
+                "function", "integer", "string", "boolean", "returns", "takes", "called",
+                "reverse", "factorial", "even", "odd"
+            }
+            if concept in _CODE_KEYWORDS or any(c in concept for c in "()[]{}:="):
+                self._known_concepts.add(concept)
+                return [concept]
+                
             canonical = self.ontology.get(concept)
             if canonical:
                 self._cache[data] = canonical
@@ -139,7 +168,21 @@ class OmniTokenizer:
                 return [canonical]
                 
             mapped = False
-            if self.use_wordnet and self._wn:
+            
+            # Common stop words should bypass WordNet to prevent "i" -> "iodine"
+            _STOP_WORDS = {"i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", 
+                           "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them", "their", 
+                           "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are", 
+                           "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", 
+                           "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", 
+                           "while", "of", "at", "by", "for", "with", "about", "against", "between", "into", "through", 
+                           "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", 
+                           "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", 
+                           "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", 
+                           "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", 
+                           "can", "will", "just", "don", "should", "now"}
+                           
+            if self.use_wordnet and self._wn and concept not in _STOP_WORDS:
                 synsets = self._wn.synsets(concept)
                 if synsets:
                     concept = synsets[0].name()
@@ -147,7 +190,7 @@ class OmniTokenizer:
                     
             if not mapped:
                 if self._known_concepts:
-                    closest = difflib.get_close_matches(concept, self._known_concepts, n=1, cutoff=0.8)
+                    closest = difflib.get_close_matches(concept, self._known_concepts, n=1, cutoff=0.9)
                     if closest:
                         canonical = closest[0]
                         self.ontology.add_mapping(concept, canonical)

@@ -2,6 +2,15 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
+## [0.3.0] - Routing Layer & Self-Improving SSM
+- **Root Problem Fix: Stream After Answer** — trie now trains on complete `<|user|> query <|assistant|> response` sequences only after generation, preventing partial-sequence corruption
+- **GRPO Value Head** — SSM value head now trains online from user sentiment and code evaluation signals via Group Relative Policy Optimization (DeepSeek-R1 method). Replaces random-weight hallucination gate
+- **ProceduralMemory Intent Router** — keyword/synonym-based intent classifier routes queries to correct trie strategy before tokenization. Eliminates blind single-pipeline routing
+- **CPUVectorMemory** — persistent numpy/JSON vector store replaces in-memory AssociativeMemory buffer. SSM state vectors survive restarts
+- **Persisted SSM Optimizer** — Adam optimizer stored on OmniRouter so momentum accumulates across turns instead of resetting each call
+- **Cold-Start Bootstrap** — first launch automatically ingests Python stdlib function patterns and Wikipedia fact triples into the trie via `_bootstrap_knowledge()`
+- **Cosine Similarity Retrieval** — AssociativeMemory query now uses SSM-encoded cosine similarity instead of token overlap scoring
+
 ## [0.2.0] - The Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
 - **Fractal Attention**: Replaced the fixed sliding window in `AssociativeMemory` with a dynamic, global co-occurrence graph that natively mimics multi-headed self-attention at $O(1)$ speed.
 - **AST Coding Superpowers**: `OmniTokenizer` now natively parses Python code into an Abstract Syntax Tree (AST), allowing Uchi to deterministically learn the structural geometry of code to ensure mathematically impossible syntax errors.

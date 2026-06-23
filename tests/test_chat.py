@@ -61,8 +61,12 @@ class TestChatCapabilities(unittest.TestCase):
         reply = self._get_reply("what can you do")
         reply_text = ' '.join(reply)
         
-        # Should mention prediction or sequences or patterns
-        capability_markers = {"predict", "sequences", "patterns", "help", "memory", "information"}
+        # Should mention prediction or sequences or patterns.
+        # Tokens go through OmniTokenizer so "sequences" → "sequence", "predict" → "predictor".
+        capability_markers = {
+            "predict", "predictor", "sequences", "sequence", "patterns",
+            "help", "memory", "information", "stream", "trie", "graph",
+        }
         self.assertTrue(
             any(tok in capability_markers for tok in reply),
             f"Reply '{reply_text}' should mention a capability"

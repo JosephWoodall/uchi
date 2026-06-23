@@ -101,7 +101,7 @@ class UniversalPredictor:
         **kwargs,   # absorb legacy args (coupling_lr, feedback_strength, etc.)
     ):
         self.k              = context_length   # None = infinite context (PPM-Star)
-        self.min_k          = max(1, min_context_length)
+        self.min_k          = max(0, min_context_length)
         self.lr             = learning_rate
         self.vigilance      = vigilance
         self.min_confidence = min_confidence        # abstain if max(blend) < this × (1/|vocab|)
@@ -156,6 +156,7 @@ class UniversalPredictor:
         self._last_max_sim:       float = 0.0
         self._last_contributions: dict  = {}   # depth → (node_cred, top_successor)
         self._last_abstained:     bool  = False
+        self._last_prediction_depth: int = 0
 
         # Backward-compat stubs (coupling removed; ablation showed ~0 effect)
         self.coupling:          dict  = {}
@@ -198,6 +199,7 @@ class UniversalPredictor:
 
         self._last_distribution  = dist
         self._last_max_sim       = max((n.node_cred for n, _ in active), default=0.0)
+        self._last_prediction_depth = max((d for _, d in active), default=0)
         self._last_contributions = {
             d: (n.node_cred,
                 max(n.succ_cred, key=n.succ_cred.get) if n.succ_cred else pred)
@@ -287,75 +289,61 @@ class UniversalPredictor:
                 and self._global_step % 500 == 0):
             self._compressor.compress_pass(self._root, self._cred_max_base)
 
-    def unlearn(self, actual: Any) -> None:
-        """Synaptic Pruning: heavily penalize and potentially delete the actual sequence."""
+    def unlearn(self, actual: Any, strength: float = 1.0) -> None:
+        """
+        Surgical Synaptic Pruning with exponential trailing decay.
+        
+        Instead of uniformly destroying all edge weights, applies an
+        exponentially decaying penalty from the END of the sequence
+        backward. The trailing tokens (most likely to contain the error)
+        receive the heaviest penalty, while foundational tokens at the 
+        start are preserved.
+        
+        Args:
+            actual: The sequence (list) or single token to unlearn.
+            strength: 0.0-1.0 scalar. 1.0 = hard unlearn (code errors),
+                      0.3 = soft unlearn (conversational mistakes).
+        """
+        if isinstance(actual, list):
+            # Surgical sequence unlearning with positional decay
+            seq = actual
+            n = len(seq)
+            for i, token in enumerate(seq):
+                # Exponential decay: tokens near the end get the heaviest penalty
+                # position_weight ranges from ~0.1 (start) to 1.0 (end)
+                position_weight = (i + 1) / n
+                decay_factor = 0.1 + (0.9 * (1.0 - position_weight * strength))
+                
+                # Walk the trie and apply decay at every matching depth
+                n_hist = len(self.history)
+                max_d = (n_hist - 1) if self.k is None else min(self.k, n_hist - 1)
+                for d in range(self.min_k, max_d + 1):
+                    if self.k is None and d > 64:
+                        break
+                    ctx = tuple(self.history[-(d + 1):-1])
+                    node = self._feedback_get_node(ctx)
+                    if node and token in node.succ_cred:
+                        node.succ_cred[token] *= decay_factor
+                        if node.succ_cred[token] < 0.05:
+                            del node.succ_cred[token]
+                self.history.append(token)
+            return
+        
+        # Single-token unlearn (legacy path)
         n_hist = len(self.history)
         max_d = (n_hist - 1) if self.k is None else min(self.k, n_hist - 1)
+        decay_factor = 0.1 * strength  # Hard: 0.1, Soft: 0.03
         for d in range(self.min_k, max_d + 1):
             if self.k is None and d > 64:
                 break
             ctx = tuple(self.history[-(d + 1):-1])
             node = self._feedback_get_node(ctx)
             if node and actual in node.succ_cred:
-                node.succ_cred[actual] *= 0.1 # Severe decay
+                node.succ_cred[actual] *= decay_factor
                 if node.succ_cred[actual] < 0.05:
                     del node.succ_cred[actual]
 
-        # Continuation-count update: when a new bigram (prev, actual) is first
-        # seen, increment the continuation count for actual.
-        if len(self.history) >= 2:
-            bigram = (self.history[-2], actual)
-            if bigram not in self._seen_bigrams:
-                self._seen_bigrams.add(bigram)
-                self._cont_counts[actual] = self._cont_counts.get(actual, 0) + 1
 
-        # Per-depth context nodes (depths min_k .. k)
-        max_d = (n_hist - 1) if self.k is None else min(self.k, n_hist - 1)
-        
-        # To avoid O(N^2) explosion with infinite context, we only create
-        # nodes up to the longest existing match + 1.
-        node = self._root
-        for d in range(self.min_k, max_d + 1):
-            ctx  = tuple(self.history[-(d + 1):-1])
-            sym = ctx[0] # The earliest symbol in the context
-            
-            # This logic needs to traverse backwards from the end of history.
-            # But ctx is built backwards. Let's stick to _ensure_node for now 
-            # and just enforce a reasonable hard cap if k is None to avoid hanging.
-            if self.k is None and d > 64: 
-                break
-                
-            node = self._feedback_get_node(ctx)
-            if node is None:
-                continue
-            node.n_obs += 1
-            node.last_step = self._global_step
-            if actual not in node.succ_cred:
-                node.succ_cred[actual] = 1.0
-
-            if abstained:
-                self._update_node_abstained(node, actual)
-            elif correct:
-                self._update_node_correct(node, actual)
-            else:
-                self._update_node_wrong(node, self._last_prediction, actual)
-
-            # Problem 9: update positional weight tracking
-            if self._use_pos_weights and (self.k is None or d <= self.k):
-                idx = d - 1  # depth 1 → index 0
-                # Extend the pos tracking lists if we are going deeper than before
-                if idx >= len(self._pos_total):
-                    self._pos_total.extend([0.0] * (idx - len(self._pos_total) + 1))
-                    self._pos_correct.extend([0.0] * (idx - len(self._pos_correct) + 1))
-                if idx < len(self._pos_total):
-                    self._pos_total[idx] += 1.0
-                    if correct:
-                        self._pos_correct[idx] += 1.0
-
-        # Problem 6: periodic compression pass
-        if (self._compressor is not None
-                and self._global_step % 500 == 0):
-            self._compressor.compress_pass(self._root, self._cred_max_base)
 
     def _distribution(self) -> dict:
         """Return last predictive distribution (for log-loss evaluation)."""

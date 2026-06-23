@@ -21,6 +21,7 @@ tests/test_web_plugin.py
 tests/tests.py
 uchi/__init__.py
 uchi/api.py
+uchi/api_server.py
 uchi/cli.py
 uchi/discretize.py
 uchi/distributional.py
@@ -31,15 +32,19 @@ uchi/hoeffding.py
 uchi/long_term_store.py
 uchi/memory.py
 uchi/node_compressor.py
+uchi/omni_evaluator.py
 uchi/omni_router.py
 uchi/omni_tokenizer.py
 uchi/online_tokenizer.py
+uchi/ontology.py
+uchi/ontology_manager.py
 uchi/persona.txt
 uchi/predictor.py
 uchi/process.py
 uchi/simulation_engine.py
 uchi/tabular.py
 uchi/timeseries.py
+uchi/web_search.py
 uchi.egg-info/PKG-INFO
 uchi.egg-info/SOURCES.txt
 uchi.egg-info/dependency_links.txt
@@ -48,3 +53,5 @@ uchi.egg-info/requires.txt
 uchi.egg-info/top_level.txt
 uchi/plugins/__init__.py
 uchi/plugins/web.py
+uchi/tui/__init__.py
+uchi/tui/app.py

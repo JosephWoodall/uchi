@@ -28,16 +28,17 @@ class UchiApp(App):
         ("ctrl+s", "save", "Save Brain"),
     ]
 
-    def __init__(self, brain_path, preload_path):
-        super().__init__()
+    def __init__(self, brain_path, preload_path, **kwargs):
+        super().__init__(**kwargs)
         self.router = None
         self.brain_path = brain_path
         self.preload_path = preload_path
-        self.pending_sequence = None
         self.active_learning_word = None
         self.active_learning_cmd = None
+        self.active_teaching_query = None
         import time
         self.last_activity = time.time()
+        self.rl_process = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -54,7 +55,6 @@ class UchiApp(App):
         log.write("[bold cyan]===============================================================[/bold cyan]")
         log.write("Type '/help' for a list of commands, or start typing to stream.\n")
         self.initialize_brain()
-        self.set_interval(10.0, self.trigger_dream_cycle)
         
     def on_input_changed(self, event: Input.Changed) -> None:
         import time
@@ -112,6 +112,14 @@ class UchiApp(App):
         input_box.placeholder = "Type your message..."
         input_box.focus()
         
+        # Start the Continuous RL Background Daemon
+        import subprocess
+        import os
+        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "scripts", "background_rl.py")
+        if os.path.exists(script_path):
+            self.rl_process = subprocess.Popen(["python", script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.query_one(RichLog).write("[cyan][*] Continuous RL Background Daemon Started.[/cyan]")
+        
     def _update_progress(self, current: int, total: int) -> None:
         bar = self.query_one("#rl-progress", ProgressBar)
         lbl = self.query_one("#rl-label", Label)
@@ -126,37 +134,7 @@ class UchiApp(App):
         lbl = self.query_one("#rl-label", Label)
         bar.add_class("hidden")
         lbl.add_class("hidden")
-        
-    def trigger_dream_cycle(self) -> None:
-        import time
-        if self.router and time.time() - self.last_activity > 15.0 and self.pending_sequence is None and self.active_learning_word is None:
-            input_box = self.query_one(Input)
-            if not input_box.value.strip() and not input_box.disabled:
-                self.run_dream_task()
 
-    @work(thread=True)
-    def run_dream_task(self) -> None:
-        try:
-            pred = self.router.predict_future(["<|user|>"], steps=20, temperature=0.8, creativity=0.3)
-            if pred and len(pred) > 3:
-                score = self.router.predictor.score(pred)
-                
-                if score < 8.0:
-                    # Coherent Dream: Reinforce it
-                    self.router.stream(pred)
-                    self.call_from_thread(self._log_dream)
-                elif score > 12.0:
-                    # Fever Dream (Gibberish): Prune the path
-                    self.router.predictor.unlearn(pred)
-                    self.call_from_thread(self._log_fever_dream)
-        except Exception:
-            pass
-            
-    def _log_dream(self) -> None:
-        self.query_one(RichLog).write("[blue][dim]... (offline RL dreaming: reinforced coherent path) ...[/dim][/blue]")
-        
-    def _log_fever_dream(self) -> None:
-        self.query_one(RichLog).write("[magenta][dim]... (offline RL dreaming: pruned fever dream) ...[/dim][/magenta]")
         
     def action_save(self) -> None:
         if self.router:
@@ -168,6 +146,8 @@ class UchiApp(App):
         if self.router:
             from uchi.cli import save_brain
             save_brain(self.router, self.brain_path)
+        if hasattr(self, 'rl_process') and self.rl_process:
+            self.rl_process.terminate()
         self.exit()
 
     async def on_input_submitted(self, message: Input.Submitted) -> None:
@@ -203,6 +183,19 @@ class UchiApp(App):
             self.action_save()
             return
 
+        if self.active_teaching_query is not None:
+            ans_tokens = cmd.split()
+            # Reinforce the graph with the answer!
+            full_sequence = ["<|user|>"] + self.active_teaching_query.split() + ["<|assistant|>"] + ans_tokens + ["<|end|>"]
+            self.router.stream(full_sequence)
+            log.write(f"[green][+] Active Teaching: Reinforced response for '{self.active_teaching_query}'[/green]")
+            self.active_teaching_query = None
+            
+            input_box.disabled = False
+            input_box.placeholder = "Type your message..."
+            input_box.focus()
+            return
+            
         if self.active_learning_word is not None:
             ans = cmd
             word = self.active_learning_word
@@ -215,31 +208,7 @@ class UchiApp(App):
             self.process_command(self.active_learning_cmd)
             self.active_learning_cmd = None
             return
-            
-        # Continuous Sentiment Reward Classifier (Option 2)
-        positive_cues = {"yes", "correct", "good", "great", "exactly", "right", "awesome", "perfect", "thanks", "thank"}
-        negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
-        cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
-        
-        score = 0.0
-        if cmd_words.intersection(positive_cues):
-            score += 1.0
-        if cmd_words.intersection(negative_cues):
-            score -= 1.0
-            
-        if self.pending_sequence:
-            if score < 0:
-                log.write("[red][Synaptic Pruning] Eradicating hallucination from graph...[/red]")
-                self.router.predictor.unlearn(self.pending_sequence)
-                self.pending_sequence = None
-            elif score > 0:
-                log.write("[green][Positive Momentum] Reinforcing sequence credibility![/green]")
-                self.router.stream(self.pending_sequence)
-                self.router.stream(self.pending_sequence) # double reinforcement
-                self.pending_sequence = None
-            else:
-                self.router.stream(self.pending_sequence)
-                self.pending_sequence = None
+
 
         input_box.disabled = True
         input_box.placeholder = "ODUSP is predicting..."
@@ -247,53 +216,16 @@ class UchiApp(App):
 
     @work(thread=True)
     def process_command(self, cmd: str) -> None:
-        from uchi.omni_tokenizer import UnknownConcept
-        
-        # Intercept novel words for Active Learning before querying
-        query_tokens = cmd.split()
-        concepts = self.router.tokenizer.tokenize(query_tokens, is_inference=True)
-        unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
-        
-        if unknowns:
-            word = unknowns[0]
-            self.active_learning_cmd = cmd
-            self.call_from_thread(self.prompt_active_learning, word)
-            return
-
-        retrieved_context = self.router.query(query_tokens)
-        
-        formatted_input = f"<|user|> {cmd}"
-        tokens = formatted_input.split()
-        
-        injected_context = False
-        if retrieved_context != "[Unknown Context]":
-            tokens.append("<|assistant|>")
-            tokens.append(retrieved_context)
-            injected_context = True
-        else:
-            tokens.append("<|assistant|>")
-            
-        pred = self.router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
-        
-        reply = []
-        recording = True 
-        
-        if injected_context:
-            reply.append(retrieved_context)
-            
-        # The pred list ONLY contains generated tokens, NOT the seed.
-        for p in pred:
-            if recording and p in ("<|user|>", "<|assistant|>"):
-                break
-            if recording:
-                reply.append(p)
+        def on_rl_event(event_type, msg):
+            if event_type == "reinforce":
+                self.call_from_thread(self.query_one(RichLog).write, f"[green]{msg}[/green]")
+            elif event_type == "prune":
+                self.call_from_thread(self.query_one(RichLog).write, f"[red]{msg}[/red]")
+            elif event_type == "hallucination":
+                self.call_from_thread(self.query_one(RichLog).write, f"[yellow]{msg}[/yellow]")
                 
-        if reply:
-            canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
-            self.pending_sequence = canonical
-            
-        reply_text = ' '.join(reply)
-        self.call_from_thread(self.display_reply, reply_text)
+        reply_text = self.router.chat(cmd, callback=on_rl_event)
+        self.call_from_thread(self.display_reply, cmd, reply_text)
 
     def prompt_active_learning(self, word: str) -> None:
         self.active_learning_word = word
@@ -304,10 +236,18 @@ class UchiApp(App):
         input_box.disabled = False
         input_box.focus()
 
-    def display_reply(self, reply_text: str) -> None:
+    def display_reply(self, cmd: str, reply_text: str) -> None:
+        if reply_text == "I do not have enough context to accurately predict a response to that yet. How should I respond?":
+            self.active_teaching_query = cmd
+            
         log = self.query_one(RichLog)
         log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] {reply_text}")
         input_box = self.query_one(Input)
-        input_box.placeholder = "Type your message..."
+        
+        if self.active_teaching_query is not None:
+            input_box.placeholder = f"uchi (teaching response to '{cmd}')> "
+        else:
+            input_box.placeholder = "Type your message..."
+            
         input_box.disabled = False
         input_box.focus()

@@ -70,7 +70,7 @@ def accuracy_on_stream(predictor, tokens):
 def get_alice_text(n=5000):
     """Get Alice in Wonderland text, falling back to synthetic if unavailable."""
     try:
-        from datasets import load_gutenberg_text
+        from uchi_datasets import load_gutenberg_text
         text = load_gutenberg_text(n_chars=n)
         if text and len(text) >= n // 2:
             return text[:n]
