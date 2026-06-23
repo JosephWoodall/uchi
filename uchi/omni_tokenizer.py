@@ -127,6 +127,11 @@ class OmniTokenizer:
                 
             concept = data.lower().strip(",.")
             
+            # Native Ontological Mapping (Fastest, O(1))
+            from .ontology import ONTOLOGY
+            if concept in ONTOLOGY:
+                concept = ONTOLOGY[concept]
+                
             mapped = False
             # WordNet Semantic Mapping
             if self.use_wordnet and self._wn:
