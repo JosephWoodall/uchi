@@ -45,7 +45,7 @@ uchi = "uchi.cli:main"
 
 [project.optional-dependencies]
 test    = ["pytest", "pytest-cov"]
-dev     = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "mkdocs-material"]
+dev     = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "mkdocs-material", "nltk"]
 sklearn = ["scikit-learn>=1.0"]
 numpy   = ["numpy>=1.20"]
 pandas  = ["pandas>=1.3"]
