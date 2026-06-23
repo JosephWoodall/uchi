@@ -15,6 +15,7 @@ from .grpo import AgenticBaseline
 from .procedural_memory import ProceduralMemory
 from .code_engine import CodeEngine
 from .specialist_pool import SpecialistPool
+from .skill_registry import SkillRegistry
 import torch
 
 class OmniRouter:
@@ -50,6 +51,8 @@ class OmniRouter:
         self.code_engine = CodeEngine(self.predictor, n_workers=4)
         # Phase 2: MoE SpecialistPool (lazy-loads specialist brains on first use)
         self.specialist_pool = SpecialistPool(self)
+        # Skill toolkit: markdown-defined /commands
+        self.skills = SkillRegistry(self)
 
         self._bootstrap_persona(progress_callback)
         self._bootstrap_knowledge(progress_callback)
@@ -70,6 +73,8 @@ class OmniRouter:
             self.code_engine = CodeEngine(self.predictor, n_workers=4)
         if not hasattr(self, 'specialist_pool'):
             self.specialist_pool = SpecialistPool(self)
+        if not hasattr(self, 'skills'):
+            self.skills = SkillRegistry(self)
 
     def _bootstrap_persona(self, progress_callback=None):
         """
@@ -172,6 +177,27 @@ class OmniRouter:
             pass
 
         self._knowledge_bootstrapped = True
+
+    def start_background_jobs(self):
+        """
+        Spawn persistent background processes. Safe to call multiple times —
+        guards prevent double-spawn. Called by both TUI and API on startup.
+        """
+        if getattr(self, '_background_started', False):
+            return
+        self._background_started = True
+
+        import sys, subprocess, os
+        scripts_dir = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), '..', 'scripts')
+        )
+        rl_script = os.path.join(scripts_dir, 'background_rl.py')
+        if os.path.exists(rl_script):
+            subprocess.Popen(
+                [sys.executable, rl_script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
     def _train_ssm(self, sequence: list, reward: float):
         """Train SSM value head + dynamics on one sequence/reward pair."""
