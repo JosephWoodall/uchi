@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, RichLog, ProgressBar
+from textual.widgets import Header, Footer, Input, RichLog, ProgressBar, Label
 from textual import work
 
 class UchiApp(App):
@@ -15,6 +15,11 @@ class UchiApp(App):
     }
     .hidden {
         display: none;
+    }
+    #rl-label {
+        color: cyan;
+        text-align: center;
+        padding-top: 1;
     }
     """
     
@@ -37,6 +42,7 @@ class UchiApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield RichLog(id="chat-log", markup=True)
+        yield Label("Bootstrapping RL Persona...", id="rl-label", classes="hidden")
         yield ProgressBar(id="rl-progress", show_eta=False, classes="hidden")
         yield Input(placeholder="Initializing ODUSP...", id="input-box", disabled=True)
         yield Footer()
@@ -108,14 +114,18 @@ class UchiApp(App):
         
     def _update_progress(self, current: int, total: int) -> None:
         bar = self.query_one("#rl-progress", ProgressBar)
+        lbl = self.query_one("#rl-label", Label)
         if bar.has_class("hidden"):
             bar.remove_class("hidden")
+            lbl.remove_class("hidden")
             bar.total = total
         bar.progress = current
 
     def _hide_progress(self) -> None:
         bar = self.query_one("#rl-progress", ProgressBar)
+        lbl = self.query_one("#rl-label", Label)
         bar.add_class("hidden")
+        lbl.add_class("hidden")
         
     def trigger_dream_cycle(self) -> None:
         import time
