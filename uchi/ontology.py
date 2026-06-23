@@ -10,123 +10,117 @@ needing a massive pre-trained brain or an LLM parser.
 """
 
 ONTOLOGY = {
-    # Greetings
-    "hi": "hello",
-    "hey": "hello",
-    "greetings": "hello",
-    "sup": "hello",
-    "yo": "hello",
-    "howdy": "hello",
-    "hiya": "hello",
-    "morning": "hello",
-    "afternoon": "hello",
-    "evening": "hello",
-    "salutations": "hello",
+    # ── GREETINGS ──
+    "hi": "hello", "hey": "hello", "greetings": "hello", "sup": "hello", "yo": "hello",
+    "howdy": "hello", "hiya": "hello", "morning": "hello", "afternoon": "hello", 
+    "evening": "hello", "salutations": "hello", "ello": "hello", "heya": "hello",
+    "aloha": "hello", "hola": "hello", "bonjour": "hello", "hallo": "hello",
+    "welcome": "hello",
+
+    # ── GRATITUDE ──
+    "thx": "thanks", "ty": "thanks", "appreciate": "thanks", "grateful": "thanks",
+    "cheers": "thanks", "thankyou": "thanks", "thnx": "thanks", "tysm": "thanks",
+    "gracias": "thanks", "merci": "thanks", "danke": "thanks", "arigato": "thanks",
     
-    # Gratitude
-    "thx": "thanks",
-    "ty": "thanks",
-    "appreciate": "thanks",
-    "grateful": "thanks",
-    "cheers": "thanks",
-    "thankyou": "thanks",
-    "thnx": "thanks",
+    # ── FAREWELLS ──
+    "bye": "goodbye", "cya": "goodbye", "peace": "goodbye", "farewell": "goodbye",
+    "later": "goodbye", "adios": "goodbye", "night": "goodbye", "goodnight": "goodbye",
+    "ciao": "goodbye", "sayonara": "goodbye", "ttyl": "goodbye", "brb": "goodbye",
+    "leaving": "goodbye", "departing": "goodbye", "quit": "goodbye", "exit": "goodbye",
     
-    # Farewells
-    "bye": "goodbye",
-    "cya": "goodbye",
-    "peace": "goodbye",
-    "farewell": "goodbye",
-    "later": "goodbye",
-    "adios": "goodbye",
-    "night": "goodbye",
-    "goodnight": "goodbye",
+    # ── ACTIONS / VERBS ──
+    # Help
+    "assist": "help", "aid": "help", "support": "help", "guide": "help", "rescue": "help",
+    "save": "help", "serve": "help", "facilitate": "help", "accommodate": "help",
     
-    # Actions & Verbs
-    "assist": "help",
-    "aid": "help",
-    "support": "help",
-    "guide": "help",
+    # Tell/Explain
+    "explain": "tell", "describe": "tell", "elaborate": "tell", "clarify": "tell",
+    "show": "tell", "instruct": "tell", "demonstrate": "tell",
+    "illustrate": "tell", "reveal": "tell", "inform": "tell", "notify": "tell",
+    "communicate": "tell", "state": "tell", "express": "tell", "say": "tell",
+    "speak": "tell", "articulate": "tell", "outline": "tell", "summarize": "tell",
     
-    "explain": "tell",
-    "describe": "tell",
-    "elaborate": "tell",
-    "clarify": "tell",
-    "show": "tell",
+    # What/Define (Inquiries)
+    "define": "what", "meaning": "what", "who": "what", "when": "what", 
+    "which": "what", "where": "what", "why": "what", "whose": "what",
     
-    "define": "what",
-    "meaning": "what",
+    # Learn/Understand
+    "study": "learn", "understand": "learn", "grasp": "learn", "comprehend": "learn",
+    "master": "learn", "absorb": "learn", "acquire": "learn", "discover": "learn",
+    "realize": "learn", "recognize": "learn",
     
-    "teach": "learn",
-    "study": "learn",
-    "understand": "learn",
-    "grasp": "learn",
+    # Do/Purpose
+    "purpose": "do", "capabilities": "do", "function": "do", "features": "do",
+    "abilities": "do", "perform": "do", "execute": "do", "achieve": "do", 
+    "accomplish": "do", "act": "do", "operate": "do", "tasks": "do", "skills": "do",
     
-    # Identity & Creator
-    "purpose": "do",
-    "capabilities": "do",
-    "function": "do",
-    "features": "do",
-    "abilities": "do",
+    # Create
+    "make": "created", "build": "created", "built": "created", "produce": "created",
+    "generate": "created", "construct": "created", "fabricate": "created",
+    "design": "created", "invent": "created", "develop": "created", "formulate": "created",
+    "originate": "created", "establish": "created",
     
-    "make": "created",
-    "build": "created",
-    "built": "created",
-    "creator": "joseph",
-    "maker": "joseph",
-    "author": "joseph",
-    "developer": "joseph",
+    # ── IDENTITY / ENTITIES ──
+    # Joseph Woodall
+    "creator": "joseph", "maker": "joseph", "author": "joseph", "developer": "joseph",
+    "programmer": "joseph", "engineer": "joseph", "architect": "joseph",
+    "founder": "joseph", "inventor": "joseph", "father": "joseph",
     
-    "bot": "uchi",
-    "ai": "uchi",
-    "assistant": "uchi",
-    "system": "uchi",
-    "program": "uchi",
+    # Uchi
+    "bot": "uchi", "ai": "uchi", "assistant": "uchi", "system": "uchi", 
+    "program": "uchi", "software": "uchi", "application": "uchi", "app": "uchi",
+    "tool": "uchi", "machine": "uchi", "robot": "uchi", "computer": "uchi",
+    "algorithm": "uchi",
     
-    # Conversational Fillers & Pronouns
-    "ya": "you",
-    "u": "you",
-    "ur": "your",
-    "yours": "your",
+    # Intelligence
+    "smart": "intelligence", "clever": "intelligence", "intelligent": "intelligence",
+    "brilliant": "intelligence", "genius": "intelligence", "conscious": "intelligence",
+    "sentient": "intelligence", "aware": "intelligence", "thinking": "intelligence",
+    "cognition": "intelligence", "wisdom": "intelligence", "knowledge": "intelligence",
     
-    "im": "i",
-    "id": "i",
-    "ive": "i",
+    # Memory
+    "brain": "memory", "mind": "memory", "storage": "memory", "database": "memory",
+    "recall": "memory", "remember": "memory", "retention": "memory", "cache": "memory",
     
-    "yeah": "yes",
-    "yep": "yes",
-    "yup": "yes",
-    "sure": "yes",
-    "ok": "yes",
-    "okay": "yes",
-    "alright": "yes",
-    "definitely": "yes",
-    "absolutely": "yes",
-    "y": "yes",
+    # Trie / Geometric
+    "model": "trie", "network": "trie", "structure": "trie", "graph": "trie",
+    "tree": "trie", "geometry": "geometric", "math": "geometric", "mathematics": "geometric",
+    "mathematical": "geometric", "calculus": "geometric", "algebra": "geometric",
+    "topology": "geometric",
     
-    "nah": "no",
-    "nope": "no",
-    "never": "no",
-    "n": "no",
+    # LLMs
+    "llm": "llms", "chatgpt": "llms", "gpt": "llms", "claude": "llms", 
+    "gemini": "llms", "llama": "llms", "transformers": "llms", "neural": "llms",
+    "nn": "llms", "deeplearning": "llms",
     
-    # Technical Concepts
-    "smart": "intelligence",
-    "clever": "intelligence",
-    "intelligent": "intelligence",
+    # Sequence/Prediction
+    "patterns": "sequence", "series": "sequence", "order": "sequence", 
+    "chain": "sequence", "progression": "sequence", "succession": "sequence",
+    "predict": "prediction", "forecast": "prediction", "guess": "prediction",
+    "anticipate": "prediction", "foresee": "prediction", "project": "prediction",
+    "estimate": "prediction",
     
-    "brain": "memory",
-    "mind": "memory",
-    "storage": "memory",
+    # ── CONVERSATIONAL FILLERS & PRONOUNS ──
+    # You
+    "ya": "you", "u": "you", "thou": "you", "yall": "you", "ye": "you",
+    "ur": "your", "yours": "your", "thy": "your", "thine": "your",
     
-    "model": "trie",
-    "network": "trie",
-    "algorithm": "trie",
-    "structure": "trie",
-    "graph": "trie",
+    # I
+    "im": "i", "id": "i", "ive": "i", "me": "i", "my": "i", "mine": "i", "myself": "i",
     
-    "llm": "llms",
-    "chatgpt": "llms",
-    "gpt": "llms",
-    "claude": "llms",
-    "gemini": "llms",
+    # Yes
+    "yeah": "yes", "yep": "yes", "yup": "yes", "sure": "yes", "ok": "yes", 
+    "okay": "yes", "alright": "yes", "definitely": "yes", "absolutely": "yes", 
+    "y": "yes", "certainly": "yes", "indeed": "yes", "affirmative": "yes",
+    "agreed": "yes", "roger": "yes", "cool": "yes", "fine": "yes", "gladly": "yes",
+    "course": "yes", "always": "yes",
+    
+    # No
+    "nah": "no", "nope": "no", "never": "no", "n": "no", "negative": "no",
+    "nay": "no", "false": "no", "incorrect": "no", "wrong": "no", "disagree": "no",
+    "deny": "no", "refuse": "no", "reject": "no",
+    
+    # Unknowns
+    "idk": "what", "dunno": "what", "maybe": "what", "perhaps": "what", 
+    "possibly": "what", "unsure": "what", "confused": "what", "lost": "what",
 }
