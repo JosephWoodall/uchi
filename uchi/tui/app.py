@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, RichLog
+from textual.widgets import Header, Footer, Input, RichLog, ProgressBar
 from textual import work
 
 class UchiApp(App):
@@ -12,6 +12,9 @@ class UchiApp(App):
     #input-box {
         dock: bottom;
         margin: 1 0;
+    }
+    .hidden {
+        display: none;
     }
     """
     
@@ -31,6 +34,7 @@ class UchiApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield RichLog(id="chat-log", markup=True)
+        yield ProgressBar(id="rl-progress", show_eta=False, classes="hidden")
         yield Input(placeholder="Initializing ODUSP...", id="input-box", disabled=True)
         yield Footer()
 
@@ -63,7 +67,13 @@ class UchiApp(App):
             router = load_brain(self.brain_path)
             if router is None:
                 self.call_from_thread(self.write_log, "[-] Failed to load brain, creating new instance...")
-                router = OmniRouter(use_bpe=False, memory_window=5)
+                
+                def progress_cb(current, total):
+                    self.call_from_thread(self._update_progress, current, total)
+                    
+                router = OmniRouter(use_bpe=False, memory_window=5, progress_callback=progress_cb)
+                self.call_from_thread(self._hide_progress)
+                
                 compressor = NodeCompressor()
                 self.call_from_thread(self.write_log, "[*] Compressing hyper-reinforced persona memory...")
                 pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
@@ -87,6 +97,17 @@ class UchiApp(App):
         input_box.disabled = False
         input_box.placeholder = "Type your message..."
         input_box.focus()
+        
+    def _update_progress(self, current: int, total: int) -> None:
+        bar = self.query_one("#rl-progress", ProgressBar)
+        if bar.has_class("hidden"):
+            bar.remove_class("hidden")
+            bar.total = total
+        bar.progress = current
+
+    def _hide_progress(self) -> None:
+        bar = self.query_one("#rl-progress", ProgressBar)
+        bar.add_class("hidden")
         
     def action_save(self) -> None:
         if self.router:

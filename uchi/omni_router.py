@@ -19,7 +19,7 @@ class OmniRouter:
     compresses them infinitely, stores them in geometric buffers, 
     and predicts parallel futures.
     """
-    def __init__(self, use_bpe: bool = False, memory_window: int = 5, context_length: int = 10):
+    def __init__(self, use_bpe: bool = False, memory_window: int = 5, context_length: int = 10, progress_callback=None):
         self.use_bpe = use_bpe
         # Phase 5 (Frontend): Omni-Modal Abstraction
         self.tokenizer = OmniTokenizer(use_wordnet=False)
@@ -30,9 +30,9 @@ class OmniRouter:
         # Phase 3: Plural Sequence Generation
         self.predictor = SequenceGenerator(context_length=context_length) 
         
-        self._bootstrap_persona()
+        self._bootstrap_persona(progress_callback)
         
-    def _bootstrap_persona(self):
+    def _bootstrap_persona(self, progress_callback=None):
         """
         Natively instruction-tunes the geometric trie so ODUSP understands conversational interactions 
         without external RAG or hardcoded heuristics.
@@ -60,10 +60,15 @@ class OmniRouter:
             ]
         
         # Simulate Massive Positive Reinforcement RL during cold start
+        total_steps = 25 * len(turns)
+        current_step = 0
         for _ in range(25):
             for turn in turns:
                 tokens = turn.split()
                 self.stream(tokens)
+                current_step += 1
+                if progress_callback:
+                    progress_callback(current_step, total_steps)
         
     def stream(self, concepts: list):
         """
