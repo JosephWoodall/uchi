@@ -127,17 +127,20 @@ class OmniTokenizer:
                 
             concept = data.lower().strip(",.")
             
+            mapped = False
             # WordNet Semantic Mapping
             if self.use_wordnet and self._wn:
                 synsets = self._wn.synsets(concept)
                 if synsets:
                     concept = synsets[0].name()
-                else:
-                    # Levenshtein Subword Fallback for OOV slang/typos
-                    if self._known_concepts:
-                        closest = difflib.get_close_matches(concept, self._known_concepts, n=1, cutoff=0.8)
-                        if closest:
-                            concept = closest[0]
+                    mapped = True
+                    
+            if not mapped:
+                # Levenshtein Subword Fallback for OOV slang/typos
+                if self._known_concepts:
+                    closest = difflib.get_close_matches(concept, self._known_concepts, n=1, cutoff=0.8)
+                    if closest:
+                        concept = closest[0]
             
             self._cache[data] = concept
             self._known_concepts.add(concept)
