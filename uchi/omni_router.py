@@ -13,6 +13,8 @@ from .memory import AssociativeMemory
 from .generative import SequenceGenerator
 from .grpo import AgenticBaseline
 from .procedural_memory import ProceduralMemory
+from .code_engine import CodeEngine
+from .specialist_pool import SpecialistPool
 import torch
 
 class OmniRouter:
@@ -44,6 +46,11 @@ class OmniRouter:
         self.ssm_optimizer = torch.optim.Adam(_ssm.parameters(), lr=1e-3)
         self._knowledge_bootstrapped = False
 
+        # Phase 1+3: Parallel MCTS code generation with REPL oracle
+        self.code_engine = CodeEngine(self.predictor, n_workers=4)
+        # Phase 2: MoE SpecialistPool (lazy-loads specialist brains on first use)
+        self.specialist_pool = SpecialistPool(self)
+
         self._bootstrap_persona(progress_callback)
         self._bootstrap_knowledge(progress_callback)
 
@@ -54,11 +61,15 @@ class OmniRouter:
             self.procedural = ProceduralMemory()
         if not hasattr(self, 'baseline'):
             self.baseline = AgenticBaseline()
-        if not hasattr(self, 'ssm_optimizer'):
-            from uchi.neuro_symbolic import get_ssm
-            self.ssm_optimizer = torch.optim.Adam(get_ssm().parameters(), lr=1e-3)
+        # Always re-bind optimizer to the current SSM instance (architecture may have changed)
+        from uchi.neuro_symbolic import get_ssm
+        self.ssm_optimizer = torch.optim.Adam(get_ssm().parameters(), lr=1e-3)
         if not hasattr(self, '_knowledge_bootstrapped'):
-            self._knowledge_bootstrapped = True  # don't re-bootstrap existing brains
+            self._knowledge_bootstrapped = True
+        if not hasattr(self, 'code_engine'):
+            self.code_engine = CodeEngine(self.predictor, n_workers=4)
+        if not hasattr(self, 'specialist_pool'):
+            self.specialist_pool = SpecialistPool(self)
 
     def _bootstrap_persona(self, progress_callback=None):
         """
@@ -145,6 +156,29 @@ class OmniRouter:
             pass
 
         self._knowledge_bootstrapped = True
+
+    def _train_ssm(self, sequence: list, reward: float):
+        """Train SSM value head + dynamics on one sequence/reward pair."""
+        from uchi.neuro_symbolic import get_ssm
+        ssm = get_ssm()
+        ssm.train()
+        self.ssm_optimizer.zero_grad()
+        v_loss = ssm.update_value(sequence, reward=reward)
+        d_loss = ssm.train_dynamics(sequence)
+        (v_loss + d_loss).backward()
+        self.ssm_optimizer.step()
+
+    def _compute_response_reward(self, query_tokens: list, reply_tokens: list) -> float:
+        """Coherence reward: bonus for appropriately-sized, non-repetitive responses."""
+        n = len(reply_tokens)
+        reward = 0.0
+        if 5 <= n <= 50:
+            reward += 0.1
+        if n > 0:
+            overlap = sum(1 for t in reply_tokens if t in set(query_tokens))
+            if overlap / n > 0.35:
+                reward -= 0.15
+        return reward
 
     def stream(self, concepts: list):
         """
@@ -256,75 +290,59 @@ class OmniRouter:
 
     def chat(self, message: str, callback=None) -> str:
         """
-        High-level Conversational API that integrates RL, Sentiment, and Pruning.
+        High-level Conversational API with GRPO RL, MoE routing, and REPL-oracle code.
         """
         from uchi.omni_tokenizer import UnknownConcept
-        
-        # 1. Tamed Active Learning & Intent Extraction
+
+        # 1. Intent detection + procedural context prepend
         query_tokens = message.split()
-        
-        # Root 1 Fix: Procedural intent routing
+        intent_key = self.procedural.get_intent_key(message)
         procedure = self.procedural.retrieve(message)
         if procedure:
             query_tokens = procedure.split() + ["|"] + query_tokens
-            
+
         concepts = self.tokenizer.tokenize(query_tokens, is_inference=True)
-        unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
-        
-        # Only interrupt if the user explicitly asks to learn, or if we want strict active learning.
-        # For a seamless experience, we just let UnknownConcepts pass through as their raw strings
-        # unless they ask "define X" or something similar. For now, we'll gracefully bypass.
-        
-        # 2. Continuous Sentiment & Pruning
+
+        # 2. Sentiment-based RL on previous turn
         positive_words = {"good", "great", "awesome", "correct", "yes", "amazing", "thanks", "thank"}
         negative_words = {"bad", "wrong", "incorrect", "no", "stop", "terrible", "awful"}
-        
-        msg_lower = message.lower()
-        score_val = 0
-        for w in query_tokens:
-            w_clean = w.lower().strip(".,!?")
-            if w_clean in positive_words: score_val += 1
-            if w_clean in negative_words: score_val -= 1
-            
+        score_val = sum(
+            (1 if w.lower().strip(".,!?") in positive_words else
+             -1 if w.lower().strip(".,!?") in negative_words else 0)
+            for w in message.split()
+        )
+
         if hasattr(self, 'last_sequence') and self.last_sequence:
             reward = 0.0
             if score_val > 0:
-                # Positive Reinforcement
                 if callback: callback("reinforce", "Positive Momentum: Reinforcing previous sequence!")
                 reward = 1.0
             elif score_val < 0:
-                # Synaptic Pruning
                 if callback: callback("prune", "Synaptic Pruning: Eradicating previous hallucination!")
                 self.predictor.unlearn(self.last_sequence)
                 reward = -1.0
-                
-            # Root 2 Fix: GRPO SSM Value Head Training
-            advantage = self.baseline.advantage(reward)
-            self.baseline.update(reward)
 
-            from uchi.neuro_symbolic import get_ssm
-            ssm = get_ssm()
-            ssm.train()
-            self.ssm_optimizer.zero_grad()
-            v_loss = ssm.update_value(self.last_sequence, reward=advantage)
-            d_loss = ssm.train_dynamics(self.last_sequence)
-            (v_loss + d_loss).backward()
-            self.ssm_optimizer.step()
+            if reward != 0.0:
+                advantage = self.baseline.advantage(reward)
+                self.baseline.update(reward)
+                self._train_ssm(self.last_sequence, advantage)
 
-        # 3. Query Memory
+        # 3. Phase 1+2: Route CODE intent through CodeEngine + SpecialistPool
+        if intent_key == "code":
+            return self._handle_code_intent(message, query_tokens, concepts, callback)
+
+        # 4. Conversation path: memory retrieval + MCTS prediction
         retrieved_context_str = self.query(concepts)
-        
         tokens = ["<|user|>"] + concepts + ["<|assistant|>"]
-        # Root 3 Fix: Stream moved to the end of interaction loop
-        
-        # 4. Predict
+
         bias = retrieved_context_str if retrieved_context_str != "[Unknown Context]" else None
         prompt_entropy = self.predictor.score(tokens)
-        pred = self.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0, bias_context=bias)
-        
-        # 5. Hallucination Check (Seamless UX)
-        # Gate strategy: use entropy until GRPO has enough samples (baseline.mean != 0),
-        # then trust the trained value head. This prevents cold-start false rejections.
+
+        # Route to specialist if available (Phase 2)
+        specialist = self.specialist_pool.route(intent_key or "convo")
+        pred = specialist.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0, bias_context=bias)
+
+        # 5. Hallucination gate
         if pred:
             ssm_trained = abs(self.baseline.mean) > 0.01 or self.baseline.var < 0.95
             if ssm_trained:
@@ -343,84 +361,74 @@ class OmniRouter:
                 self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + fallback.split()
                 return fallback
 
-        # Store walk data for debugging
         self.last_walk_data = {
             "prediction_depth": self.predictor._pred._last_prediction_depth,
             "contributions": self.predictor._pred._last_contributions,
-            "max_sim": self.predictor._pred._last_max_sim
+            "max_sim": self.predictor._pred._last_max_sim,
         }
-        
-        # 6. Topologically walk the graph
-        print(f"DEBUG PRED: {pred}")
+
+        # 6. Extract reply tokens
         reply = []
-        recording = True 
-            
         for p in pred:
-            if recording and p in ("<|user|>", "<|assistant|>", "<|end|>"):
+            if p in ("<|user|>", "<|assistant|>", "<|end|>"):
                 break
-            if recording:
-                reply.append(p)
-                
+            reply.append(p)
+
         if reply:
             self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + reply
         else:
             self.last_sequence = None
-            
-        # Translate WordNet concepts back to readable strings
+
         predicted = self.tokenizer.detokenize(reply)
-        reply_str = ' '.join([str(p) for p in predicted])
-        
+        reply_str = " ".join(str(p) for p in predicted)
+
         if not reply_str.strip():
             if callback: callback("hallucination", "Empty prediction path.")
-            fallback = "I do not know the answer to that, even after searching the web."
             self.last_sequence = None
-            return fallback
-        
-        # RL Autonomous Code Sandbox
-        if "```python" in reply_str and "```" in reply_str.split("```python")[1]:
-            code_block = reply_str.split("```python")[1].split("```")[0].strip()
-            # Extremely simple sandbox (do not use in production without real sandboxing)
-            import subprocess
-            import tempfile
-            import os
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(code_block)
-                temp_path = f.name
-                
-            try:
-                # Compile to check syntax
-                result = subprocess.run(["python", "-m", "py_compile", temp_path], capture_output=True, text=True)
-                code_reward = 0.0
-                if result.returncode != 0:
-                    if callback: callback("prune", "SyntaxError in predicted code! Pruning the hallucination...")
-                    if self.last_sequence:
-                        self.predictor.unlearn(self.last_sequence)
-                    reply_str += "\n\n[RL ENGINE: I detected a SyntaxError in my prediction and autonomously pruned it.]"
-                    code_reward = -1.0
-                else:
-                    if callback: callback("reinforce", "Code compiled successfully! Double-reinforcing syntax path.")
-                    code_reward = 1.0
-                    
-                if self.last_sequence:
-                    advantage = self.baseline.advantage(code_reward)
-                    self.baseline.update(code_reward)
-                    from uchi.neuro_symbolic import get_ssm
-                    ssm = get_ssm()
-                    ssm.train()
-                    self.ssm_optimizer.zero_grad()
-                    v_loss = ssm.update_value(self.last_sequence, reward=advantage)
-                    d_loss = ssm.train_dynamics(self.last_sequence)
-                    (v_loss + d_loss).backward()
-                    self.ssm_optimizer.step()
-                    
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                    
-        # Root 3 Fix: Stream the full interaction sequence ONLY after generation is complete
+            return "I do not know the answer to that, even after searching the web."
+
+        # 7. Coherence reward: length + repetition signal
+        if self.last_sequence:
+            coh_reward = self._compute_response_reward(query_tokens, reply)
+            if coh_reward != 0.0:
+                self.baseline.update(coh_reward)
+                self._train_ssm(self.last_sequence, coh_reward)
+
+        # 8. Stream full interaction AFTER generation (Root 3 fix)
         if self.last_sequence:
             self.stream(self.last_sequence)
-            
+
         return reply_str
+
+    def _handle_code_intent(self, message: str, query_tokens: list, concepts: list, callback) -> str:
+        """
+        Phase 1+2: Parallel MCTS code generation with REPL oracle.
+        Uses specialist brain predictor if available.
+        """
+        # Use specialist predictor when its brain is bootstrapped
+        if self.specialist_pool.has_specialist("code"):
+            active_predictor = self.specialist_pool.get_predictor("code")
+            engine = CodeEngine(active_predictor, n_workers=4)
+        else:
+            engine = self.code_engine
+
+        seed_tokens = ["<|user|>"] + concepts + ["<|assistant|>"]
+        code_str, reward, passed = engine.generate_code(seed_tokens, max_tokens=80)
+
+        if passed:
+            if callback: callback("reinforce", "REPL oracle: code compiled successfully!")
+        else:
+            if callback: callback("prune", "REPL oracle: no candidate compiled — showing best attempt.")
+
+        # GRPO: train SSM on code result
+        self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + code_str.split()
+        advantage = self.baseline.advantage(reward)
+        self.baseline.update(reward)
+        self._train_ssm(self.last_sequence, advantage)
+
+        if not passed and reward < 0:
+            self.predictor.unlearn(self.last_sequence)
+
+        self.stream(self.last_sequence)
+        return code_str
 

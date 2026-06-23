@@ -35,14 +35,23 @@ class ProceduralMemory:
 
     def retrieve(self, query: str) -> Optional[str]:
         q = query.lower()
-        # Direct key match
         for key, steps in self._store.items():
             if key in q:
                 return f"Procedure ({key}): " + " → ".join(steps)
-        # Synonym match
         for term, key in self._SYNONYMS.items():
             if term in q and key in self._store:
                 return f"Procedure ({key}): " + " → ".join(self._store[key])
+        return None
+
+    def get_intent_key(self, query: str) -> Optional[str]:
+        """Return the raw intent key for this query, without the formatted procedure."""
+        q = query.lower()
+        for key in self._store:
+            if key in q:
+                return key
+        for term, key in self._SYNONYMS.items():
+            if term in q and key in self._store:
+                return key
         return None
 
     def update(self, task_type: str, step: str):

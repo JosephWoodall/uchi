@@ -36,6 +36,8 @@ class UchiApp(App):
         self.active_learning_word = None
         self.active_learning_cmd = None
         self.active_teaching_query = None
+        # Phase 3: hole-filling state (cmd, code_with_holes, first_hole_desc)
+        self.active_hole_context = None
         import time
         self.last_activity = time.time()
         self.rl_process = None
@@ -183,6 +185,25 @@ class UchiApp(App):
             self.action_save()
             return
 
+        # Phase 3: hole-filling response
+        if self.active_hole_context is not None:
+            orig_cmd, code_with_holes, hole_desc = self.active_hole_context
+            from uchi.code_engine import CodeEngine
+            filled = CodeEngine.fill_hole(code_with_holes, hole_desc, cmd)
+            full_seq = (
+                ["<|user|>"] + orig_cmd.split()
+                + ["<|assistant|>"] + filled.split()
+                + ["<|end|>"]
+            )
+            self.router.stream(full_seq)
+            log.write(f"[green][+] Hole filled! Learned pattern for: {hole_desc}[/green]")
+            log.write(f"\n[cyan][bold]Updated:[/bold][/cyan] {filled}")
+            self.active_hole_context = None
+            input_box.disabled = False
+            input_box.placeholder = "Type your message..."
+            input_box.focus()
+            return
+
         if self.active_teaching_query is not None:
             ans_tokens = cmd.split()
             # Reinforce the graph with the answer!
@@ -190,7 +211,7 @@ class UchiApp(App):
             self.router.stream(full_sequence)
             log.write(f"[green][+] Active Teaching: Reinforced response for '{self.active_teaching_query}'[/green]")
             self.active_teaching_query = None
-            
+
             input_box.disabled = False
             input_box.placeholder = "Type your message..."
             input_box.focus()
@@ -239,15 +260,28 @@ class UchiApp(App):
     def display_reply(self, cmd: str, reply_text: str) -> None:
         if reply_text == "I do not have enough context to accurately predict a response to that yet. How should I respond?":
             self.active_teaching_query = cmd
-            
+
         log = self.query_one(RichLog)
         log.write(f"\n[cyan][bold]ODUSP (Reply):[/bold][/cyan] {reply_text}")
         input_box = self.query_one(Input)
-        
+
+        # Phase 3: detect holes and prompt user to fill the first one
+        from uchi.code_engine import CodeEngine
+        holes = CodeEngine.extract_holes(reply_text)
+        if holes:
+            first_hole = holes[0]
+            self.active_hole_context = (cmd, reply_text, first_hole)
+            log.write(f"\n[yellow][?] Hole detected — please provide the implementation:[/yellow]")
+            log.write(f"[yellow]    {first_hole}[/yellow]")
+            input_box.placeholder = f"Fill: {first_hole[:40]}"
+            input_box.disabled = False
+            input_box.focus()
+            return
+
         if self.active_teaching_query is not None:
             input_box.placeholder = f"uchi (teaching response to '{cmd}')> "
         else:
             input_box.placeholder = "Type your message..."
-            
+
         input_box.disabled = False
         input_box.focus()

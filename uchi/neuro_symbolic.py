@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os
+import logging
+
+_log = logging.getLogger(__name__)
 
 class TokenEmbedder(nn.Module):
     """
@@ -47,16 +50,30 @@ class DynamicsHead(nn.Module):
         return self.norm(self.net(torch.cat([state_vec, token_embed], dim=-1)))
 
 class ValueHead(nn.Module):
-    def __init__(self, d_model=64, hidden_dim=64):
+    """
+    3-layer value estimator with residual skip connection.
+    Small-init output layer keeps cold-start value near 0 (not randomly negative).
+    """
+    def __init__(self, d_model=64, hidden_dim=128):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d_model, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 1)
-        )
+        self.proj1 = nn.Linear(d_model, hidden_dim)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.proj2 = nn.Linear(hidden_dim, hidden_dim // 2)
+        self.norm2 = nn.LayerNorm(hidden_dim // 2)
+        self.out   = nn.Linear(hidden_dim // 2, 1)
+        # Direct skip: state → scalar (lets gradient flow from first step)
+        self.skip  = nn.Linear(d_model, 1, bias=False)
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.uniform_(self.out.weight, -0.01, 0.01)
+        nn.init.zeros_(self.out.bias)
+        nn.init.zeros_(self.skip.weight)
 
     def forward(self, state_vec):
-        return self.net(state_vec)
+        h = F.silu(self.norm1(self.proj1(state_vec)))
+        h = F.silu(self.norm2(self.proj2(h)))
+        return self.out(h) + self.skip(state_vec)
 
 class StateSpaceModel(nn.Module):
     """
@@ -101,7 +118,7 @@ class StateSpaceModel(nn.Module):
 
         embeds = self.embedder(sequence)  # (seq_len, d_model)
 
-        # Single O(n) GRU pass returns all hidden states — encoder.gru is (seq_len, d_model)
+        # Single O(n) GRU pass — all hidden states
         out, _ = self.encoder.gru(embeds.unsqueeze(0))
         true_states = out.squeeze(0)  # (seq_len, d_model)
 
@@ -114,14 +131,23 @@ class StateSpaceModel(nn.Module):
             tok_embed = embeds[i + 1].unsqueeze(0)
             s_next_pred = self.dynamics(s_t, tok_embed)
             s_next_true = true_states[i + 1].unsqueeze(0).detach()
-            d_loss = d_loss + nn.functional.mse_loss(s_next_pred, s_next_true)
+            d_loss = d_loss + F.mse_loss(s_next_pred, s_next_true)
 
-        # Value loss from final state
+        # Multi-timestep value loss: discounted reward propagated backward through sequence.
+        # Training on multiple timesteps gives the value head denser signal than
+        # a single final-state target — especially important on short sequences.
         v_loss = torch.tensor(0.0, device=embeds.device, requires_grad=True)
         if reward is not None:
-            v_pred = self.value(true_states[-1].unsqueeze(0)).squeeze(-1)
-            v_target = torch.tensor([reward], dtype=torch.float32, device=v_pred.device)
-            v_loss = nn.functional.mse_loss(v_pred, v_target)
+            gamma = 0.9
+            n_steps = min(8, n)
+            v_sum = torch.tensor(0.0, device=embeds.device, requires_grad=True)
+            for offset in range(n_steps):
+                idx = n - 1 - offset
+                discounted = float(reward) * (gamma ** offset)
+                v_pred = self.value(true_states[idx].unsqueeze(0)).squeeze(-1)
+                v_target = torch.tensor([discounted], dtype=torch.float32, device=v_pred.device)
+                v_sum = v_sum + F.mse_loss(v_pred, v_target)
+            v_loss = v_sum / n_steps
 
         return d_loss + v_loss
 
@@ -132,9 +158,16 @@ def get_ssm(device="cpu"):
     global _SSM
     if _SSM is None:
         _SSM = StateSpaceModel().to(device)
-        # Attempt to load weights if they exist
-        ckpt = "ssm_weights.pt"
-        if os.path.exists(ckpt):
-            _SSM.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
+        # strict=False: tolerate architecture changes between versions
+        for ckpt in ("ssm_dynamics.pt", "ssm_weights.pt"):
+            if os.path.exists(ckpt):
+                try:
+                    _SSM.load_state_dict(
+                        torch.load(ckpt, map_location=device, weights_only=True),
+                        strict=False,
+                    )
+                    break
+                except Exception as exc:
+                    _log.warning("SSM checkpoint load failed (%s): %s — fresh start", ckpt, exc)
     return _SSM
 
