@@ -184,52 +184,65 @@ def main():
             elif cmd.startswith("/save"):
                 save_brain(router, args.brain)
             else:
-                # 1. First Pass: Associative Graph Retrieval (RAG without Vector DBs)
-                query_tokens = cmd.split()
-                retrieved_context = router.query(query_tokens)
-                
-                # Natural Autocomplete: feed "<|user|> <input>" and let the trie
-                # predict through the <|assistant|> boundary on its own.
-                # This preserves bigram context instead of forcing a cold junction.
-                formatted_input = f"<|user|> {cmd}"
-                tokens = formatted_input.split()
-                
-                # If the graph retrieved a high-confidence match, inject it as the start
-                # of the assistant's reply to guide the deterministic prediction.
-                injected_context = False
-                if retrieved_context != "[Unknown Context]":
-                    tokens.append("<|assistant|>")
-                    tokens.append(retrieved_context)
-                    injected_context = True
-                else:
-                    # Force the structural anchor so CTW always falls back to an assistant distribution
-                    tokens.append("<|assistant|>")
-                
-                # 2. Second Pass: Generative Continuation
-                pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
-                
-                reply = []
-                # We are already past the assistant boundary, record immediately
-                recording = True 
-                
-                # If we injected context, the retrieved word itself should be in the reply
-                if injected_context:
-                    reply.append(retrieved_context)
+                while True:
+                    # Intercept novel words for Active Learning before querying
+                    from .omni_tokenizer import UnknownConcept
+                    query_tokens = cmd.split()
+                    concepts = router.tokenizer.tokenize(query_tokens, is_inference=True)
+                    unknowns = [c.raw_word for c in concepts if isinstance(c, UnknownConcept)]
                     
-                for p in pred:
-                    # Stop if it tries to hallucinate another boundary
-                    if recording and p in ("<|user|>", "<|assistant|>"):
-                        break
-                    if recording:
-                        reply.append(p)
+                    if unknowns:
+                        word = unknowns[0]
+                        print_ai_msg("Reply", f"I am unfamiliar with the word '{word}'. What is a synonym for it?")
+                        try:
+                            ans = input(f"{YELLOW}uchi (teaching '{word}')>{RESET} ").strip()
+                            if ans:
+                                router.tokenizer.ontology.add_mapping(word, ans)
+                                print(f"{GREEN}[+] Learned: '{word}' maps to '{ans}'. Re-evaluating...{RESET}")
+                                continue
+                            else:
+                                break
+                        except EOFError:
+                            break
+    
+                    # 1. First Pass: Associative Graph Retrieval (RAG without Vector DBs)
+                    retrieved_context = router.query(query_tokens)
                     
-                # Stream the clean canonical turn into memory so it learns
-                # Only stream if we actually got a reply
-                if reply:
-                    canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
-                    router.stream(canonical)
+                    # Natural Autocomplete: feed "<|user|> <input>" and let the trie
+                    # predict through the <|assistant|> boundary on its own.
+                    formatted_input = f"<|user|> {cmd}"
+                    tokens = formatted_input.split()
                     
-                print_ai_msg("Reply", ' '.join(reply))
+                    injected_context = False
+                    if retrieved_context != "[Unknown Context]":
+                        tokens.append("<|assistant|>")
+                        tokens.append(retrieved_context)
+                        injected_context = True
+                    else:
+                        tokens.append("<|assistant|>")
+                    
+                    # 2. Second Pass: Generative Continuation
+                    pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
+                    
+                    reply = []
+                    recording = True 
+                    
+                    if injected_context:
+                        reply.append(retrieved_context)
+                        
+                    for p in pred:
+                        if recording and p in ("<|user|>", "<|assistant|>"):
+                            break
+                        if recording:
+                            reply.append(p)
+                        
+                    # Stream the clean canonical turn into memory so it learns
+                    if reply:
+                        canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
+                        router.stream(canonical)
+                        
+                    print_ai_msg("Reply", ' '.join(reply))
+                    break # Break the active learning loop once successful
     except KeyboardInterrupt:
         pass
     finally:

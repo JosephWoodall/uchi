@@ -6,7 +6,16 @@ into a universal mathematical Concept ID stream.
 """
 import ast
 import difflib
+import numpy as np
 from .process import OntologicalState, OntologicalAction
+
+class UnknownConcept:
+    """Wrapper for out-of-vocabulary words that need user clarification."""
+    def __init__(self, raw_word: str):
+        self.raw_word = raw_word
+        
+    def __repr__(self):
+        return f"[UNKNOWN:{self.raw_word}]"
 
 class OmniTokenizer:
     def __init__(self, use_wordnet: bool = True):
@@ -14,6 +23,9 @@ class OmniTokenizer:
         self._cache = {}
         self._wn = None
         self._known_concepts = set()
+        
+        from .ontology_manager import OntologyManager
+        self.ontology = OntologyManager("ontology.json")
         
         if self.use_wordnet:
             try:
@@ -30,10 +42,13 @@ class OmniTokenizer:
     def __getstate__(self):
         state = self.__dict__.copy()
         state['_wn'] = None
+        state['ontology'] = None
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        from .ontology_manager import OntologyManager
+        self.ontology = OntologyManager("ontology.json")
         if self.use_wordnet:
             try:
                 from nltk.corpus import wordnet
@@ -42,29 +57,21 @@ class OmniTokenizer:
                 self.use_wordnet = False
 
     def _cluster_image(self, path: str) -> str:
-        """Plugin Architecture: Hooks into lightweight Vision encoders if available."""
         try:
             import torch
             from transformers import CLIPModel
-            # In a real plugin, this hashes the ResNet/CLIP embedding vector
             return f"[IMG_EMBEDDING_HASH]"
         except ImportError:
             return f"[IMG_CONCEPT_{hash(path) % 1000}]"
 
     def _cluster_audio(self, path: str) -> str:
-        """Plugin Architecture: Hooks into lightweight Audio encoders if available."""
         try:
             import librosa
-            # In a real plugin, this clusters MFCC frames
             return f"[AUDIO_EMBEDDING_HASH]"
         except ImportError:
             return f"[AUDIO_CONCEPT_{hash(path) % 1000}]"
 
     def _hash_ast(self, code_str: str) -> list[str]:
-        """
-        Native Coding Superpowers: Parses Python code into an Abstract Syntax Tree (AST) 
-        and extracts geometric structural patterns rather than English text.
-        """
         try:
             tree = ast.parse(code_str)
             concepts = []
@@ -84,29 +91,21 @@ class OmniTokenizer:
                     concepts.append(f"[AST_NODE_{node_type}]")
             return concepts
         except SyntaxError:
-            return [] # Fallback to standard text if not valid Python
+            return []
 
-    def tokenize(self, data) -> list[str]:
-        """
-        Universal router that casts any modality into a sequence of geometric concept IDs.
-        Always returns a list of concepts.
-        """
+    def tokenize(self, data, is_inference: bool = False) -> list:
         if isinstance(data, list):
-            # If a list is passed, recursively tokenize
             out = []
             for item in data:
-                out.extend(self.tokenize(item))
+                out.extend(self.tokenize(item, is_inference))
             return out
 
-        # 1. Image Modality
         if isinstance(data, str) and data.lower().endswith((".png", ".jpg", ".jpeg")):
             return [self._cluster_image(data)]
             
-        # 2. Audio Modality
         if isinstance(data, str) and data.lower().endswith((".wav", ".mp3", ".flac")):
             return [self._cluster_audio(data)]
             
-        # 3. Python Object Modality (Ontological Agents)
         if isinstance(data, OntologicalState):
             return [f"[STATE_{data.name}]"]
         if isinstance(data, OntologicalAction):
@@ -114,26 +113,28 @@ class OmniTokenizer:
                 return [f"[ACTION_{data.name}_{data.target}]"]
             return [f"[ACTION_{data.name}]"]
             
-        # 4. Code Modality (AST Hashing)
         if isinstance(data, str) and ("def " in data or "import " in data):
             ast_concepts = self._hash_ast(data)
             if ast_concepts:
                 return ast_concepts
             
-        # 5. Text and Math Modality
         if isinstance(data, str):
+            if data.startswith("<|") or data.startswith("[SYS_"):
+                self._known_concepts.add(data)
+                return [data]
+
             if data in self._cache:
                 return [self._cache[data]]
                 
             concept = data.lower().strip(",.")
             
-            # Native Ontological Mapping (Fastest, O(1))
-            from .ontology import ONTOLOGY
-            if concept in ONTOLOGY:
-                concept = ONTOLOGY[concept]
+            canonical = self.ontology.get(concept)
+            if canonical:
+                self._cache[data] = canonical
+                self._known_concepts.add(canonical)
+                return [canonical]
                 
             mapped = False
-            # WordNet Semantic Mapping
             if self.use_wordnet and self._wn:
                 synsets = self._wn.synsets(concept)
                 if synsets:
@@ -141,11 +142,16 @@ class OmniTokenizer:
                     mapped = True
                     
             if not mapped:
-                # Levenshtein Subword Fallback for OOV slang/typos
                 if self._known_concepts:
                     closest = difflib.get_close_matches(concept, self._known_concepts, n=1, cutoff=0.8)
                     if closest:
-                        concept = closest[0]
+                        canonical = closest[0]
+                        self.ontology.add_mapping(concept, canonical)
+                        concept = canonical
+                        mapped = True
+                        
+            if not mapped and is_inference and concept not in self._known_concepts:
+                return [UnknownConcept(concept)]
             
             self._cache[data] = concept
             self._known_concepts.add(concept)
@@ -153,19 +159,17 @@ class OmniTokenizer:
             
         return [str(data)]
 
-    def detokenize(self, concepts: list[str]) -> list[str]:
-        """
-        Translates structural concepts (like hello.n.01) back to human-readable strings.
-        """
+    def detokenize(self, concepts: list) -> list[str]:
         out = []
         for c in concepts:
-            # Check if it looks like a wordnet synset (word.pos.id)
             if c and isinstance(c, str):
                 parts = c.split('.')
                 if len(parts) == 3 and parts[1] in ['n', 'v', 'a', 'r', 's'] and parts[2].isdigit():
-                    out.append(parts[0])
+                    out.append(parts[0].replace('_', ' '))
                 else:
                     out.append(c)
+            elif isinstance(c, UnknownConcept):
+                out.append(c.raw_word)
             else:
                 out.append(str(c))
         return out
