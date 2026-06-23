@@ -230,6 +230,20 @@ class UniversalPredictor:
         self._root.succ_cred[actual] = self._root.succ_cred.get(actual, 0) + 1.0
         self._root.n_obs += 1
 
+    def unlearn(self, actual: Any) -> None:
+        """Synaptic Pruning: heavily penalize and potentially delete the actual sequence."""
+        n_hist = len(self.history)
+        max_d = (n_hist - 1) if self.k is None else min(self.k, n_hist - 1)
+        for d in range(self.min_k, max_d + 1):
+            if self.k is None and d > 64:
+                break
+            ctx = tuple(self.history[-(d + 1):-1])
+            node = self._feedback_get_node(ctx)
+            if node and actual in node.succ_cred:
+                node.succ_cred[actual] *= 0.1 # Severe decay
+                if node.succ_cred[actual] < 0.05:
+                    del node.succ_cred[actual]
+
         # Continuation-count update: when a new bigram (prev, actual) is first
         # seen, increment the continuation count for actual.
         if len(self.history) >= 2:

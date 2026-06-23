@@ -197,6 +197,7 @@ def _train_autoregressive(
     tokenizer=None,
     long_term_store=None,
     use_skip_grams=False,
+    unlearn=False,
 ) -> None:
     """
     Train p on every consecutive token pair within a single sequence.
@@ -214,30 +215,41 @@ def _train_autoregressive(
     total = 0
     import random
     for i, token in enumerate(tokens):
-        p.predict()
-        pred = p._last_prediction
+        if not unlearn:
+            p.predict()
+            pred = p._last_prediction
+        else:
+            pred = None
         
         # Simulated Skip-Gram attention: randomly drop one context token during training
         if use_skip_grams and i > 2 and random.random() < 0.2:
             saved = p.history[:]
             idx_to_drop = random.randint(0, len(p.history) - 1)
             p.history.pop(idx_to_drop)
-            p.observe(token)
-            p.feedback(token)
+            if unlearn:
+                p.unlearn(token)
+                p.observe(token)
+            else:
+                p.observe(token)
+                p.feedback(token)
             p.history = saved
             
-        p.observe(token)
-        p.feedback(token)
+        if unlearn:
+            p.unlearn(token)
+            p.observe(token)
+        else:
+            p.observe(token)
+            p.feedback(token)
         total += 1
         if pred == token:
             correct += 1
 
     # Update tokenizer merge scores with running accuracy
-    if tokenizer is not None and total > 0:
+    if tokenizer is not None and total > 0 and not unlearn:
         tokenizer.update(tokens, correct / total)
 
     # Replay high-confidence patterns into long-term store
-    if long_term_store is not None and total > 0:
+    if long_term_store is not None and total > 0 and not unlearn:
         long_term_store.replay(p, tokens)
 
     p.history.clear()
@@ -314,6 +326,19 @@ class SequenceGenerator(BaseEstimator):
         self.use_skip_grams = use_skip_grams
 
     # ── public API ────────────────────────────────────────────────────────────
+
+    def unlearn(self, sequences) -> 'SequenceGenerator':
+        self._check_fitted()
+        tok = getattr(self, '_tokenizer', None)
+        lts = self.long_term_store
+        if isinstance(sequences, str):
+            _train_autoregressive(self._pred, list(sequences), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        elif sequences and not isinstance(sequences[0], (list, tuple)):
+            _train_autoregressive(self._pred, list(sequences), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        else:
+            for seq in sequences:
+                _train_autoregressive(self._pred, list(seq), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        return self
 
     def fit(self, sequences, y=None) -> 'SequenceGenerator':
         """

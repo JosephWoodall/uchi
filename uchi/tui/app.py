@@ -205,13 +205,26 @@ class UchiApp(App):
             self.active_learning_cmd = None
             return
             
-        # RL check
+        # Continuous Sentiment Reward Classifier (Option 2)
+        positive_cues = {"yes", "correct", "good", "great", "exactly", "right", "awesome", "perfect", "thanks", "thank"}
         negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
         cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
         
+        score = 0.0
+        if cmd_words.intersection(positive_cues):
+            score += 1.0
+        if cmd_words.intersection(negative_cues):
+            score -= 1.0
+            
         if self.pending_sequence:
-            if cmd_words.intersection(negative_cues):
-                log.write("[red][Implicit RL] Discarding previous hallucination.[/red]")
+            if score < 0:
+                log.write("[red][Synaptic Pruning] Eradicating hallucination from graph...[/red]")
+                self.router.predictor.unlearn(self.pending_sequence)
+                self.pending_sequence = None
+            elif score > 0:
+                log.write("[green][Positive Momentum] Reinforcing sequence credibility![/green]")
+                self.router.stream(self.pending_sequence)
+                self.router.stream(self.pending_sequence) # double reinforcement
                 self.pending_sequence = None
             else:
                 self.router.stream(self.pending_sequence)
