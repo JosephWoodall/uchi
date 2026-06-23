@@ -60,10 +60,25 @@ class OmniRouter:
             ]
         
         # Simulate Massive Positive Reinforcement RL during cold start
-        for _ in range(25):
-            for turn in turns:
-                tokens = turn.split()
-                self.stream(tokens)
+        try:
+            from tqdm import tqdm
+            total_steps = 25 * len(turns)
+            with tqdm(total=total_steps, desc="Simulating RL", unit="seq", leave=False) as pbar:
+                for _ in range(25):
+                    for turn in turns:
+                        tokens = turn.split()
+                        self.stream(tokens)
+                        
+                        # Extract the first few words of the turn for context
+                        display_text = " ".join(tokens[1:4]) if len(tokens) > 3 else turn
+                        if len(display_text) > 15: display_text = display_text[:12] + "..."
+                        pbar.set_postfix({"training": display_text})
+                        pbar.update(1)
+        except ImportError:
+            for _ in range(25):
+                for turn in turns:
+                    tokens = turn.split()
+                    self.stream(tokens)
         
     def stream(self, concepts: list):
         """
