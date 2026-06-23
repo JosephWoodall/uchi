@@ -170,6 +170,7 @@ def main():
     print("===============================================================")
     
     try:
+        pending_sequence = None
         while True:
             try:
                 cmd = input(f"{YELLOW}uchi>{RESET} ").strip()
@@ -184,6 +185,20 @@ def main():
             elif cmd.startswith("/save"):
                 save_brain(router, args.brain)
             else:
+                # --- SEAMLESS IMPLICIT RL (Deferred Memory Streaming) ---
+                negative_cues = {"no", "wrong", "bad", "incorrect", "stop", "nevermind", "ignore", "false", "disagree"}
+                cmd_words = set(cmd.lower().replace(',', '').replace('.', '').replace('!', '').replace('?', '').split())
+                
+                if pending_sequence:
+                    if cmd_words.intersection(negative_cues):
+                        # Implicit Negative RL: Discard the hallucination.
+                        pending_sequence = None
+                    else:
+                        # Implicit Positive RL: Lock the previous turn into the brain.
+                        router.stream(pending_sequence)
+                        pending_sequence = None
+                # ---------------------------------------------------------
+
                 while True:
                     # Intercept novel words for Active Learning before querying
                     from .omni_tokenizer import UnknownConcept
@@ -236,10 +251,10 @@ def main():
                         if recording:
                             reply.append(p)
                         
-                    # Stream the clean canonical turn into memory so it learns
+                    # Hold the canonical turn in memory, deferred until the user's NEXT prompt.
                     if reply:
                         canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
-                        router.stream(canonical)
+                        pending_sequence = canonical
                         
                     print_ai_msg("Reply", ' '.join(reply))
                     break # Break the active learning loop once successful
