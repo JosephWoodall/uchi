@@ -201,23 +201,23 @@ def main():
                     tokens.append("<|assistant|>")
                     tokens.append(retrieved_context)
                     injected_context = True
+                else:
+                    # Force the structural anchor so CTW always falls back to an assistant distribution
+                    tokens.append("<|assistant|>")
                 
                 # 2. Second Pass: Generative Continuation
                 pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
                 
-                # Natural Autocomplete filtering:
                 reply = []
-                # If we injected the context, we are already past <|assistant|>
-                recording = injected_context 
+                # We are already past the assistant boundary, record immediately
+                recording = True 
                 
                 # If we injected context, the retrieved word itself should be in the reply
                 if injected_context:
                     reply.append(retrieved_context)
                     
                 for p in pred:
-                    if p == "<|assistant|>" and not recording:
-                        recording = True
-                        continue
+                    # Stop if it tries to hallucinate another boundary
                     if recording and p in ("<|user|>", "<|assistant|>"):
                         break
                     if recording:
