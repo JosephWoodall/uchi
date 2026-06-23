@@ -188,8 +188,10 @@ def main():
                 query_tokens = cmd.split()
                 retrieved_context = router.query(query_tokens)
                 
-                # Native instruction-tuning format: "<|user|> <input> <|assistant|>"
-                formatted_input = f"<|user|> {cmd} <|assistant|>"
+                # Natural Autocomplete: feed "<|user|> <input>" and let the trie
+                # predict through the <|assistant|> boundary on its own.
+                # This preserves bigram context instead of forcing a cold junction.
+                formatted_input = f"<|user|> {cmd}"
                 tokens = formatted_input.split()
                 
                 # If the graph retrieved a high-confidence match, inject it as a pre-seed
@@ -199,15 +201,26 @@ def main():
                 # 2. Second Pass: Generative Continuation
                 pred = router.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0)
                 
-                # Filter out any tokens that might bleed into the next interaction
+                # Natural Autocomplete filtering:
+                # The trie will autocomplete: ... <|assistant|> response tokens <|user|>
+                # We skip everything until the FIRST <|assistant|>, then collect until
+                # the next boundary token (<|user|> or another <|assistant|>).
                 reply = []
+                recording = False
                 for p in pred:
-                    if p == "<|user|>":
+                    if p == "<|assistant|>" and not recording:
+                        recording = True
+                        continue
+                    if recording and p in ("<|user|>", "<|assistant|>"):
                         break
-                    reply.append(p)
+                    if recording:
+                        reply.append(p)
                     
-                # Now stream the complete interaction into memory so it learns it
-                router.stream(tokens + reply)
+                # Stream the clean canonical turn into memory so it learns
+                # Only stream if we actually got a reply
+                if reply:
+                    canonical = ["<|user|>"] + cmd.split() + ["<|assistant|>"] + reply
+                    router.stream(canonical)
                     
                 print_ai_msg("Reply", ' '.join(reply))
     except KeyboardInterrupt:

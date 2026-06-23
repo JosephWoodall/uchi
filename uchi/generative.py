@@ -166,10 +166,11 @@ def _generate_from_predictor(
             ctx = tuple(p.history[-p.k:]) if len(p.history) >= p.k else tuple(p.history)
             dist = long_term_store.blend(dist, ctx, p._vocab)
 
-        # Repetition Penalty to prevent loops
+        # Repetition Penalty: only penalize recently *generated* tokens
+        # to prevent loops, but never penalize seed tokens (which the trie
+        # needs to reproduce in its response).
         repetition_penalty = 1.5
-        recent_tokens = (seed_tokens if seed else []) + generated
-        for tok in set(recent_tokens[-20:]):
+        for tok in set(generated[-20:]):
             if tok in dist:
                 dist[tok] /= repetition_penalty
 
