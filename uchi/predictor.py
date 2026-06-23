@@ -230,6 +230,63 @@ class UniversalPredictor:
         self._root.succ_cred[actual] = self._root.succ_cred.get(actual, 0) + 1.0
         self._root.n_obs += 1
 
+        # Continuation-count update: when a new bigram (prev, actual) is first
+        # seen, increment the continuation count for actual.
+        if len(self.history) >= 2:
+            bigram = (self.history[-2], actual)
+            if bigram not in self._seen_bigrams:
+                self._seen_bigrams.add(bigram)
+                self._cont_counts[actual] = self._cont_counts.get(actual, 0) + 1
+
+        # Per-depth context nodes (depths min_k .. k)
+        max_d = (n_hist - 1) if self.k is None else min(self.k, n_hist - 1)
+        
+        # To avoid O(N^2) explosion with infinite context, we only create
+        # nodes up to the longest existing match + 1.
+        node = self._root
+        for d in range(self.min_k, max_d + 1):
+            ctx  = tuple(self.history[-(d + 1):-1])
+            if ctx:
+                sym = ctx[0] # The earliest symbol in the context
+            
+            # This logic needs to traverse backwards from the end of history.
+            # But ctx is built backwards. Let's stick to _ensure_node for now 
+            # and just enforce a reasonable hard cap if k is None to avoid hanging.
+            if self.k is None and d > 64: 
+                break
+                
+            node = self._feedback_get_node(ctx)
+            if node is None:
+                continue
+            node.n_obs += 1
+            node.last_step = self._global_step
+            if actual not in node.succ_cred:
+                node.succ_cred[actual] = 1.0
+
+            if abstained:
+                self._update_node_abstained(node, actual)
+            elif correct:
+                self._update_node_correct(node, actual)
+            else:
+                self._update_node_wrong(node, self._last_prediction, actual)
+
+            # Problem 9: update positional weight tracking
+            if self._use_pos_weights and (self.k is None or d <= self.k):
+                idx = d - 1  # depth 1 → index 0
+                # Extend the pos tracking lists if we are going deeper than before
+                if idx >= len(self._pos_total):
+                    self._pos_total.extend([0.0] * (idx - len(self._pos_total) + 1))
+                    self._pos_correct.extend([0.0] * (idx - len(self._pos_correct) + 1))
+                if idx < len(self._pos_total):
+                    self._pos_total[idx] += 1.0
+                    if correct:
+                        self._pos_correct[idx] += 1.0
+
+        # Problem 6: periodic compression pass
+        if (self._compressor is not None
+                and self._global_step % 500 == 0):
+            self._compressor.compress_pass(self._root, self._cred_max_base)
+
     def unlearn(self, actual: Any) -> None:
         """Synaptic Pruning: heavily penalize and potentially delete the actual sequence."""
         n_hist = len(self.history)

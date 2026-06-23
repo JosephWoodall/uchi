@@ -281,6 +281,7 @@ class UchiApp(App):
         if injected_context:
             reply.append(retrieved_context)
             
+        # The pred list ONLY contains generated tokens, NOT the seed.
         for p in pred:
             if recording and p in ("<|user|>", "<|assistant|>"):
                 break
