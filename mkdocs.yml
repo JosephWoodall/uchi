@@ -17,14 +17,14 @@ nav:
   - API Reference:
     - Multi-Modal Router: omni-router.md
     - Core Engine: core-engine.md
+    - Convergent Engine (MCTS): convergent-engine.md
     - Tabular Models: tabular.md
     - Time Series Models: timeseries.md
     - Generative Sequences: generative.md
     - Simulation Engine: simulation-engine.md
   - Architecture: architecture.md
+  - Algorithmic Walkthrough: algorithmic-walkthrough.md
   - Benchmarks: benchmarks.md
-  - Contributing: CONTRIBUTING.md
-  - Changelog: CHANGELOG.md
 
 markdown_extensions:
   - pymdownx.highlight:

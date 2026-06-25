@@ -6,6 +6,7 @@ Phase 4 (Infinite Context), and Phase 5 (Associative Memory) into a
 single, coherent Omni-Modal architecture.
 """
 
+import threading
 from typing import List, Any
 from .omni_tokenizer import OmniTokenizer
 from .online_tokenizer import OnlineTokenizer
@@ -16,6 +17,7 @@ from .procedural_memory import ProceduralMemory
 from .code_engine import CodeEngine
 from .specialist_pool import SpecialistPool
 from .skill_registry import SkillRegistry
+from .convergent_engine import ConvergentEngine
 import torch
 
 class OmniRouter:
@@ -45,6 +47,7 @@ class OmniRouter:
         from uchi.neuro_symbolic import get_ssm
         _ssm = get_ssm()
         self.ssm_optimizer = torch.optim.Adam(_ssm.parameters(), lr=1e-3)
+        self.ssm_lock = threading.Lock()
         self._knowledge_bootstrapped = False
 
         # Phase 1+3: Parallel MCTS code generation with REPL oracle
@@ -53,6 +56,11 @@ class OmniRouter:
         self.specialist_pool = SpecialistPool(self)
         # Skill toolkit: markdown-defined /commands
         self.skills = SkillRegistry(self)
+        # Convergent MCTS engine for deliberative response generation
+        self.convergent = ConvergentEngine(self)
+
+        self._conversation_history: list = []  # [(q_tokens, r_tokens), ...]
+        self._context_window: int = 3           # prior turns to prepend to seed
 
         self._bootstrap_persona(progress_callback)
         self._bootstrap_knowledge(progress_callback)
@@ -75,6 +83,26 @@ class OmniRouter:
             self.specialist_pool = SpecialistPool(self)
         if not hasattr(self, 'skills'):
             self.skills = SkillRegistry(self)
+        if not hasattr(self, 'convergent'):
+            self.convergent = ConvergentEngine(self)
+        if not hasattr(self, 'ssm_lock'):
+            self.ssm_lock = threading.Lock()
+        if not hasattr(self, '_background_started'):
+            self._background_started = False
+        if not hasattr(self, '_daemon_procs'):
+            self._daemon_procs = []
+        if not hasattr(self, '_conversation_history'):
+            self._conversation_history = []
+        if not hasattr(self, '_context_window'):
+            self._context_window = 3
+
+    def __getstate__(self):
+        # Exclude non-serialisable or always-recreated transient attributes.
+        # __setstate__ rebuilds ssm_lock, ssm_optimizer, and _background_started
+        # on every load, so persisting them is both wasteful and broken
+        # (threading.Lock cannot be pickled).
+        skip = {"ssm_lock", "ssm_optimizer", "_background_started", "_daemon_procs"}
+        return {k: v for k, v in self.__dict__.items() if k not in skip}
 
     def _bootstrap_persona(self, progress_callback=None):
         """
@@ -117,11 +145,12 @@ class OmniRouter:
                 tokens = turn.split()
                 self.stream(tokens)
 
-                # Jumpstart the value head so it doesn't randomly output < 0.0
+                # Jumpstart the value head so it doesn't randomly output < 0.0.
+                # Single compute_loss call avoids running two GRU forward passes
+                # before .backward() — double-pass invalidates gradient graphs.
                 self.ssm_optimizer.zero_grad()
-                v_loss = ssm.update_value(tokens, reward=1.0)
-                d_loss = ssm.train_dynamics(tokens)
-                (v_loss + d_loss).backward()
+                loss = ssm.compute_loss(tokens, reward=1.0)
+                loss.backward()
                 self.ssm_optimizer.step()
                 
                 current_step += 1
@@ -149,6 +178,24 @@ class OmniRouter:
         try:
             from bootstrap_wikidata import run as run_wiki
             run_wiki(self, progress_callback=progress_callback)
+        except Exception:
+            pass
+
+        # Code knowledge: HumanEval + MBPP → trie via ```python``` code-block tokens
+        # Gives the trie real Python token sequences so pass@1 lifts from 0%.
+        try:
+            from bootstrap_humaneval import run as run_humaneval
+            run_humaneval(self, progress_callback=progress_callback)
+        except Exception:
+            pass
+
+        # Conversational knowledge: SQuAD Q&A → AssociativeMemory + trie.
+        # Capped at 2000 pairs on cold start to keep boot time reasonable;
+        # run scripts/bootstrap_convo.py manually for the full 87k corpus.
+        try:
+            from bootstrap_convo import _load_squad, run as run_convo
+            squad_pairs = _load_squad(limit=2000)
+            run_convo(self, pairs=squad_pairs or None, progress_callback=progress_callback)
         except Exception:
             pass
 
@@ -182,22 +229,79 @@ class OmniRouter:
         """
         Spawn persistent background processes. Safe to call multiple times —
         guards prevent double-spawn. Called by both TUI and API on startup.
+        Handles are stored in self._daemon_procs so stop_background_jobs()
+        can terminate them cleanly on quit.
         """
         if getattr(self, '_background_started', False):
             return
         self._background_started = True
+        if not hasattr(self, '_daemon_procs'):
+            self._daemon_procs = []
 
         import sys, subprocess, os
         scripts_dir = os.path.normpath(
             os.path.join(os.path.dirname(__file__), '..', 'scripts')
         )
+
+        # Legacy RL daemon (predict_future + sandbox)
         rl_script = os.path.join(scripts_dir, 'background_rl.py')
         if os.path.exists(rl_script):
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [sys.executable, rl_script],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            self._daemon_procs.append(proc)
+
+        # Convergent dream daemon: ConvergentEngine self-play → SSM alignment
+        # Runs forever (--daemon), periodically saving ssm_dynamics.pt.
+        dream_script = os.path.join(scripts_dir, 'offline_dream.py')
+        if os.path.exists(dream_script):
+            proc = subprocess.Popen(
+                [sys.executable, dream_script, '--daemon'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._daemon_procs.append(proc)
+
+    def stop_background_jobs(self):
+        """Terminate all daemons spawned by start_background_jobs().
+
+        Sends SIGTERM so offline_dream.py can save its SSM checkpoint
+        before exiting. Called by the TUI on quit and by the API lifespan
+        on shutdown.
+        """
+        for proc in getattr(self, '_daemon_procs', []):
+            if proc.poll() is None:
+                proc.terminate()
+        self._daemon_procs = []
+        self._background_started = False
+
+    def _fire_contrastive_update(
+        self,
+        query_tokens: list,
+        response_tokens: list,
+        reward: float,
+    ) -> None:
+        """
+        Enqueue a contrastive SSM update on a daemon thread.
+
+        The lock prevents concurrent optimizer.step() calls from colliding
+        gradients or corrupting Adam's moment buffers.  Daemon=True ensures
+        the thread does not block interpreter shutdown.
+        """
+        from uchi.vector_oracle import contrastive_update as _cu
+        opt = self.ssm_optimizer
+        lock = self.ssm_lock
+        q = list(query_tokens)
+        r = list(response_tokens)
+        rew = float(reward)
+
+        def _bg():
+            with lock:
+                _cu(q, r, rew, opt)
+
+        threading.Thread(target=_bg, daemon=True).start()
 
     def _train_ssm(self, sequence: list, reward: float):
         """Train SSM value head + dynamics on one sequence/reward pair."""
@@ -260,43 +364,55 @@ class OmniRouter:
             pass
         return "[Unknown Context]"
         
-    def query(self, prompt: list) -> str:
+    def query(self, concepts: list) -> str:
         """
         Zero-Shot Question Answering against the memory buffer.
         """
-        query_sequence = prompt
-        concept_query = self.tokenizer.tokenize(query_sequence)
+        concept_query = list(concepts)
         if self.bpe:
             concept_query = list(self.bpe.tokenize(concept_query))
         
         ans_concept, cosine_score = self.memory.query(concept_query)
 
-        # Cosine similarity is already in [-1, 1] — no length normalization needed.
-        # 0.5 = confident semantic match; below that the SSM states are dissimilar.
+        # Cosine similarity is in [-1, 1] on the unit hypersphere.
+        # 0.5 = confident semantic match (per memory.query docstring).
+        # Additional keyword check: on an undertrained SSM, unrelated sentences can
+        # score > 0.5. Require at least one content word from the query to appear in
+        # the stored text to reject false positives (e.g. "do you dream" for "thermodynamics").
         if ans_concept and cosine_score is not None and cosine_score >= 0.5:
-            return str(ans_concept)
+            _stop = {"the", "a", "of", "in", "is", "that", "to", "and", "or", "it", "i"}
+            _q_words = {str(c).split(".")[0].lower() for c in concept_query} - _stop
+            _stored_words = {w.split(".")[0].lower() for w in str(ans_concept).split()}
+            if _q_words & _stored_words:  # at least one content word overlaps
+                return str(ans_concept)
 
-        # Known token sequence in trie but no strong memory match — conversational turn,
-        # skip web sourcing.
-        if cosine_score is not None and cosine_score > 0:
-            return "[Unknown Context]"
-        
         # Autonomous Web Sourcing Hook
         try:
-            from uchi.plugins.web import fetch_web_context
-            # If memory failed, try searching the web
-            raw_query = " ".join(query_sequence)
-            web_context = fetch_web_context(raw_query)
+            from uchi.web_search import perform_web_search
+            # Strip OmniTokenizer lemma IDs (e.g. "capital.n.01" → "capital") so the
+            # web search receives plain English rather than lemmatised synset tokens.
+            raw_query = " ".join(str(c).split(".")[0] for c in concept_query)
+            print(f"\n[!] Knowledge gap detected for '{raw_query}'. Engaging Autonomous Web Sourcing...")
+            web_context = perform_web_search(raw_query)
             if web_context:
-                # Stream the new structural truth
+                print(f"[+] Sourced {len(web_context)} bytes of structural truth from the web.")
+                # Stream raw content first (fills trie vocabulary)
                 self.stream(web_context.split())
-                # Re-query the memory
+                # Also stream as a QA pair so <|assistant|> → answer path exists in trie.
+                # Without this, MCTS can't select the web tokens as a response.
+                raw_q_words = raw_query.split()
+                qa_seq = ["<|user|>"] + raw_q_words + ["<|assistant|>"] + web_context[:250].split()
+                self.stream(qa_seq)
                 ans_concept2, ans_score2 = self.memory.query(concept_query)
-                if ans_concept2 and ans_score2 >= 1.5:
+                if ans_concept2 and ans_score2 is not None and ans_score2 >= 0.5:
                     return str(ans_concept2)
-        except Exception:
-            pass
-            
+                # Cosine memory gate failed (cold SSM — embedding space untrained).
+                # Tag the return so callers can distinguish web content from memory results
+                # and return it directly when MCTS fails to use it as generation guidance.
+                return "\x00WEB\x00" + web_context[:250]
+        except Exception as e:
+            print(f"[-] Web Sourcing error: {e}")
+
         return "[Unknown Context]"
         
     def predict_future(self, prompt: list, steps: int = 1, temperature: float = 0.0, creativity: float = 0.0, bias_context: str = None) -> list:
@@ -369,23 +485,132 @@ class OmniRouter:
                 self.baseline.update(reward)
                 self._train_ssm(self.last_sequence, advantage)
 
-        # 3. Phase 1+2: Route CODE intent through CodeEngine + SpecialistPool
+        _WEB_TAG = "\x00WEB\x00"
+
+        # 3a. Convergent MCTS: unified vector routing + generation
+        #     Retrieves memory bias first so candidates are grounded in context.
+        #     Keyword intent (steps 3b/3c) runs AFTER as a more specific override.
+        if intent_key is None:
+            try:
+                retrieved = self.query(concepts)
+                # Web-sourced content is tagged with _WEB_TAG. Return it directly:
+                # MCTS cannot reliably steer toward a sparsely-streamed trie path,
+                # so we surface the retrieval result rather than hallucinating over it.
+                if retrieved.startswith(_WEB_TAG):
+                    web_answer = retrieved[len(_WEB_TAG):]
+                    self._conversation_history.append((concepts, web_answer.split()))
+                    return web_answer
+                bias = retrieved if retrieved != "[Unknown Context]" else None
+                kind, payload, reward_hint = self.convergent.generate(
+                    concepts,
+                    bootstrapped=self._knowledge_bootstrapped,
+                    bias_context=bias,
+                    context=self._conversation_history[-self._context_window:],
+                    callback=callback,
+                )
+                if kind == "tool" and payload and self.skills.has(payload):
+                    skill = self.skills._skills.get(payload)
+                    if skill:
+                        desc_toks = (skill.name + " " + skill.description).lower().split()
+                        self._fire_contrastive_update(concepts, desc_toks, reward_hint)
+                    return self.skills.dispatch(payload, message, callback)
+
+                elif kind == "uncertain" and not payload and bias:
+                    # MCTS produced no valid candidates but retrieval found grounding context.
+                    # Return the retrieved content directly rather than the fallback string.
+                    self._conversation_history.append((concepts, bias.split()))
+                    return bias
+
+                elif kind in ("text", "uncertain") and payload:
+                    reply = [t for t in payload if t not in
+                             ("<|user|>", "<|assistant|>", "<|end|>")]
+                    if reply:
+                        self.last_sequence = (
+                            ["<|user|>"] + concepts + ["<|assistant|>"] + reply
+                        )
+                        self._fire_contrastive_update(concepts, reply, reward_hint)
+                        self.stream(self.last_sequence)
+                        self.last_walk_data = {
+                            "prediction_depth": getattr(
+                                self.predictor._pred, "_last_prediction_depth", 0
+                            ),
+                            "contributions": getattr(
+                                self.predictor._pred, "_last_contributions", {}
+                            ),
+                            "max_sim": getattr(
+                                self.predictor._pred, "_last_max_sim", 0.0
+                            ),
+                        }
+                        predicted = self.tokenizer.detokenize(reply)
+                        reply_str = " ".join(str(p) for p in predicted)
+                        if reply_str.strip():
+                            if kind == "uncertain":
+                                # Memory fallback: associative memory may know
+                                # what the MCTS could not generate from trie alone.
+                                mem_result = self.query(concepts)
+                                if mem_result.startswith(_WEB_TAG):
+                                    mem_result = mem_result[len(_WEB_TAG):]
+                                if mem_result != "[Unknown Context]":
+                                    self._conversation_history.append((concepts, mem_result.split()))
+                                    return mem_result
+                                self._conversation_history.append((concepts, reply))
+                                return f"[Uncertain] {reply_str}"
+                            self._conversation_history.append((concepts, reply))
+                            return reply_str
+            except Exception:
+                pass
+
+        # 3b. Analytical intents: auto-dispatch when a data file path is present
+        _ANALYTICAL = {"classify", "regress", "anomaly", "forecast", "tsclassify"}
+        if intent_key in _ANALYTICAL:
+            import os as _os
+            from uchi.data_loader import find_path as _fp
+            data_path = _fp(message)
+            if data_path and _os.path.exists(data_path):
+                return self.skills.dispatch(intent_key, message, callback)
+            elif data_path:
+                return f"File not found: {data_path}"
+            else:
+                return (
+                    f"I can run {intent_key} analysis. "
+                    f"Please provide a data file path, e.g.:\n"
+                    f"  /{intent_key} yourdata.csv"
+                )
+
+        # 3c. Phase 1+2: Route CODE intent through CodeEngine + SpecialistPool
         if intent_key == "code":
             return self._handle_code_intent(message, query_tokens, concepts, callback)
 
         # 4. Conversation path: memory retrieval + MCTS prediction
         retrieved_context_str = self.query(concepts)
-        tokens = ["<|user|>"] + concepts + ["<|assistant|>"]
+        # Strip web tag if present (specialist path also handles web-sourced content)
+        if retrieved_context_str.startswith(_WEB_TAG):
+            web_answer = retrieved_context_str[len(_WEB_TAG):]
+            self._conversation_history.append((concepts, web_answer.split()))
+            return web_answer
+        # Prepend prior turns so specialist predictor sees rolling context
+        history_prefix = []
+        for q_toks, r_toks in self._conversation_history[-self._context_window:]:
+            history_prefix += ["<|user|>"] + q_toks[:6] + ["<|assistant|>"] + r_toks[:6]
+        tokens = history_prefix + ["<|user|>"] + concepts + ["<|assistant|>"]
 
         bias = retrieved_context_str if retrieved_context_str != "[Unknown Context]" else None
         prompt_entropy = self.predictor.score(tokens)
 
         # Route to specialist if available (Phase 2)
         specialist = self.specialist_pool.route(intent_key or "convo")
+        # Stream grounding context to specialist trie so its MCTS can select those tokens.
+        # Web/memory content is only in the main trie; specialist has its own trie.
+        # Frame as a proper QA pair so <|assistant|> → answer path exists in trie.
+        if bias and specialist is not self:
+            raw_q_words = [str(c).split(".")[0] for c in concepts]
+            qa_seq = ["<|user|>"] + raw_q_words + ["<|assistant|>"] + bias.split()
+            specialist.stream(qa_seq)
         pred = specialist.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0, bias_context=bias)
 
-        # 5. Hallucination gate
-        if pred:
+        # 5. Hallucination gate — bypassed when retrieval provides grounding context.
+        # If we have bias (memory match or web snippet), trust the grounded generation.
+        if pred and bias is None:
             ssm_trained = abs(self.baseline.mean) > 0.01 or self.baseline.var < 0.95
             if ssm_trained:
                 from uchi.neuro_symbolic import get_ssm
@@ -439,6 +664,9 @@ class OmniRouter:
         # 8. Stream full interaction AFTER generation (Root 3 fix)
         if self.last_sequence:
             self.stream(self.last_sequence)
+
+        if reply:
+            self._conversation_history.append((concepts, reply))
 
         return reply_str
 

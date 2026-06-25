@@ -27,16 +27,24 @@ class CPUVectorMemory:
 
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
 
+        self.records: List[str] = []
+        self._vectors: np.ndarray | None = None
         if os.path.exists(self._idx_path) and os.path.exists(self._vec_path):
-            with open(self._idx_path) as f:
-                self.records: List[str] = json.load(f)
-            self._vectors: np.ndarray | None = np.load(self._vec_path)
-        else:
-            self.records = []
-            self._vectors = None
+            try:
+                with open(self._idx_path) as f:
+                    self.records = json.load(f)
+                self._vectors = np.load(self._vec_path)
+            except Exception:
+                # Corrupt or truncated persistence files — start fresh
+                self.records = []
+                self._vectors = None
 
     def add_memory(self, text: str, embedding: np.ndarray):
         vec = embedding.reshape(1, -1).astype(np.float32)
+        if self._vectors is not None and self._vectors.shape[1] != vec.shape[1]:
+            # SSM d_model changed — discard stale vectors rather than crashing
+            self._vectors = None
+            self.records = []
         self._vectors = vec if self._vectors is None else np.vstack([self._vectors, vec])
         self.records.append(text)
         self._save()

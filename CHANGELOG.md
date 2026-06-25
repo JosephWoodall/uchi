@@ -2,7 +2,32 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
+## [0.3.2] - RAG Pipeline & Memory Retrieval Hardening
+- **Web-Content Direct Return**: When MCTS fails to generate from a sparsely-trained trie, retrieved web content is returned directly via a sentinel tag — preventing silent hallucination when factual retrieval is available.
+- **Memory False-Positive Filter**: Added keyword-overlap guard on cosine memory matches; rejects SSM false positives where stored text shares no content words with the query (common on partially-trained SSMs scoring ~1.0 with zero semantic overlap).
+- **Greedy Bypass Skip for Bias Context**: Convergent engine no longer takes the O(1) greedy bypass when `bias_context` is set — greedy path ignores bias, so the full MCTS rollout now runs to apply the retrieval bonus.
+- **QA-Framed Web Stream**: Web content is streamed as a `<|user|> question <|assistant|> answer` pair establishing the trie path MCTS needs to select retrieved tokens as a response.
+- **Word-Root Bias Matching**: MCTS bias scoring strips synset suffixes (`energy.n.01` → `energy`) before matching plain-text web content, fixing silent zero-bonus on all retrieved tokens.
+- **Hallucination Gate Bypass for Grounded Replies**: SSM hallucination gate skipped when retrieval context is present; an undertrained value head should not override validated factual retrieval.
+- **Benchmark Multi-Phrase Expected Answers**: `scripts/benchmark_mini.py` supports list-based expected answers for DDG phrasing variance.
+- **`--wipe` Flag for `benchmarks/run_benchmarks.py`**: Deletes all brain files pre-benchmark to trigger Universal Builder rebuild.
+- **Web Search Coverage**: `perform_web_search` default `max_results` raised 3 → 5.
+
+## [0.3.1] - Generalization Upgrade & Search Routing Fixes
+- **N-Gram Backoff Smoothing**: MCTS tree search now falls back gracefully from $N=8 \rightarrow 2$ grams during cold-start traversal before deferring to K-NN memory search, drastically reducing hallucinated dead-ends.
+- **Unbounded MoE PUCT Scaling**: Re-scaled the Dynamic PUCT confidence formula to normalize across unbounded MoE value outputs, ensuring exploration bounds remain stable regardless of value scale.
+- **Fixed Web Search Bug**: Fixed a heuristic blocking the Autonomous Web Search Hook when vector retrieval distances were weakly positive.
+
+
 ## [0.3.0] - Routing Layer & Self-Improving SSM
+- **Vector-Symbolic Manifold**: Continuous State Space Model uses InfoNCE Geometry & L2 Normalization.
+- **Holographic Reduced Representations**: Replaced concatenation with HRR via Fast Fourier Transforms.
+- **Sparse Mixture of Experts**: 16 domain experts dynamically routed via Gumbel-Softmax Top-2 Gating.
+- **Batched MCTS**: Virtual Loss implemented for parallel GPU batch expansion during tree search.
+- **FAISS Semantic Smoothing**: Fallback k-NN retrieval for Trie leaf nodes facing OOV conditions.
+- **Universal Builder Pipeline**: Consolidated 5-Stage ingest pipeline (Dolly, Hermes, Wikipedia, MMLU, GSM8K, SWE-Bench).
+- **TUI Telemetry**: Real-time rendering of MCTS tree depth, MoE routing histograms, and InfoNCE distances.
+
 - **Root Problem Fix: Stream After Answer** — trie now trains on complete `<|user|> query <|assistant|> response` sequences only after generation, preventing partial-sequence corruption
 - **GRPO Value Head** — SSM value head now trains online from user sentiment and code evaluation signals via Group Relative Policy Optimization (DeepSeek-R1 method). Replaces random-weight hallucination gate
 - **ProceduralMemory Intent Router** — keyword/synonym-based intent classifier routes queries to correct trie strategy before tokenization. Eliminates blind single-pipeline routing

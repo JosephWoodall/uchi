@@ -10,10 +10,10 @@ import numpy as np
 from .process import OntologicalState, OntologicalAction
 
 class UnknownConcept:
-    """Wrapper for out-of-vocabulary words that need user clarification."""
+    """Deprecated: OOV words are now shattered via BPE fallback in OmniTokenizer."""
     def __init__(self, raw_word: str):
         self.raw_word = raw_word
-        
+
     def __repr__(self):
         return f"[UNKNOWN:{self.raw_word}]"
 
@@ -38,6 +38,35 @@ class OmniTokenizer:
                     nltk.download('wordnet', quiet=True)
             except ImportError:
                 self.use_wordnet = False
+
+    @staticmethod
+    def _bpe_fallback(word: str) -> list:
+        """
+        Shatter an OOV word into known subwords, guaranteeing the TokenEmbedder
+        always receives valid, hashable string tokens.
+
+        Strategy:
+          1. Try tiktoken (cl100k_base) — returns byte-pair subwords as strings.
+          2. Fall back to overlapping character bigrams, which always cover the word.
+
+        The returned tokens are non-empty strings safe for the hashing embedder.
+        """
+        # Attempt tiktoken BPE
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            ids = enc.encode(word)
+            subwords = [enc.decode([tid]) for tid in ids]
+            clean = [s for s in subwords if s.strip()]
+            if clean:
+                return clean
+        except Exception:
+            pass
+
+        # Character bigram fallback: always produces at least one token
+        if len(word) <= 2:
+            return [word]
+        return [word[i : i + 2] for i in range(len(word) - 1)]
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -198,10 +227,27 @@ class OmniTokenizer:
                         mapped = True
                         
             if not mapped and is_inference and concept not in self._known_concepts:
-                return [UnknownConcept(concept)]
-            
+                # BPE fallback: shatter into subwords so TokenEmbedder always
+                # receives valid, non-zero vectors (no more OOV annihilation).
+                subwords = self._bpe_fallback(concept)
+                for sw in subwords:
+                    self._known_concepts.add(sw)
+                try:
+                    import uchi.telemetry as _tel
+                    _tel.append("tokenizer", "bpe_splits",
+                                {"word": concept, "subwords": subwords})
+                    _tel.increment("tokenizer", "bpe_fallback_count")
+                except Exception:
+                    pass
+                return subwords
+
             self._cache[data] = concept
             self._known_concepts.add(concept)
+            try:
+                import uchi.telemetry as _tel
+                _tel.increment("tokenizer", "exact_dictionary_count")
+            except Exception:
+                pass
             return [concept]
             
         return [str(data)]

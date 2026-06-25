@@ -3,8 +3,8 @@ Shared pytest fixtures and patches.
 
 Patches:
 - OmniRouter._bootstrap_knowledge  — skips HuggingFace downloads
-- SSM update_value / train_dynamics — skips slow backward passes while still
-  allowing _bootstrap_persona to populate the trie with conversation turns
+- OmniRouter._bootstrap_persona    — skips AssociativeMemory flooding (~14s loop)
+- SSM update_value / train_dynamics — kept for backward compat with any callers
 """
 import pytest
 import torch
@@ -18,8 +18,31 @@ def _zero_loss(*args, **kwargs):
 
 @pytest.fixture(autouse=True)
 def patch_omni_bootstraps():
-    """Speed up OmniRouter creation: skip knowledge downloads and SSM training."""
+    """Speed up OmniRouter creation: skip bootstraps and legacy SSM update hooks."""
     with patch("uchi.omni_router.OmniRouter._bootstrap_knowledge"), \
+         patch("uchi.omni_router.OmniRouter._bootstrap_persona"), \
          patch("uchi.neuro_symbolic.StateSpaceModel.update_value", _zero_loss), \
          patch("uchi.neuro_symbolic.StateSpaceModel.train_dynamics", _zero_loss):
+        yield
+
+
+@pytest.fixture
+def fast_convergent():
+    """
+    Mock ConvergentEngine.generate to return an instant stub result.
+
+    Apply to any test that exercises OmniRouter.chat() but does not need to
+    test the MCTS loop itself — prevents the full rollout budget from running
+    and keeps test suites under ~2 minutes.
+
+    Usage:
+        def test_something(fast_convergent):
+            router = OmniRouter(use_bpe=False)
+            reply = router.chat("hello")
+            ...
+    """
+    with patch(
+        "uchi.convergent_engine.ConvergentEngine.generate",
+        return_value=("text", ["mock", "response"], 0.5),
+    ):
         yield

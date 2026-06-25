@@ -90,31 +90,64 @@ ODUSP Daemon v0.2.0
 """
 
 def save_brain(router, path: str = "brain.uchi"):
-    """Serializes the entire Deterministic Cognitive Engine to disk (gzip-compressed)."""
-    import gzip
+    """Serializes the entire Deterministic Cognitive Engine to disk (gzip-compressed).
+
+    Writes to a temp file and atomically renames so a crash or concurrent
+    write never leaves a partial/corrupt brain.uchi.
+    """
+    import gzip, tempfile
     print(f"\n[+] Saving neural state to {path}...")
+    tmp_path = None
     try:
-        with gzip.open(path, "wb", compresslevel=6) as f:
+        dir_name = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        os.close(fd)
+        with gzip.open(tmp_path, "wb", compresslevel=6) as f:
             pickle.dump(router, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, path)
         print(f"[+] Brain successfully persisted. ({os.path.getsize(path) / 1024 / 1024:.1f} MB)")
     except Exception as e:
         print(f"[-] Failed to save brain: {e}")
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 def load_brain(path: str = "brain.uchi") -> OmniRouter:
-    """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle."""
+    """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle.
+    Automatically rebuilds the brain from scratch if missing or corrupted.
+    """
     import gzip
     print(f"[*] Loading persistent brain state from {path}...")
+    
+    if not os.path.exists(path):
+        print(f"[-] Brain file not found: {path}")
+        print("[*] Automatically triggering the Universal Builder Pipeline...")
+        from uchi.builder import build_full_brain
+        return build_full_brain(path)
+        
+    # Try gzip first; only fall through if the file genuinely isn't gzip-compressed
     try:
         with gzip.open(path, "rb") as f:
             return pickle.load(f)
-    except Exception:
-        pass
+    except gzip.BadGzipFile:
+        pass  # not a gzip file — try plain pickle
+    except Exception as e:
+        print(f"[-] Failed to load brain (gzip/pickle error): {e}")
+        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
+        from uchi.builder import build_full_brain
+        return build_full_brain(path)
+        
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
     except Exception as e:
         print(f"[-] Failed to load brain: {e}")
-        return None
+        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
+        from uchi.builder import build_full_brain
+        return build_full_brain(path)
 
 def preload_context(router, path: str):
     """

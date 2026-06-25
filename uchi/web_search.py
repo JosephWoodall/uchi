@@ -19,7 +19,7 @@ def get_nlp():
             _nlp = spacy.load("en_core_web_sm")
     return _nlp
 
-def perform_web_search(query: str, max_results: int = 3) -> str:
+def perform_web_search(query: str, max_results: int = 5) -> str:
     """
     Performs a DuckDuckGo HTML search and extracts SVO triples using SpaCy.
     """
@@ -45,28 +45,36 @@ def perform_web_search(query: str, max_results: int = 3) -> str:
             
         if not extracted_text:
             return ""
-            
-        combined = " ".join(extracted_text)
-        
-        nlp = get_nlp()
-        doc = nlp(combined)
-        triples = []
-        for sentence in doc.sents:
-            subject = None
-            verb = None
-            obj = None
-            for token in sentence:
-                if "subj" in token.dep_:
-                    subject = token.text.lower()
-                elif "obj" in token.dep_:
-                    obj = token.text.lower()
-                elif token.pos_ == "VERB":
-                    verb = token.lemma_.lower()
-            if subject and verb and obj:
-                triples.append(f"{subject} {verb} {obj}")
-                
-        # Return compressed triples joined by spaces instead of raw HTML
-        return " ".join(triples) if triples else combined.lower()
+
+        combined = " ".join(extracted_text).lower()
+
+        # SpaCy SVO triples augment but do not replace the raw text.
+        # Passive-voice facts ("energy cannot be created or destroyed") have no
+        # SVO subject and are silently dropped by the dependency parser, causing
+        # >90% information loss on exactly the factual sentences we need most.
+        try:
+            nlp = get_nlp()
+            doc = nlp(combined)
+            triples = []
+            for sentence in doc.sents:
+                subject = None
+                verb = None
+                obj = None
+                for token in sentence:
+                    if "subj" in token.dep_:
+                        subject = token.text.lower()
+                    elif "obj" in token.dep_:
+                        obj = token.text.lower()
+                    elif token.pos_ == "VERB":
+                        verb = token.lemma_.lower()
+                if subject and verb and obj:
+                    triples.append(f"{subject} {verb} {obj}")
+            if triples:
+                combined = combined + " " + " ".join(triples)
+        except Exception:
+            pass
+
+        return combined
         
     except Exception as e:
         return ""

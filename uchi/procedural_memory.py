@@ -11,6 +11,12 @@ class ProceduralMemory:
         "math":       ["break into arithmetic steps", "compute each step"],
         "search":     ["use web_search to retrieve relevant knowledge", "synthesize retrieved context into answer"],
         "document":   ["ingest document", "retrieve relevant sections"],
+        # Analytical ML intents
+        "classify":   ["load data file", "train TabularPredictor", "report accuracy"],
+        "regress":    ["load data file", "train TabularRegressor", "report mean absolute error"],
+        "anomaly":    ["load data file", "train AnomalyDetector", "report anomalous rows"],
+        "forecast":   ["load time series", "fit MultivariateTSPredictor", "forecast N steps ahead"],
+        "tsclassify": ["load window data", "train TimeSeriesClassifier", "report accuracy"],
     }
 
     def __init__(self, path: str = "uchi_procedural_memory.json"):
@@ -22,15 +28,39 @@ class ProceduralMemory:
             self._store = dict(self._DEFAULTS)
             self._save()
 
-    # Synonym map: query terms → store key
+    # Synonym map: query terms → intent key
     _SYNONYMS = {
+        # Code
         "python": "code", "function": "code", "script": "code",
-        "class": "code", "debug": "code", "program": "code",
+        "debug": "code", "program": "code", "implement": "code",
+        # Physics / math (note: "class" kept for code, not misrouted)
         "formula": "physics", "force": "physics", "energy": "physics",
         "velocity": "physics", "kinetic": "physics", "momentum": "physics",
         "calculate": "math", "equation": "math", "compute": "math",
-        "retrieve": "search", "find": "search", "look up": "search",
-        "document": "document", "pdf": "document", "file": "document",
+        # Search / document
+        "retrieve": "search", "look up": "search",
+        "document": "document", "pdf": "document",
+        # Classification
+        "classify": "classify", "classification": "classify",
+        "predict class": "classify", "label": "classify",
+        "categorize": "classify", "category": "classify",
+        "churn": "classify", "diagnose": "classify",
+        # Regression
+        "regression": "regress", "regress": "regress",
+        "predict value": "regress", "estimate": "regress",
+        # Anomaly detection
+        "anomaly": "anomaly", "anomalies": "anomaly",
+        "outlier": "anomaly", "outliers": "anomaly",
+        "unusual": "anomaly", "abnormal": "anomaly",
+        "suspicious": "anomaly", "weird": "anomaly",
+        "strange": "anomaly", "detect": "anomaly",
+        # Forecasting
+        "forecast": "forecast", "forecasting": "forecast",
+        "predict future": "forecast", "future": "forecast",
+        "next step": "forecast", "trend": "forecast",
+        # Time series classification
+        "time series": "tsclassify", "timeseries": "tsclassify",
+        "window": "tsclassify", "ecg": "tsclassify", "har": "tsclassify",
     }
 
     def retrieve(self, query: str) -> Optional[str]:

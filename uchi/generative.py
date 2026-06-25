@@ -471,7 +471,7 @@ class SequenceGenerator(BaseEstimator):
 
         if self.omni_tokenizer:
             tokens = [self.omni_tokenizer.tokenize(t) for t in tokens]
-        
+
         saved  = self._pred.history[:]
         total  = 0.0
         for token in tokens:
@@ -481,6 +481,20 @@ class SequenceGenerator(BaseEstimator):
             self._pred.observe(token)
         self._pred.history = saved
         return total / len(tokens)
+
+    def peek_distribution(self, seed_tokens: list) -> dict:
+        """
+        Return the trie's next-token probability distribution given seed_tokens
+        without modifying any predictor state.  Safe to call at any time.
+        """
+        self._check_fitted()
+        saved = self._pred.history[:]
+        k = getattr(self._pred, 'k', len(seed_tokens))
+        self._pred.history = list(seed_tokens)[-k:]
+        self._pred.predict()
+        dist = dict(self._pred._last_distribution)
+        self._pred.history = saved
+        return dist
 
     @property
     def vocab_(self) -> set:
@@ -1060,7 +1074,11 @@ def _mcts_generate_from_predictor(
                         break
                         
                     # Semantic Context Masking Bonus
-                    if bias_context and str(next_tok).lower() in bias_context.lower():
+                    # Check both the full synset ID ("energy.n.01") and the word root
+                    # ("energy") so plain-text web content and lemmatized memory both match.
+                    _tok_str = str(next_tok).lower()
+                    _tok_word = _tok_str.split(".")[0]
+                    if bias_context and (_tok_str in bias_context.lower() or _tok_word in bias_context.lower()):
                         sim_val += 1.0
                         
                     p.observe(next_tok)

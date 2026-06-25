@@ -173,22 +173,24 @@ class TestSpecialistPool:
     def test_falls_back_to_default(self):
         from uchi.specialist_pool import SpecialistPool
         default = self._make_mock_router()
-        pool = SpecialistPool(default)
-        # No specialist brains on disk → always falls back
-        result = pool.route("code")
+        with patch("uchi.specialist_pool.os.path.exists", return_value=False):
+            pool = SpecialistPool(default)
+            result = pool.route("code")
         assert result is default
 
     def test_has_specialist_false_when_no_brain(self):
         from uchi.specialist_pool import SpecialistPool
-        pool = SpecialistPool(self._make_mock_router())
-        assert pool.has_specialist("code") is False
-        assert pool.has_specialist("math") is False
+        with patch("uchi.specialist_pool.os.path.exists", return_value=False):
+            pool = SpecialistPool(self._make_mock_router())
+            assert pool.has_specialist("code") is False
+            assert pool.has_specialist("math") is False
 
     def test_get_predictor_returns_default_predictor(self):
         from uchi.specialist_pool import SpecialistPool
         default = self._make_mock_router()
-        pool = SpecialistPool(default)
-        pred = pool.get_predictor("code")
+        with patch("uchi.specialist_pool.os.path.exists", return_value=False):
+            pool = SpecialistPool(default)
+            pred = pool.get_predictor("code")
         assert pred is default.predictor
 
     def test_intent_mapping_unknown_falls_to_convo(self):
@@ -200,8 +202,9 @@ class TestSpecialistPool:
     def test_route_unknown_intent_returns_default(self):
         from uchi.specialist_pool import SpecialistPool
         default = self._make_mock_router()
-        pool = SpecialistPool(default)
-        result = pool.route("unknown_intent_xyz")
+        with patch("uchi.specialist_pool.os.path.exists", return_value=False):
+            pool = SpecialistPool(default)
+            result = pool.route("unknown_intent_xyz")
         assert result is default
 
 

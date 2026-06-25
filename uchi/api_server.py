@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     yield
     # Persist on shutdown
     if _router is not None:
+        _router.stop_background_jobs()
         save_brain(_router)
 
 
@@ -42,6 +43,16 @@ class ChatResponse(BaseModel):
 class SkillResponse(BaseModel):
     reply: str
     skill: str
+
+
+class BootstrapRequest(BaseModel):
+    text: str | None = None
+    url: str | None = None
+
+
+class BootstrapResponse(BaseModel):
+    tokens_ingested: int
+    source: str
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -116,6 +127,60 @@ async def metrics_endpoint():
         "skills_loaded": len(_router.skills.list_skills()),
         "mode": "deterministic",
     }
+
+
+@app.get("/telemetry")
+async def telemetry_endpoint():
+    """
+    Exposes deep internal engine telemetry for the TUI and Cognitive Debugger.
+    Pulls data from the central telemetry singleton if available.
+    """
+    try:
+        import uchi.telemetry as _tel
+        return _tel.dump_all()
+    except Exception as e:
+        return {"error": f"Telemetry not available: {e}"}
+
+
+@app.post("/bootstrap", response_model=BootstrapResponse)
+async def bootstrap_endpoint(request: BootstrapRequest):
+    """
+    Ingest raw text or a URL into Uchi's trie and AssociativeMemory.
+
+    Accepts JSON body with one of:
+      - `{"text": "raw text to learn"}` — streams the text directly
+      - `{"url": "https://..."}` — fetches the page, strips HTML, then streams
+
+    Once Uchi has tool-routing, it can call this endpoint autonomously to
+    permanently memorise content it discovers via web search.
+    """
+    if not request.text and not request.url:
+        raise HTTPException(status_code=400, detail="Provide either 'text' or 'url'.")
+
+    raw_text = request.text or ""
+    source = "text"
+
+    if request.url:
+        source = request.url
+        try:
+            import requests as _req
+            from bs4 import BeautifulSoup
+            resp = _req.get(request.url, timeout=10, headers={"User-Agent": "Uchi/1.0"})
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            raw_text = soup.get_text(separator=" ", strip=True)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {exc}")
+
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="No usable text found.")
+
+    tokens = _router.tokenizer.tokenize(raw_text.split(), is_inference=False)
+    _router.stream(tokens)
+    save_brain(_router)
+    return BootstrapResponse(tokens_ingested=len(tokens), source=source)
 
 
 @app.get("/debug/walk")

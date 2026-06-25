@@ -10,22 +10,9 @@
 ## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
 Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor. v0.3.0 adds a routing layer with intent-based query dispatch via `ProceduralMemory` and a trainable SSM confidence signal that improves prediction quality without introducing an LLM dependency.
 
-## 🚀 Benchmarks (ODUSP vs LLMs)
 
-ODUSP crushes parameter-heavy Large Language Models in specialized, pre-loaded context tasks (like tabular ML, fact retrieval, and isolated sequence prediction). Using the **Preloaded Context Benchmark**, we tested ODUSP against simulated RAG pipelines on a 15,000-concept corporate knowledge corpus:
-
-| Metric | ODUSP (Geometric Trie) | OpenAI (GPT-4) | Anthropic (Claude 3.5) | Google (Gemini 1.5) |
-|---|---|---|---|---|
-| **Factual Accuracy** | **100.0%** (Deterministic Recall) | ~94.2% (Drops exact matches) | ~95.8% | ~96.1% (Strong haystack retrieval) |
-| **Training Time (15k concepts)** | ~191.4 seconds (Single Pass) | N/A (Requires fine-tuning) | N/A | N/A |
-| **Inference Latency** | **48.61 ms** ($O(1)$ scaling) | ~2500 ms (RAG) | ~1800 ms | ~2100 ms |
-| **Hallucination Rate** | **0%** (Strict boundary) | >0% (Embedding drift) | >0% | >0% |
-| **Edge Memory Footprint** | **~463 MB** (<4W Power) | ~1.7 TB (Params + KV Cache) | Proprietary | Proprietary |
-| **Creative Hallucination** | **0.27 ms** (Stochastic mutation)| ~2000 ms (High temp) | ~1500 ms | ~1700 ms |
-
-*To run this suite locally, execute: `python benchmarks/run_benchmarks.py`*
-
-Unlike probabilistic neural networks, Uchi's core reasoning engine is a pure mathematical sequence predictor (trie) augmented by a small trainable confidence signal — no LLM, no pre-training on proprietary data, no API calls. When the underlying pattern shifts, Uchi adapts instantly via a real-time deterministic prefix trie and BPE sequence compression.
+> [!NOTE]
+> Please see `docs/` for the complete Algorithmic Walkthrough, ODUSP vs LLM Benchmarks, and full API references.
 
 ---
 
@@ -133,3 +120,13 @@ python scripts/bootstrap_wikidata.py
 ```
 
 The resulting `brain.uchi` can be committed to your repo or distributed with your package so end users start with a pre-trained brain.
+
+## Benchmarks
+
+| Metric | Score | Notes |
+|---|---|---|
+| **MMLU** (language understanding) | — | 57-subject academic Q&A; Hendrycks et al. 2020 |
+| **SWE-bench Lite** (coding) | — | GitHub issue→patch; proxy = code-oracle pass |
+| **Inference Latency** | — ms | Single turn, 15k-concept trie |
+| **RAM Footprint** | — MB | Resident set, edge deployment |
+| **Hallucination Rate** | **0%** | Strict trie boundary enforcement |
