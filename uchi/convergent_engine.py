@@ -232,10 +232,14 @@ class ConvergentEngine:
                 seed += ["<|user|>"] + list(q_toks)[:6] + ["<|assistant|>"] + list(r_toks)[:6]
             seed += ["<|user|>"] + concepts + ["<|assistant|>"]
 
-            # Pre-flight classification: peek trie at seed prefix to estimate
-            # answer length and budget needed. Short factual queries get tiny
-            # budgets (5 rollouts, 5 tokens); generative gets the full budget.
-            _profile = self._preflight_classify(seed)
+            # Pre-flight classification: peek trie at CURRENT QUESTION slice only.
+            # seed may be prefixed with conversation history; seed[-8:] would land
+            # in the middle of a prior turn when history is long. Build the
+            # current-question-only prefix so the trie peek is always accurate.
+            # Use full concepts (not [-6:]) — _preflight_classify's own [-8:] window
+            # does the trimming, so the last word of a 7+ token question is preserved.
+            _current_q_prefix = ["<|user|>"] + concepts + ["<|assistant|>"]
+            _profile = self._preflight_classify(_current_q_prefix)
             _candidate_tokens = _profile["candidate_tokens"]
             _query_type       = _profile["query_type"]
             _mcts_sims        = _profile["mcts_sims"]
@@ -248,29 +252,46 @@ class ConvergentEngine:
 
             # Fire greedy bypass when:
             #   a) SSM is confident + trie is peaked (trained brain, normal path), OR
-            #   b) Trie entropy is near-zero (freshly streamed fact with only one child)
-            #      — an untrained SSM shouldn't block O(1) recall of an unambiguous path.
+            #   b) Trie entropy is near-zero at the concept prefix (clear single path), OR
+            #   c) Pre-flight classified the query as factual — the full-seed peek already
+            #      showed a peaked distribution. MCTS is the wrong tool here: it explores
+            #      random paths rather than following the peaked trie node. Greedy O(1) is
+            #      strictly better for factual recall.
             _greedy_by_ssm = (
                 initial_value is not None
                 and initial_value > GREEDY_CONF
                 and trie_entropy < GREEDY_ENTROPY_CAP
             )
             _greedy_by_entropy = trie_entropy < GREEDY_ENTROPY_FLOOR
-            if bias_context is None and (_greedy_by_ssm or _greedy_by_entropy):
+            _greedy_by_preflight = _query_type in ("factual_short", "factual_long")
+            # Preflight overrides the bias_context guard: if the pre-flight showed the
+            # trie has a peaked answer path, memory retrieval bias is noise, not signal.
+            if _greedy_by_preflight or (bias_context is None and (_greedy_by_ssm or _greedy_by_entropy)):
                 _v = f"{initial_value:.3f}" if initial_value is not None else "n/a"
-                _reason = "entropy" if _greedy_by_entropy and not _greedy_by_ssm else "ssm+entropy"
+                _reason = (
+                    "preflight" if _greedy_by_preflight and not _greedy_by_ssm and not _greedy_by_entropy
+                    else "entropy" if _greedy_by_entropy and not _greedy_by_ssm
+                    else "ssm+entropy"
+                )
                 _think(f"[bold #3fb950]greedy bypass ({_reason})  value={_v}  H={trie_entropy:.3f}[/bold #3fb950]")
                 try:
+                    # For preflight-triggered bypass, use the current-question-only seed.
+                    # The full seed includes conversation history, which creates a trie path
+                    # that was never streamed. The fact was streamed as a bare Q→A pair.
+                    _greedy_seed = _current_q_prefix if _greedy_by_preflight else seed
                     raw = self._router.predictor.generate(
                         n_tokens=_candidate_tokens,
-                        seed=seed,
+                        seed=_greedy_seed,
                         temperature=0.0,
                         use_mcts=False,
-                        bias_context=bias_context,
+                        bias_context=None,  # bias_context is noise for factual preflight path
                         mcts_sims=_mcts_sims,
                     )
                     reply = [t for t in raw if t not in _STOP_TOKENS]
-                    if reply and self._coherence.passes(reply, concepts, initial_value):
+                    # Preflight: trie peaked at 60%+ → SSM uncertainty should not override.
+                    # An untrained SSM returning -0.7 would reject a 67%-confidence trie answer.
+                    _oracle_ssm = None if _greedy_by_preflight else initial_value
+                    if reply and self._coherence.passes(reply, concepts, _oracle_ssm):
                         r_dist = self._safe_peek(reply[:8])
                         r_vec = encode(reply, r_dist)
                         best_text_score = similarity(q_vec, r_vec)

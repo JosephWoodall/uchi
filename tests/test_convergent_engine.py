@@ -42,8 +42,10 @@ class TestCoherenceOracle:
             ["what", "is", "gravity"],
         )
 
-    def test_rejects_too_short(self):
-        assert not self.oracle.passes(["ok"], ["hello"])
+    def test_rejects_empty(self):
+        # Min length is 1 — single-word factual answers ("paris", "1945") must pass.
+        # Empty list is the only invalid length.
+        assert not self.oracle.passes([], ["hello"])
 
     def test_rejects_high_overlap(self):
         # response is >60% overlap with query

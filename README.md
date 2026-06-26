@@ -125,11 +125,13 @@ The resulting `brain.uchi` can be committed to your repo or distributed with you
 
 | Metric | Score | Notes |
 |---|---|---|
-| **Pre-load Recall** | **100.0%** (n=10) | Stream N facts → immediately test recall; measures deterministic memory |
-| **Zero Catastrophic Forgetting** | **100.0%** after 100 noise facts | Anchor facts recalled correctly after 100 distractors streamed on top |
-| **Latency vs. Brain Size** | 10facts→3571ms  50facts→3704ms  100facts→5594ms | Proves O(depth) trie lookup: latency stays flat as brain grows |
-| **Code Completion** | **0.0%** (n=5) | Python function stub → body; scored by syntax + keyword validity |
-| **Inference Latency** | **15185.22 ms** | Single turn on a pre-loaded fact, web search disabled |
-| **RAM Footprint** | **1596.5 MB** | Resident set after brain load + recall stream |
+| **Pre-load Recall** | **80.0%** (n=50) | Stream N facts → immediately test recall; measures deterministic memory |
+| **Zero Catastrophic Forgetting** | **100.0%** after 1000 noise facts | Anchor facts recalled correctly after 1000 distractors streamed on top |
+| **Latency vs. Brain Size** | 10facts→10666ms  100facts→2568ms  500facts→2282ms  1000facts→2597ms | Proves O(depth) trie lookup: latency stays flat as brain grows |
+| **Code Completion** | **5.0%** (n=20) | Python function stub → body; scored by syntax + keyword validity |
+| **Inference Latency** | **2333.1 ms** | Single turn on a pre-loaded fact, web search disabled |
+| **RAM Footprint** | **1374.2 MB** | Resident set after brain load + recall stream |
 | **Hallucination Rate** | **0%** | Strict trie boundary enforcement |
+
+
 

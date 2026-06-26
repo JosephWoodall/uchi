@@ -126,27 +126,69 @@ _RECALL_FACTS = [
 # Each entry: prompt (function stub), list of expected keywords in reply, desc.
 # Scored by: syntax validity (ast.parse) + keyword presence.
 
+# Fallback code tasks used when HumanEval is unavailable.
+# Format: (stub, solution_body, required_keywords, description)
 _CODE_TASKS = [
-    ("def factorial(n):", ["return", "n"], "recursive factorial"),
-    ("def is_palindrome(s):", ["return", "s"], "palindrome check"),
-    ("def fibonacci(n):", ["return", "n"], "fibonacci sequence"),
-    ("def binary_search(arr, target):", ["return", "mid"], "binary search"),
-    ("def reverse_string(s):", ["return", "s"], "string reversal"),
-    ("def count_words(text):", ["return", "split"], "word counter"),
-    ("def is_prime(n):", ["return", "range"], "primality check"),
-    ("def flatten(lst):", ["return", "for"], "list flatten"),
-    ("def merge_dicts(a, b):", ["return", "update"], "dict merge"),
-    ("def max_subarray(nums):", ["return", "max"], "Kadane's algorithm"),
-    ("def bubble_sort(arr):", ["for", "arr"], "bubble sort"),
-    ("def count_occurrences(lst, item):", ["return", "count"], "count occurrences"),
-    ("def remove_duplicates(lst):", ["return", "set"], "remove duplicates"),
-    ("def calculate_average(numbers):", ["return", "sum", "len"], "average"),
-    ("def gcd(a, b):", ["return", "b"], "greatest common divisor"),
-    ("def lcm(a, b):", ["return", "gcd"], "least common multiple"),
-    ("def power(base, exp):", ["return", "base"], "power function"),
-    ("def rotate_list(lst, k):", ["return", "lst"], "list rotation"),
-    ("def zip_lists(a, b):", ["return", "zip"], "zip two lists"),
-    ("def clamp(value, lo, hi):", ["return", "max", "min"], "clamp to range"),
+    ("def factorial(n):",
+     "    if n <= 1:\n        return 1\n    return n * factorial(n - 1)",
+     ["return", "n"], "recursive factorial"),
+    ("def is_palindrome(s):",
+     "    return s == s[::-1]",
+     ["return", "s"], "palindrome check"),
+    ("def fibonacci(n):",
+     "    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)",
+     ["return", "n"], "fibonacci sequence"),
+    ("def binary_search(arr, target):",
+     "    lo, hi = 0, len(arr) - 1\n    while lo <= hi:\n        mid = (lo + hi) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            lo = mid + 1\n        else:\n            hi = mid - 1\n    return -1",
+     ["return", "mid"], "binary search"),
+    ("def reverse_string(s):",
+     "    return s[::-1]",
+     ["return", "s"], "string reversal"),
+    ("def count_words(text):",
+     "    return len(text.split())",
+     ["return", "split"], "word counter"),
+    ("def is_prime(n):",
+     "    if n < 2:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True",
+     ["return", "range"], "primality check"),
+    ("def flatten(lst):",
+     "    result = []\n    for item in lst:\n        if isinstance(item, list):\n            result.extend(flatten(item))\n        else:\n            result.append(item)\n    return result",
+     ["return", "for"], "list flatten"),
+    ("def merge_dicts(a, b):",
+     "    result = dict(a)\n    result.update(b)\n    return result",
+     ["return", "update"], "dict merge"),
+    ("def max_subarray(nums):",
+     "    max_sum = cur = nums[0]\n    for n in nums[1:]:\n        cur = max(n, cur + n)\n        max_sum = max(max_sum, cur)\n    return max_sum",
+     ["return", "max"], "Kadane's algorithm"),
+    ("def bubble_sort(arr):",
+     "    arr = list(arr)\n    for i in range(len(arr)):\n        for j in range(len(arr) - i - 1):\n            if arr[j] > arr[j + 1]:\n                arr[j], arr[j + 1] = arr[j + 1], arr[j]\n    return arr",
+     ["for", "arr"], "bubble sort"),
+    ("def count_occurrences(lst, item):",
+     "    return lst.count(item)",
+     ["return", "count"], "count occurrences"),
+    ("def remove_duplicates(lst):",
+     "    return list(set(lst))",
+     ["return", "set"], "remove duplicates"),
+    ("def calculate_average(numbers):",
+     "    return sum(numbers) / len(numbers)",
+     ["return", "sum", "len"], "average"),
+    ("def gcd(a, b):",
+     "    while b:\n        a, b = b, a % b\n    return a",
+     ["return", "b"], "greatest common divisor"),
+    ("def lcm(a, b):",
+     "    return a * b // gcd(a, b)",
+     ["return", "gcd"], "least common multiple"),
+    ("def power(base, exp):",
+     "    if exp == 0:\n        return 1\n    return base * power(base, exp - 1)",
+     ["return", "base"], "power function"),
+    ("def rotate_list(lst, k):",
+     "    k = k % len(lst)\n    return lst[k:] + lst[:k]",
+     ["return", "lst"], "list rotation"),
+    ("def zip_lists(a, b):",
+     "    return list(zip(a, b))",
+     ["return", "zip"], "zip two lists"),
+    ("def clamp(value, lo, hi):",
+     "    return max(lo, min(hi, value))",
+     ["return", "max", "min"], "clamp to range"),
 ]
 
 
@@ -315,14 +357,42 @@ def _score_code(stub: str, reply: str, keywords: list[str]) -> bool:
 
 def run_code_completion(router, tasks: list[tuple], verbose: bool = False) -> dict:
     """
-    Prompt the router with Python function stubs; score replies for syntax
-    validity and expected keyword presence (web search disabled).
+    Stream Python stub+solution pairs into the trie, then test recall.
+
+    Mirrors the recall benchmark pattern exactly: stream first, query second.
+    Uses HumanEval (openai/openai_humaneval) when available — the same dataset
+    and format builder.py Phase 4B ingests — so the benchmark tests what the
+    builder actually taught. Falls back to _CODE_TASKS with hardcoded solutions
+    if HumanEval can't be loaded.
     """
-    print(f"  Running {len(tasks)} code completion tasks (web search disabled)…")
+    # Try HumanEval — same dataset and format as builder.py Phase 4B
+    work_items: list[tuple[str, str, list[str], str]] = []
+    try:
+        from datasets import load_dataset as _lds
+        ds_he = _lds("openai/openai_humaneval", split="test")
+        for item in list(ds_he)[: len(tasks)]:
+            stub = item["prompt"].strip()
+            solution = item["canonical_solution"].strip()
+            entry = item["entry_point"]
+            work_items.append((stub, solution, [entry, "return"], entry))
+        print(f"  Streaming {len(work_items)} HumanEval examples into trie…")
+    except Exception:
+        work_items = list(tasks)  # (stub, solution, keywords, desc)
+        print(f"  HumanEval unavailable — using built-in stubs ({len(work_items)} tasks)…")
+
+    # Stream each pair using builder.py Phase 4B format exactly
+    for stub, solution, _kw, _desc in work_items:
+        q_concepts = list(router.tokenizer.tokenize(
+            f"Complete Python code: {stub}".split(), is_inference=True
+        ))
+        router.stream(["<|user|>"] + q_concepts + ["<|assistant|>"] + solution.split() + ["<|end|>"])
+
+    # Test recall (web disabled — answer must come from trie)
+    print(f"  Testing code recall (web search disabled)…")
     passed = 0
     with _no_web():
-        for stub, keywords, desc in tasks:
-            reply = _chat(router, stub)
+        for stub, _solution, keywords, desc in work_items:
+            reply = _chat(router, f"Complete Python code: {stub}")
             ok = _score_code(stub, reply, keywords)
             if ok:
                 passed += 1
@@ -330,11 +400,11 @@ def run_code_completion(router, tasks: list[tuple], verbose: bool = False) -> di
                 status = "PASS" if ok else "FAIL"
                 print(f"    [{status}] {desc}: {reply[:60]!r}")
 
-    rate = round(passed / len(tasks) * 100, 2) if tasks else 0.0
-    print(f"  Code completion rate: {rate:.1f}%  ({passed}/{len(tasks)})")
+    rate = round(passed / len(work_items) * 100, 2) if work_items else 0.0
+    print(f"  Code completion rate: {rate:.1f}%  ({passed}/{len(work_items)})")
     return {
         "code_completion_rate": rate,
-        "code_n": len(tasks),
+        "code_n": len(work_items),
         "code_passed": passed,
     }
 

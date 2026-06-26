@@ -143,11 +143,7 @@ def build_full_brain(brain_path="brain.uchi"):
             router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
 
     # 4B: HumanEval (Algorithms)
-    ds_humaneval = _safe_load_dataset("openai_humaneval", "test")
-    if not ds_humaneval:
-        from datasets import load_dataset
-        try: ds_humaneval = load_dataset("openai_humaneval", split="test")
-        except: ds_humaneval = None
+    ds_humaneval = _safe_load_dataset("openai/openai_humaneval", "test")
     if ds_humaneval:
         ds_humaneval_subset = list(ds_humaneval)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_humaneval_subset, desc="Ingesting HumanEval (Algorithms)"):
@@ -169,21 +165,44 @@ def build_full_brain(brain_path="brain.uchi"):
 def _build_specialists(project_root):
     from uchi.omni_router import OmniRouter
     from uchi.cli import save_brain
-    
-    # Brain Code
+
+    # Brain Code — trained on HumanEval function completions
     print("  [*] Building brain_code.uchi...")
     r_code = OmniRouter(use_bpe=False)
-    r_code.stream(["<|user|>", "write", "python", "<|assistant|>", "def", "hello", "print", "<|end|>"])
+    ds_he = _safe_load_dataset("openai/openai_humaneval", "test")
+    if ds_he:
+        for item in tqdm(list(ds_he)[:KNOWLEDGE_LIMIT], desc="  brain_code ← HumanEval"):
+            text = (f"<|user|> Complete Python code:\n{item['prompt']} "
+                    f"<|assistant|> {item['canonical_solution']} <|end|>")
+            r_code.stream(r_code.tokenizer.tokenize(text.split(), is_inference=False))
+    else:
+        r_code.stream(["<|user|>", "complete", "python", "code", "<|assistant|>", "def", "f", "return", "<|end|>"])
     save_brain(r_code, os.path.join(project_root, "brain_code.uchi"))
-    
-    # Brain Math
+
+    # Brain Math — trained on GSM8K
     print("  [*] Building brain_math.uchi...")
     r_math = OmniRouter(use_bpe=False)
-    r_math.stream(["<|user|>", "math", "equation", "<|assistant|>", "1", "+", "1", "=", "2", "<|end|>"])
+    ds_math = _safe_load_dataset("gsm8k", "main")
+    if ds_math:
+        for item in tqdm(list(ds_math)[:KNOWLEDGE_LIMIT], desc="  brain_math ← GSM8K"):
+            text = f"<|user|> {item['question']} <|assistant|> {item['answer']} <|end|>"
+            r_math.stream(r_math.tokenizer.tokenize(text.split(), is_inference=False))
+    else:
+        r_math.stream(["<|user|>", "math", "equation", "<|assistant|>", "1", "+", "1", "=", "2", "<|end|>"])
     save_brain(r_math, os.path.join(project_root, "brain_math.uchi"))
-    
-    # Brain Convo
+
+    # Brain Convo — trained on OpenHermes conversational turns
     print("  [*] Building brain_convo.uchi...")
     r_convo = OmniRouter(use_bpe=False)
-    r_convo.stream(["<|user|>", "hello", "<|assistant|>", "hi", "how", "are", "you", "<|end|>"])
+    ds_convo = _safe_load_dataset("teknium/OpenHermes-2.5", f"train[:{KNOWLEDGE_LIMIT}]")
+    if ds_convo:
+        for item in tqdm(ds_convo, desc="  brain_convo ← OpenHermes"):
+            text = ""
+            for turn in item.get("conversations", []):
+                role = "<|user|>" if turn.get("from") == "human" else "<|assistant|>"
+                text += f"{role} {turn.get('value', '')} "
+            if text:
+                r_convo.stream(r_convo.tokenizer.tokenize((text + "<|end|>").split(), is_inference=False))
+    else:
+        r_convo.stream(["<|user|>", "hello", "<|assistant|>", "hi", "how", "are", "you", "<|end|>"])
     save_brain(r_convo, os.path.join(project_root, "brain_convo.uchi"))
