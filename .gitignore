@@ -18,3 +18,8 @@ fix_indent.py
 patch_mcts.py
 test_gen.py
 test_tui.py
+# Build artifacts and temp files
+site/
+*.tmp
+replay.db
+.uchi/
