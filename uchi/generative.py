@@ -394,6 +394,8 @@ class SequenceGenerator(BaseEstimator):
         stop_tokens: list  | None      = None,
         use_mcts:    bool              = False,
         bias_context: str | None       = None,
+        mcts_sims:   int               = 3,
+        mcts_depth:  int               = 3,
     ) -> list:
         """
         Sample n_tokens auto-regressively.
@@ -414,8 +416,9 @@ class SequenceGenerator(BaseEstimator):
         if use_mcts:
             return _mcts_generate_from_predictor(
                 self._pred, n_tokens, seed_list,
-                n_sims=3, top_k_candidates=top_k if top_k is not None else 3,
-                lookahead_depth=3,
+                n_sims=mcts_sims,
+                top_k_candidates=top_k if top_k is not None else 3,
+                lookahead_depth=mcts_depth,
                 stop_tokens=set(stop_tokens) if stop_tokens else None,
                 tokenizer=getattr(self, '_tokenizer', None),
                 long_term_store=self.long_term_store,

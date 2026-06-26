@@ -1,164 +1,20 @@
-[
-  {
-    "timestamp": "2026-06-23T18:17:10.349948+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.125,
-    "knowledge_recall_rate": 0.25,
-    "average_prompt_entropy": 7.073272023984992
+{
+  "recall_accuracy": 100.0,
+  "recall_n": 10,
+  "recall_correct": 10,
+  "forgetting_retention_rate": 100.0,
+  "forgetting_anchors": 10,
+  "forgetting_noise_facts": 100,
+  "forgetting_correct": 10,
+  "latency_scaling": {
+    "10": 3571.24,
+    "50": 3704.08,
+    "100": 5593.65
   },
-  {
-    "timestamp": "2026-06-23T18:17:46.120717+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.375,
-    "knowledge_recall_rate": 0.25,
-    "average_prompt_entropy": 7.081214102887546
-  },
-  {
-    "timestamp": "2026-06-23T18:18:44.119561+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 1.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.081214102887546
-  },
-  {
-    "timestamp": "2026-06-23T18:19:35.422264+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 6.946233864332613
-  },
-  {
-    "timestamp": "2026-06-23T18:20:51.215461+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 1.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.081215657910634
-  },
-  {
-    "timestamp": "2026-06-23T18:21:50.612342+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 1.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.081214102873715
-  },
-  {
-    "timestamp": "2026-06-23T18:22:17.125522+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 1.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.081214102873715
-  },
-  {
-    "timestamp": "2026-06-23T18:22:52.561107+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 1.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.081214102873715
-  },
-  {
-    "timestamp": "2026-06-23T18:23:37.511013+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.096000676109754
-  },
-  {
-    "timestamp": "2026-06-23T18:24:52.569384+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.205619387837781
-  },
-  {
-    "timestamp": "2026-06-23T18:26:12.758426+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.198974020087134
-  },
-  {
-    "timestamp": "2026-06-23T18:27:30.871141+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 7.198964916369696
-  },
-  {
-    "timestamp": "2026-06-23T18:32:21.118391+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.75,
-    "average_prompt_entropy": 7.14097277925283
-  },
-  {
-    "timestamp": "2026-06-23T18:33:33.010669+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.75,
-    "average_prompt_entropy": 7.166781092930127
-  },
-  {
-    "timestamp": "2026-06-23T18:40:30.437715+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.2,
-    "self_correction_rate": 0.2,
-    "active_teaching_trigger_rate": 0.125,
-    "knowledge_recall_rate": 0.75,
-    "average_prompt_entropy": 7.276661204768218
-  },
-  {
-    "timestamp": "2026-06-23T18:59:50.784984+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.2,
-    "self_correction_rate": 0.2,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.75,
-    "average_prompt_entropy": 7.254991492326196
-  },
-  {
-    "timestamp": "2026-06-23T19:09:06.611769+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.0,
-    "self_correction_rate": 0.0,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.0,
-    "average_prompt_entropy": 6.991384584890506
-  },
-  {
-    "timestamp": "2026-06-23T19:09:36.859250+00:00",
-    "uchi_version": "0.2.0",
-    "pass_at_1": 0.2,
-    "self_correction_rate": 0.2,
-    "active_teaching_trigger_rate": 0.0,
-    "knowledge_recall_rate": 0.75,
-    "average_prompt_entropy": 7.2510173841590335
-  }
-]
+  "latency_scaling_probe": "what is the capital of france",
+  "inference_latency_ms": 15185.22,
+  "memory_mb": 1596.5,
+  "code_completion_rate": 0.0,
+  "code_n": 5,
+  "code_passed": 0
+}

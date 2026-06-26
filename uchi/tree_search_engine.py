@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 
 _log = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class TreeSearchEngine:
         seed: List[str],
         max_nodes: int = DEFAULT_MAX_NODES,
         max_depth: int = DEFAULT_MAX_DEPTH,
+        time_limit_s: float = 5.0,
     ) -> List[str]:
         """
         Run PUCT tree search from seed.
@@ -147,8 +149,13 @@ class TreeSearchEngine:
         root = _Node(tokens=list(seed), value=root_val, prior=1.0, hidden=root_hidden, kv_cache=root_kv)
         root.visits = 1
 
+        _search_start = time.perf_counter()
+
         # Outer loop: iterate in batches of BATCH_SIZE for parallelised leaf eval.
         for _batch_start in range(0, max_nodes, BATCH_SIZE):
+            if time.perf_counter() - _search_start > time_limit_s:
+                logging.debug("TreeSearchEngine: time_limit_s=%.1f reached at batch %d", time_limit_s, _batch_start)
+                break
             _batch_n = min(BATCH_SIZE, max_nodes - _batch_start)
 
             # ── Phase 1: select BATCH_SIZE diverse leaves via virtual loss ────────

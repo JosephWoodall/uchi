@@ -306,7 +306,7 @@ class UchiApp(App):
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", RichLog)
         log.write("[bold #7dcfff]╔══════════════════════════════════════════╗[/bold #7dcfff]")
-        log.write("[bold #7dcfff]║    Uchi ODUSP  ◈  v0.3.0                ║[/bold #7dcfff]")
+        log.write("[bold #7dcfff]║    Uchi ODUSP  ◈  v0.2.0                ║[/bold #7dcfff]")
         log.write("[bold #7dcfff]║    Omni-modal Deterministic Predictor    ║[/bold #7dcfff]")
         log.write("[bold #7dcfff]╚══════════════════════════════════════════╝[/bold #7dcfff]")
         log.write("[dim]Type [bold]/help[/bold] for commands and skills, or start chatting.[/dim]\n")

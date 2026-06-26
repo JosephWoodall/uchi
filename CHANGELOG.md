@@ -2,7 +2,7 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
-## [0.3.2] - RAG Pipeline & Memory Retrieval Hardening
+## [0.2.0] - RAG Pipeline & Memory Retrieval Hardening
 - **Web-Content Direct Return**: When MCTS fails to generate from a sparsely-trained trie, retrieved web content is returned directly via a sentinel tag — preventing silent hallucination when factual retrieval is available.
 - **Memory False-Positive Filter**: Added keyword-overlap guard on cosine memory matches; rejects SSM false positives where stored text shares no content words with the query (common on partially-trained SSMs scoring ~1.0 with zero semantic overlap).
 - **Greedy Bypass Skip for Bias Context**: Convergent engine no longer takes the O(1) greedy bypass when `bias_context` is set — greedy path ignores bias, so the full MCTS rollout now runs to apply the retrieval bonus.

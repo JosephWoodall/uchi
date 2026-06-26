@@ -24,28 +24,30 @@ Architecture (per query)
 
 Constants
 ---------
-  MAX_BUDGET        = 50      maximum MCTS rollouts per query
+  MAX_BUDGET        = 20      maximum MCTS rollouts per query
   MIN_ROLLOUTS      = 3       always run at least this many rollouts
   TOKEN_DIVERSITY_E = 0.25    stop when Jaccard diversity drops below this
   ABSOLUTE_FLOOR    = 0.3     minimum cosine for tool dispatch
   MARGIN            = 0.05    tool must beat best text by this margin
-  CANDIDATE_TOKENS  = 45      tokens generated per MCTS rollout
+  CANDIDATE_TOKENS  = 12      tokens generated per MCTS rollout
+  MCTS_WALL_BUDGET_S = 8.0   hard wall-clock cap on the rollout loop
 """
 from __future__ import annotations
 
 import ast
 import logging
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 
-MAX_BUDGET        = 50
+MAX_BUDGET        = 20   # was 50; convergence detection stops most runs at 3–8
 MIN_ROLLOUTS      = 3
 TOKEN_DIVERSITY_E = 0.25
 ABSOLUTE_FLOOR    = 0.3
 MARGIN            = 0.05
-CANDIDATE_TOKENS  = 45
+CANDIDATE_TOKENS  = 12   # was 45; factual answers are 1–3 words, 12 is generous
 
 # Adaptive computation gate thresholds.
 # High confidence (value head > GREEDY_CONF and trie entropy < GREEDY_ENTROPY_CAP):
@@ -53,9 +55,11 @@ CANDIDATE_TOKENS  = 45
 # Low confidence (value < UNCERTAIN_FLOOR): scale the rollout budget up by
 #   BUDGET_SCALE_UNCERTAIN to invest saved compute into hard queries.
 GREEDY_CONF        = 0.85
-GREEDY_ENTROPY_CAP = 0.6
+GREEDY_ENTROPY_CAP = 1.5  # was 0.6; allow moderately peaked distributions through
+GREEDY_ENTROPY_FLOOR = 0.05  # near-zero entropy → clear trie path, bypass regardless of SSM
 UNCERTAIN_FLOOR    = 0.0
 BUDGET_SCALE_UNCERTAIN = 2
+MCTS_WALL_BUDGET_S = 8.0   # hard wall-clock limit on the rollout loop (seconds)
 
 _STOP_TOKENS = frozenset({"<|user|>", "<|assistant|>", "<|end|>"})
 
@@ -79,7 +83,10 @@ class CoherenceOracle:
         query_tokens: List[str],
         ssm_value: Optional[float] = None,
     ) -> bool:
-        if len(candidate_tokens) < 5:
+        # Allow single-word factual answers ("paris", "1945", "au").
+        # The old threshold of 5 caused all factual recalls to fail the oracle,
+        # triggering tree-search escalation on every short answer.
+        if len(candidate_tokens) < 1:
             return False
 
         query_set = set(query_tokens)
@@ -225,20 +232,42 @@ class ConvergentEngine:
                 seed += ["<|user|>"] + list(q_toks)[:6] + ["<|assistant|>"] + list(r_toks)[:6]
             seed += ["<|user|>"] + concepts + ["<|assistant|>"]
 
-            if (
-                bias_context is None  # bias_context needs MCTS to apply; skip greedy
-                and initial_value is not None
+            # Pre-flight classification: peek trie at seed prefix to estimate
+            # answer length and budget needed. Short factual queries get tiny
+            # budgets (5 rollouts, 5 tokens); generative gets the full budget.
+            _profile = self._preflight_classify(seed)
+            _candidate_tokens = _profile["candidate_tokens"]
+            _query_type       = _profile["query_type"]
+            _mcts_sims        = _profile["mcts_sims"]
+            _think(
+                f"[dim]query type: [bold]{_query_type}[/bold]"
+                f"  candidate_tokens={_candidate_tokens}"
+                f"  max_budget={_profile['max_budget']}"
+                f"  mcts_sims={_mcts_sims}[/dim]"
+            )
+
+            # Fire greedy bypass when:
+            #   a) SSM is confident + trie is peaked (trained brain, normal path), OR
+            #   b) Trie entropy is near-zero (freshly streamed fact with only one child)
+            #      — an untrained SSM shouldn't block O(1) recall of an unambiguous path.
+            _greedy_by_ssm = (
+                initial_value is not None
                 and initial_value > GREEDY_CONF
                 and trie_entropy < GREEDY_ENTROPY_CAP
-            ):
-                _think(f"[bold #3fb950]greedy bypass  value={initial_value:.3f} > {GREEDY_CONF}  H={trie_entropy:.3f} < {GREEDY_ENTROPY_CAP}[/bold #3fb950]")
+            )
+            _greedy_by_entropy = trie_entropy < GREEDY_ENTROPY_FLOOR
+            if bias_context is None and (_greedy_by_ssm or _greedy_by_entropy):
+                _v = f"{initial_value:.3f}" if initial_value is not None else "n/a"
+                _reason = "entropy" if _greedy_by_entropy and not _greedy_by_ssm else "ssm+entropy"
+                _think(f"[bold #3fb950]greedy bypass ({_reason})  value={_v}  H={trie_entropy:.3f}[/bold #3fb950]")
                 try:
                     raw = self._router.predictor.generate(
-                        n_tokens=CANDIDATE_TOKENS,
+                        n_tokens=_candidate_tokens,
                         seed=seed,
                         temperature=0.0,
                         use_mcts=False,
                         bias_context=bias_context,
+                        mcts_sims=_mcts_sims,
                     )
                     reply = [t for t in raw if t not in _STOP_TOKENS]
                     if reply and self._coherence.passes(reply, concepts, initial_value):
@@ -259,33 +288,36 @@ class ConvergentEngine:
                 except Exception as exc:
                     _log.debug("ConvergentEngine: greedy bypass failed: %s", exc)
 
-            adaptive_budget = MAX_BUDGET
+            adaptive_budget = _profile["max_budget"]
             if initial_value is not None and initial_value < UNCERTAIN_FLOOR:
-                adaptive_budget = min(MAX_BUDGET * BUDGET_SCALE_UNCERTAIN, 100)
+                adaptive_budget = min(adaptive_budget * BUDGET_SCALE_UNCERTAIN, 100)
                 _think(f"[yellow]low confidence — budget expanded to {adaptive_budget}[/yellow]")
             else:
                 _think(f"[dim]MCTS budget={adaptive_budget}  min_rollouts={MIN_ROLLOUTS}[/dim]")
 
-            # 4. MCTS rollout loop at full candidate length
+            # 4. MCTS rollout loop
             candidates: List[Tuple[List[str], List[float]]] = []
+            _loop_start = time.perf_counter()
+            _first_tokens: List[str] = []  # track first token of each candidate
 
             for i in range(adaptive_budget):
                 temp = 0.1 + 0.02 * i
                 try:
                     raw = self._router.predictor.generate(
-                        n_tokens=CANDIDATE_TOKENS,
+                        n_tokens=_candidate_tokens,
                         seed=seed,
                         temperature=temp,
                         use_mcts=True,
                         bias_context=bias_context,
+                        mcts_sims=_mcts_sims,
                     )
-                    # Strip stop tokens to get the clean reply
                     reply = [t for t in raw if t not in _STOP_TOKENS]
                     if not reply:
                         continue
                     r_dist = self._safe_peek(reply[:8])
                     r_vec = encode(reply, r_dist)
                     candidates.append((reply, r_vec))
+                    _first_tokens.append(reply[0])
                 except Exception:
                     continue
 
@@ -296,12 +328,23 @@ class ConvergentEngine:
                     f"  preview=[italic]{' '.join(reply[:5])}…[/italic][/dim]"
                 )
 
-                # Adaptive stopping: trie is converging
+                # First-token convergence: if last 3 candidates agree on first token,
+                # the trie has committed to an answer — no benefit in more rollouts.
+                if len(_first_tokens) >= 3 and len(set(_first_tokens[-3:])) == 1:
+                    _think(f"[bold #3fb950]first-token convergence  tok='{_first_tokens[-1]}'  stopping at rollout {i + 1}[/bold #3fb950]")
+                    break
+
+                # Token-diversity convergence
                 if i + 1 >= MIN_ROLLOUTS:
                     div = token_diversity([t for t, _ in candidates])
                     if div < TOKEN_DIVERSITY_E:
                         _think(f"[bold #3fb950]converged  diversity={div:.3f} < {TOKEN_DIVERSITY_E}  stopping at rollout {i + 1}[/bold #3fb950]")
                         break
+
+                # Wall-clock safety budget
+                if time.perf_counter() - _loop_start > MCTS_WALL_BUDGET_S:
+                    _think(f"[yellow]wall budget {MCTS_WALL_BUDGET_S}s reached at rollout {i + 1}  using {len(candidates)} candidates[/yellow]")
+                    break
 
             if not candidates:
                 _think("[bold #f85149]no candidates generated -> uncertain[/bold #f85149]")
@@ -344,7 +387,7 @@ class ConvergentEngine:
                 try:
                     from uchi.tree_search_engine import TreeSearchEngine
                     tree_eng = TreeSearchEngine(self._router)
-                    tree_raw = tree_eng.search(seed)
+                    tree_raw = tree_eng.search(seed, time_limit_s=5.0)
                     tree_reply = [t for t in tree_raw if t not in _STOP_TOKENS]
                     if tree_reply:
                         r_dist = self._safe_peek(tree_reply[:8])
@@ -398,12 +441,54 @@ class ConvergentEngine:
             ssm = get_ssm()
             with torch.no_grad():
                 state = ssm.get_state(tokens)
-                # MoE value head routes internally; use forward() directly.
-                # score_heads() is available for diagnostics but the forward()
-                # weighted sum is more reliable for routing decisions.
                 return ssm.value(state).item()
         except Exception:
             return None
+
+    def _preflight_classify(self, seed: List[str]) -> dict:
+        """
+        Peek at the trie distribution from the seed to estimate answer characteristics.
+
+        Follows the argmax path up to 8 steps to measure effective depth, then
+        combines path depth and distribution entropy to classify the query type.
+        Returns a budget profile: {candidate_tokens, max_budget, mcts_sims, query_type}.
+        """
+        cursor = seed[-8:] if len(seed) >= 8 else seed[:]
+        dist = self._safe_peek(cursor)
+        if not dist:
+            return {"candidate_tokens": CANDIDATE_TOKENS, "max_budget": MAX_BUDGET, "mcts_sims": 3, "query_type": "generative"}
+
+        entropy = -sum(p * math.log(p + 1e-9) for p in dist.values())
+
+        # Walk the argmax path until it branches or hits a stop token.
+        deterministic_depth = 0
+        for _ in range(8):
+            step_dist = self._safe_peek(cursor)
+            if not step_dist:
+                break
+            top_tok = max(step_dist, key=step_dist.get)
+            top_prob = step_dist[top_tok]
+            if top_tok in _STOP_TOKENS or top_prob < 0.6:
+                break
+            cursor = cursor + [top_tok]
+            deterministic_depth += 1
+            if top_prob > 0.95:
+                # Near-certain continuation — keep walking.
+                continue
+            break
+
+        seed_text = " ".join(seed[-12:]).lower()
+        is_code = any(kw in seed_text for kw in ("def ", "class ", "import ", "return", "lambda", "->"))
+
+        if is_code:
+            return {"candidate_tokens": 20, "max_budget": MAX_BUDGET, "mcts_sims": 3, "query_type": "code"}
+        elif entropy < 0.5 or deterministic_depth <= 2:
+            # Short, peaked path — factual recall (e.g. "paris", "1945", "au")
+            return {"candidate_tokens": 5, "max_budget": 5, "mcts_sims": 1, "query_type": "factual_short"}
+        elif entropy < 1.5 or deterministic_depth <= 5:
+            return {"candidate_tokens": 8, "max_budget": 10, "mcts_sims": 2, "query_type": "factual_long"}
+        else:
+            return {"candidate_tokens": CANDIDATE_TOKENS, "max_budget": MAX_BUDGET, "mcts_sims": 3, "query_type": "generative"}
 
 
 # ── self-consistency reward ───────────────────────────────────────────────────
