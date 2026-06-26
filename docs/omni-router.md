@@ -22,9 +22,9 @@ By wrapping the `OmniTokenizer`, `OnlineTokenizer`, `AssociativeMemory`, and `Se
 ### The Ultimate Benefit
 The `OmniRouter` fundamentally transforms Uchi from a statistical math tool into a **Deterministic LLM**. It grants enterprises the ability to achieve LLM-level creative generalization, Multi-Modal ad-hoc question answering, and infinite lifelong context—all running in $O(1)$ RAM on an edge device with absolutely zero risk of neural hallucination.
 
-## Routing Layer (v0.3.0)
+## Routing Layer (v0.2.0)
 
-v0.3.0 adds a structured routing layer that sits in front of the trie and the SSM, improving intent handling, retrieval quality, and cold-start knowledge.
+v0.2.0 adds a structured routing layer that sits in front of the trie and the SSM, improving intent handling, retrieval quality, and cold-start knowledge.
 
 ### ProceduralMemory
 

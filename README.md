@@ -8,7 +8,7 @@
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
 ## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
-Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It crushes massive context histories via Phase 4 BPE compression, storing concepts in a zero-shot Fractal Attention memory buffer that mimics biological synesthesia. It is not an LLM; it is a pure mathematical sequence predictor. v0.3.0 adds a routing layer with intent-based query dispatch via `ProceduralMemory` and a trainable SSM confidence signal that improves prediction quality without introducing an LLM dependency.
+Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It adds a structured routing layer with intent-based query dispatch via `ProceduralMemory`, a trainable SSM confidence signal via GRPO, persistent vector memory, TUI, REST API, and SDK — all without introducing an LLM dependency.
 
 
 > [!NOTE]
@@ -177,7 +177,7 @@ The pattern is deliberate: latency at 1 000 facts is the same as at 100 facts be
 
 ### Inference Latency — **2 333 ms** per turn
 
-Single chat turn on a pre-loaded fact, web search off. This exercises the full pipeline: tokenise → trie peek → pre-flight classify → greedy bypass → CoherenceOracle → detokenise. Down from 17 762 ms in v0.2.0 (7.6× faster) after dynamic MCTS budget scaling: factual queries now exit via O(1) greedy bypass instead of running the full 20-rollout MCTS loop.
+Single chat turn on a pre-loaded fact, web search off. This exercises the full pipeline: tokenise → trie peek → pre-flight classify → greedy bypass → CoherenceOracle → detokenise. Down from 17 762 ms in the pre-optimization baseline (7.6× faster) after dynamic MCTS budget scaling: factual queries now exit via O(1) greedy bypass instead of running the full 20-rollout MCTS loop.
 
 ---
 

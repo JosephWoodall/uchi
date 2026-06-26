@@ -91,7 +91,7 @@ Expanding from small samples to full datasets exposed a fundamental architectura
 
 ## Routing Layer
 
-v0.3.0 fixes four root problems that existed in the original `chat()` pipeline.
+v0.2.0 fixes four root problems that existed in the original `chat()` pipeline.
 
 **Problem 1: No intent extraction.** All queries entered the trie through a single pipeline regardless of whether they were code requests, math questions, or conversational turns, causing the trie to blend incompatible prediction contexts. Fix: `ProceduralMemory` classifies intent via keyword matching before tokenization and prepends a routing hint to the token stream.
 
