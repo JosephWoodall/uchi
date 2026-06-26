@@ -6,7 +6,6 @@ into a universal mathematical Concept ID stream.
 """
 import ast
 import difflib
-import numpy as np
 from .process import OntologicalState, OntologicalAction
 
 class UnknownConcept:
@@ -86,19 +85,10 @@ class OmniTokenizer:
                 self.use_wordnet = False
 
     def _cluster_image(self, path: str) -> str:
-        try:
-            import torch
-            from transformers import CLIPModel
-            return f"[IMG_EMBEDDING_HASH]"
-        except ImportError:
-            return f"[IMG_CONCEPT_{hash(path) % 1000}]"
+        return f"[IMG_CONCEPT_{hash(path) % 1000}]"
 
     def _cluster_audio(self, path: str) -> str:
-        try:
-            import librosa
-            return f"[AUDIO_EMBEDDING_HASH]"
-        except ImportError:
-            return f"[AUDIO_CONCEPT_{hash(path) % 1000}]"
+        return f"[AUDIO_CONCEPT_{hash(path) % 1000}]"
 
     def _hash_ast(self, code_str: str) -> list[str]:
         try:
@@ -107,15 +97,15 @@ class OmniTokenizer:
             for node in ast.walk(tree):
                 node_type = type(node).__name__
                 if isinstance(node, ast.Name):
-                    concepts.append(f"[AST_VAR]")
+                    concepts.append("[AST_VAR]")
                 elif isinstance(node, ast.FunctionDef):
-                    concepts.append(f"[AST_FUNC_DEF]")
+                    concepts.append("[AST_FUNC_DEF]")
                 elif isinstance(node, ast.For):
-                    concepts.append(f"[AST_FOR_LOOP]")
+                    concepts.append("[AST_FOR_LOOP]")
                 elif isinstance(node, ast.If):
-                    concepts.append(f"[AST_IF_COND]")
+                    concepts.append("[AST_IF_COND]")
                 elif isinstance(node, ast.Assign):
-                    concepts.append(f"[AST_ASSIGN]")
+                    concepts.append("[AST_ASSIGN]")
                 else:
                     concepts.append(f"[AST_NODE_{node_type}]")
             return concepts

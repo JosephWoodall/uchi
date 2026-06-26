@@ -67,6 +67,7 @@ __all__ = [
     "OntologicalAction",
     "LifelongSimulationEngine",
 
+    "AssociativeMemory",
     "OmniRouter",
     "OmniTokenizer"
 ]

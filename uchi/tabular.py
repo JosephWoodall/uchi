@@ -30,15 +30,18 @@ import random
 from typing import Any
 
 from .predictor import UniversalPredictor
-from .discretize import FeatureDiscretizer, LabelEncoder, _to_rows
+from .discretize import FeatureDiscretizer, LabelEncoder
 
 try:
     from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
     _SKLEARN = True
 except ImportError:
-    class BaseEstimator: pass
-    class ClassifierMixin: pass
-    class RegressorMixin: pass
+    class BaseEstimator:
+        pass
+    class ClassifierMixin:
+        pass
+    class RegressorMixin:
+        pass
     _SKLEARN = False
 
 _LABEL_NS  = '__label__'
@@ -185,7 +188,7 @@ class TabularPredictor(BaseEstimator, ClassifierMixin):
         rows   = self._disc.fit_transform(X)
         labels = list(y)
         self._lenc.fit(labels)
-        y_enc  = [self._lenc.encode(l) for l in labels]
+        y_enc  = [self._lenc.encode(lbl) for lbl in labels]
 
         n_feat = self._disc.n_features
         k      = n_feat if self.context_length is None else self.context_length
@@ -219,8 +222,8 @@ class TabularPredictor(BaseEstimator, ClassifierMixin):
                 for _ in range(self.n_epochs):
                     buffer_copy = self._replay_buffer[:]
                     self._rng.shuffle(buffer_copy)
-                    for r, l in buffer_copy:
-                        self._train_row(r, l)
+                    for r, lbl in buffer_copy:
+                        self._train_row(r, lbl)
                         
                 # Keep the last 20% to mix with incoming data (sliding window overlap)
                 keep = int(self._replay_batch_size * 0.2)

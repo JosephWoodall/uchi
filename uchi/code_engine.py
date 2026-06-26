@@ -15,7 +15,7 @@ import sys
 import tempfile
 import os
 import re
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 HOLE_PATTERN = re.compile(r'\?\?HOLE:([^?]+)\?\?')
 

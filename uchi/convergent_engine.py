@@ -133,7 +133,9 @@ class TieredCodeOracle:
             return False
 
         if bootstrapped:
-            import py_compile, tempfile, os
+            import py_compile
+            import tempfile
+            import os
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(

@@ -264,5 +264,6 @@ class TestOmniRouterSkillsAttribute:
         with patch("subprocess.Popen") as mock_popen:
             router._background_started = False
             router.start_background_jobs()
+            count_after_first = mock_popen.call_count
             router.start_background_jobs()  # second call — no-op
-            assert mock_popen.call_count <= 1
+            assert mock_popen.call_count == count_after_first

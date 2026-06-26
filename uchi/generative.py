@@ -45,12 +45,12 @@ try:
     from sklearn.base import BaseEstimator
     _SKLEARN = True
 except ImportError:
-    class BaseEstimator: pass
+    class BaseEstimator:
+        pass
     _SKLEARN = False
 
 # Lazy imports for optional components
 def _get_online_tokenizer():
-    from .online_tokenizer import OnlineTokenizer
     return OnlineTokenizer
 
 def _get_dual_predictor():
@@ -58,7 +58,6 @@ def _get_dual_predictor():
     return DualPredictor
 
 def _get_long_term_store():
-    from .long_term_store import LongTermStore
     return LongTermStore
 
 
@@ -607,7 +606,7 @@ class TabularGenerator(BaseEstimator):
         rows   = self._disc.fit_transform(X)
         labels = list(y)
         self._lenc.fit(labels)
-        y_enc  = [self._lenc.encode(l) for l in labels]
+        y_enc  = [self._lenc.encode(lbl) for lbl in labels]
 
         n_feat = self._disc.n_features
         k      = (n_feat + 1) if self.context_length is None else self.context_length
@@ -1004,7 +1003,6 @@ def _mcts_generate_from_predictor(
 ) -> list:
     """MCTS-guided token selection for Uchi."""
     import math
-    import random
     
     saved = p.history[:]
     p.history.clear()

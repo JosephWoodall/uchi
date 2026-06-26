@@ -1,7 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
-import re
 
 import spacy
 
@@ -76,5 +75,5 @@ def perform_web_search(query: str, max_results: int = 5) -> str:
 
         return combined
         
-    except Exception as e:
+    except Exception:
         return ""

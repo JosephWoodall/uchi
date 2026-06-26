@@ -7,7 +7,6 @@ single, coherent Omni-Modal architecture.
 """
 
 import threading
-from typing import List, Any
 from .omni_tokenizer import OmniTokenizer
 from .online_tokenizer import OnlineTokenizer
 from .memory import AssociativeMemory
@@ -166,7 +165,8 @@ class OmniRouter:
         if getattr(self, '_knowledge_bootstrapped', False):
             return
 
-        import os, sys
+        import os
+        import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
         try:
@@ -238,7 +238,9 @@ class OmniRouter:
         if not hasattr(self, '_daemon_procs'):
             self._daemon_procs = []
 
-        import sys, subprocess, os
+        import sys
+        import subprocess
+        import os
         scripts_dir = os.path.normpath(
             os.path.join(os.path.dirname(__file__), '..', 'scripts')
         )
@@ -450,7 +452,6 @@ class OmniRouter:
         """
         High-level Conversational API with GRPO RL, MoE routing, and REPL-oracle code.
         """
-        from uchi.omni_tokenizer import UnknownConcept
 
         # 1. Intent detection + procedural context prepend
         query_tokens = message.split()
@@ -473,10 +474,12 @@ class OmniRouter:
         if hasattr(self, 'last_sequence') and self.last_sequence:
             reward = 0.0
             if score_val > 0:
-                if callback: callback("reinforce", "Positive Momentum: Reinforcing previous sequence!")
+                if callback:
+                    callback("reinforce", "Positive Momentum: Reinforcing previous sequence!")
                 reward = 1.0
             elif score_val < 0:
-                if callback: callback("prune", "Synaptic Pruning: Eradicating previous hallucination!")
+                if callback:
+                    callback("prune", "Synaptic Pruning: Eradicating previous hallucination!")
                 self.predictor.unlearn(self.last_sequence)
                 reward = -1.0
 
@@ -623,7 +626,8 @@ class OmniRouter:
                 should_reject = prompt_entropy > 12.0
 
             if should_reject:
-                if callback: callback("hallucination", f"Unknown context (entropy={prompt_entropy:.1f}, value={value_conf:.2f})")
+                if callback:
+                    callback("hallucination", f"Unknown context (entropy={prompt_entropy:.1f}, value={value_conf:.2f})")
                 fallback = "I do not know the answer to that, even after searching the web."
                 self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + fallback.split()
                 return fallback
@@ -650,7 +654,8 @@ class OmniRouter:
         reply_str = " ".join(str(p) for p in predicted)
 
         if not reply_str.strip():
-            if callback: callback("hallucination", "Empty prediction path.")
+            if callback:
+                callback("hallucination", "Empty prediction path.")
             self.last_sequence = None
             return "I do not know the answer to that, even after searching the web."
 
@@ -686,9 +691,11 @@ class OmniRouter:
         code_str, reward, passed = engine.generate_code(seed_tokens, max_tokens=80)
 
         if passed:
-            if callback: callback("reinforce", "REPL oracle: code compiled successfully!")
+            if callback:
+                callback("reinforce", "REPL oracle: code compiled successfully!")
         else:
-            if callback: callback("prune", "REPL oracle: no candidate compiled — showing best attempt.")
+            if callback:
+                callback("prune", "REPL oracle: no candidate compiled — showing best attempt.")
 
         # GRPO: train SSM on code result
         self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + code_str.split()

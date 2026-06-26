@@ -1,12 +1,10 @@
 import argparse
-import sys
 import os
+import pickle
+import concurrent.futures
 from .omni_router import OmniRouter
 
 from tqdm import tqdm
-from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, Log
-from textual import work
 
 def ingest_file(router, filepath, quiet=False):
     """Injects massive context from a file into the OmniRouter with structural bounds."""
@@ -77,9 +75,6 @@ def debate_loop(topic: str, rounds: int = 10):
         
     print("\n[+] Debate concluded. Both agents successfully compressed the entire context history via BPE.")
 
-import pickle
-import concurrent.futures
-
 ASCII_LOGO = r"""
        _  _
       (o)(o)
@@ -95,7 +90,8 @@ def save_brain(router, path: str = "brain.uchi"):
     Writes to a temp file and atomically renames so a crash or concurrent
     write never leaves a partial/corrupt brain.uchi.
     """
-    import gzip, tempfile
+    import gzip
+    import tempfile
     print(f"\n[+] Saving neural state to {path}...")
     tmp_path = None
     try:

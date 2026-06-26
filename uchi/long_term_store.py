@@ -29,7 +29,6 @@ Portable: a single .lts file; load it anywhere with LongTermStore(path=...).
 import gzip
 import os
 import pickle
-from collections import defaultdict
 from typing import Any, Optional
 
 

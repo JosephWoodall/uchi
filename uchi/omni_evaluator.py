@@ -39,7 +39,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -228,7 +227,6 @@ def _find_blame_token(tokens: list[str], error: SyntaxError) -> int:
     """
     # Attempt character-offset mapping
     if error.lineno is not None and error.offset is not None:
-        code = " ".join(tokens)
         target_char = max(0, error.offset - 1)  # 0-indexed
         cursor = 0
         for i, tok in enumerate(tokens):
@@ -407,7 +405,7 @@ class OmniEvaluator:
 
             code = _extract_code_block(reply)
             if code is None:
-                self._log(f"    ✗ No ```python block in reply")
+                self._log("    ✗ No ```python block in reply")
                 continue
 
             ok, output = _run_code_in_sandbox(code, assert_check)
@@ -688,7 +686,7 @@ class OmniEvaluator:
                     self._log(f"    ✓ kind={kind}")
                     passed += 1
                 else:
-                    self._log(f"    ✗ uncertain")
+                    self._log("    ✗ uncertain")
             except Exception as exc:
                 self._log(f"    ✗ error: {exc}")
 

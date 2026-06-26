@@ -248,9 +248,6 @@ class UniversalPredictor:
         node = self._root
         for d in range(self.min_k, max_d + 1):
             ctx  = tuple(self.history[-(d + 1):-1])
-            if ctx:
-                sym = ctx[0] # The earliest symbol in the context
-            
             # This logic needs to traverse backwards from the end of history.
             # But ctx is built backwards. Let's stick to _ensure_node for now 
             # and just enforce a reasonable hard cap if k is None to avoid hanging.

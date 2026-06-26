@@ -1,6 +1,5 @@
 import os
 import glob
-import sys
 import logging
 from tqdm import tqdm
 from uchi.cli import save_brain
@@ -56,7 +55,8 @@ def build_full_brain(brain_path="brain.uchi"):
         for item in tqdm(ds_dolly, desc="Pre-training MoE Weights"):
             user_turn = item.get("instruction", "").strip()
             assistant_turn = item.get("response", "").strip()
-            if not user_turn or not assistant_turn: continue
+            if not user_turn or not assistant_turn:
+                continue
             
             tokens = ["<|user|>"] + router.tokenizer.tokenize(user_turn.split(), is_inference=False) + \
                      ["<|assistant|>"] + router.tokenizer.tokenize(assistant_turn.split(), is_inference=False) + ["<|end|>"]
@@ -87,7 +87,7 @@ def build_full_brain(brain_path="brain.uchi"):
                 router.stream(router.tokenizer.tokenize((text + "<|end|>").split(), is_inference=False))
 
     # 3B: Wikipedia (Encyclopedic)
-    ds_wiki = _safe_load_dataset("wikipedia", f"20220301.en", split=f"train[:{KNOWLEDGE_LIMIT}]")
+    ds_wiki = _safe_load_dataset("wikipedia", "20220301.en", split=f"train[:{KNOWLEDGE_LIMIT}]")
     if not ds_wiki:
         # Fallback dataset format if config needed
         ds_wiki = _safe_load_dataset("wikipedia", "20220301.en[train]") 
@@ -100,8 +100,10 @@ def build_full_brain(brain_path="brain.uchi"):
     ds_mmlu = _safe_load_dataset("cais/mmlu", "all") # We'll just take the test split
     if not ds_mmlu:
         from datasets import load_dataset
-        try: ds_mmlu = load_dataset("cais/mmlu", "all", split="test")
-        except: ds_mmlu = None
+        try:
+            ds_mmlu = load_dataset("cais/mmlu", "all", split="test")
+        except Exception:
+            ds_mmlu = None
     if ds_mmlu:
         # Convert to list and slice to enforce KNOWLEDGE_LIMIT since split="test" returns the whole split
         ds_mmlu_subset = list(ds_mmlu)[:KNOWLEDGE_LIMIT]
@@ -116,8 +118,10 @@ def build_full_brain(brain_path="brain.uchi"):
     ds_gsm8k = _safe_load_dataset("gsm8k", "main")
     if not ds_gsm8k:
         from datasets import load_dataset
-        try: ds_gsm8k = load_dataset("gsm8k", "main", split="test")
-        except: ds_gsm8k = None
+        try:
+            ds_gsm8k = load_dataset("gsm8k", "main", split="test")
+        except Exception:
+            ds_gsm8k = None
     if ds_gsm8k:
         ds_gsm8k_subset = list(ds_gsm8k)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_gsm8k_subset, desc="Ingesting GSM8K (Math)"):
@@ -133,8 +137,10 @@ def build_full_brain(brain_path="brain.uchi"):
     ds_swe = _safe_load_dataset("princeton-nlp/SWE-bench", "test")
     if not ds_swe:
         from datasets import load_dataset
-        try: ds_swe = load_dataset("princeton-nlp/SWE-bench", split="test")
-        except: ds_swe = None
+        try:
+            ds_swe = load_dataset("princeton-nlp/SWE-bench", split="test")
+        except Exception:
+            ds_swe = None
     if ds_swe:
         ds_swe_subset = list(ds_swe)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_swe_subset, desc="Ingesting SWE-Bench (Engineering)"):

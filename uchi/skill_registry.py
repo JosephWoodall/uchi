@@ -41,7 +41,7 @@ Modes
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?(.*)", re.DOTALL)
@@ -263,7 +263,7 @@ def _run_analytical(mode: str, args: str, router) -> str:
     Loads data, instantiates the correct ML class, fits + predicts, and
     streams a text summary back into the trie so future queries can recall it.
     """
-    from uchi.data_loader import parse_args, load_data, split_features, to_numeric_rows, train_test_split
+    from uchi.data_loader import parse_args, load_data
 
     parsed = parse_args(args)
     path   = parsed["path"]
@@ -331,7 +331,7 @@ def _skill_classify(header, rows, label_col) -> str:
     used_label = header[-1] if not label_col else label_col
 
     lines = [
-        f"Classification complete.",
+        "Classification complete.",
         f"  Label column : {used_label}",
         f"  Classes      : {classes[:8]}{'…' if len(classes) > 8 else ''}",
         f"  Train rows   : {len(X_tr)}",
@@ -362,7 +362,7 @@ def _skill_regress(header, rows, label_col) -> str:
     used_label = header[-1] if not label_col else label_col
 
     lines = [
-        f"Regression complete.",
+        "Regression complete.",
         f"  Target column : {used_label}",
         f"  Train rows    : {len(X_tr)}",
         f"  Test rows     : {len(X_te)}",
@@ -384,12 +384,12 @@ def _skill_anomaly(header, rows, path) -> str:
     det.fit(X)
     labels = det.predict(X)
     scores = det.score_samples(X)
-    anomalous = [i for i, l in enumerate(labels) if l == 1]
+    anomalous = [i for i, lbl in enumerate(labels) if lbl == 1]
     n = len(anomalous)
     top = sorted(anomalous, key=lambda i: scores[i], reverse=True)[:5]
 
     lines = [
-        f"Anomaly detection complete.",
+        "Anomaly detection complete.",
         f"  File       : {path}",
         f"  Total rows : {len(X)}",
         f"  Anomalies  : {n}  ({100*n/len(X):.1f}%)",
@@ -416,7 +416,7 @@ def _skill_forecast(header, rows, steps, path) -> str:
     dims = len(header)
     last = X[-1] if X else []
     lines = [
-        f"Forecast complete.",
+        "Forecast complete.",
         f"  File       : {path}",
         f"  Dimensions : {dims}",
         f"  History    : {len(X)} steps",
@@ -450,7 +450,7 @@ def _skill_tsclassify(header, rows, label_col) -> str:
     used_label = header[-1] if not label_col else label_col
 
     lines = [
-        f"Time series classification complete.",
+        "Time series classification complete.",
         f"  Label column : {used_label}",
         f"  Window length: {len(X_raw[0]) if X_raw else 0} features",
         f"  Train windows: {len(X_tr)}",

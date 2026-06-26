@@ -400,7 +400,7 @@ class UchiApp(App):
     def initialize_brain(self) -> None:
         self.call_from_thread(self.write_log, f"[dim][*] Loading brain from [bold]{self.brain_path}[/bold]...[/dim]")
 
-        from uchi.cli import load_brain, preload_context, save_brain, ingest_file
+        from uchi.cli import load_brain, preload_context
         from uchi.omni_router import OmniRouter
         from uchi.node_compressor import NodeCompressor
 
@@ -733,7 +733,7 @@ class UchiApp(App):
         holes = CodeEngine.extract_holes(reply_text)
         if holes:
             self.active_hole_context = (cmd, reply_text, holes[0])
-            log.write(f"\n[bold #e0af68][?] Hole detected — fill in the implementation:[/bold #e0af68]")
+            log.write("\n[bold #e0af68][?] Hole detected — fill in the implementation:[/bold #e0af68]")
             log.write(f"[#e0af68]    {holes[0]}[/#e0af68]")
             ib.placeholder = f"Fill: {holes[0][:38]}"
             ib.disabled = False

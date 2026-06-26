@@ -25,15 +25,18 @@ import warnings
 
 from .predictor import UniversalPredictor
 from .discretize import FeatureDiscretizer, LabelEncoder, _to_rows
-from .tabular import _set_history, _infer_dist, _train_one
+from .tabular import _infer_dist, _train_one
 
 try:
     from sklearn.base import BaseEstimator, ClassifierMixin, OutlierMixin
     _SKLEARN = True
 except ImportError:
-    class BaseEstimator: pass
-    class ClassifierMixin: pass
-    class OutlierMixin: pass
+    class BaseEstimator:
+        pass
+    class ClassifierMixin:
+        pass
+    class OutlierMixin:
+        pass
     _SKLEARN = False
 
 _LABEL_NS_TS = '__ts_label__'

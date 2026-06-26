@@ -356,7 +356,7 @@ class SparseMoEValueHead(nn.Module):
         nn.init.uniform_(self.expert_w3, -0.01, 0.01)
 
     def score_heads(self, state: torch.Tensor) -> torch.Tensor:
-        B, E, H1, H2 = state.shape[0], self.N_EXPERTS, self._H1, self._H2
+        B, E, H1, _ = state.shape[0], self.N_EXPERTS, self._H1, self._H2
         
         # Layer 1
         h1 = F.silu(F.linear(state, self.fused_w1, self.fused_b1)).view(B, E, H1)

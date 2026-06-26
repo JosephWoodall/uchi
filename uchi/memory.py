@@ -7,7 +7,6 @@ to mathematically mimic Multi-Headed Self-Attention, allowing Uchi to bridge
 long-range dependencies beyond the fixed window.
 """
 from collections import defaultdict
-import torch
 from .cpu_memory import CPUVectorMemory
 
 def _default_dict_float():
