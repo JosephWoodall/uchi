@@ -619,12 +619,23 @@ def update_readme(results: dict) -> None:
 | **RAM Footprint** | **{ram} MB** | Resident set after brain load + recall stream |
 | **Hallucination Rate** | **0%** | Strict trie boundary enforcement |"""
 
-    pattern = re.compile(
+    # Prefer explicit markers; fall back to heading + leading table for older README layouts.
+    marker_pattern = re.compile(
+        r"<!-- BENCHMARK_TABLE_START -->.*?<!-- BENCHMARK_TABLE_END -->",
+        re.DOTALL,
+    )
+    heading_pattern = re.compile(
         r"(#{1,3} Benchmarks?\s*\n)(\|.*?\n)+",
         re.IGNORECASE | re.DOTALL,
     )
-    if pattern.search(content):
-        new_content = pattern.sub(r"\g<1>" + table + "\n\n", content)
+    if marker_pattern.search(content):
+        replacement = f"<!-- BENCHMARK_TABLE_START -->\n{table}\n<!-- BENCHMARK_TABLE_END -->"
+        new_content = marker_pattern.sub(replacement, content)
+        with open(_README, "w") as f:
+            f.write(new_content)
+        print("  README.md Benchmarks table updated.")
+    elif heading_pattern.search(content):
+        new_content = heading_pattern.sub(r"\g<1>" + table + "\n\n", content)
         with open(_README, "w") as f:
             f.write(new_content)
         print("  README.md Benchmarks table updated.")
