@@ -1,0 +1,75 @@
+{
+  "mathematics": {
+    "definition": "The abstract study of numbers, quantities, and space.",
+    "subfields": {
+      "calculus": "Describes continuous change using derivatives and integrals.",
+      "algebra": "Solves equations with unknown variables.",
+      "geometry": "Studies shapes and spatial dimensions."
+    }
+  },
+  "physics": {
+    "definition": "The application of mathematics to the universe.",
+    "laws": [
+      {"name": "First Law of Thermodynamics", "concept": "Energy cannot be created or destroyed, only transformed."},
+      {"name": "Second Law of Thermodynamics", "concept": "Entropy always increases in an isolated system."},
+      {"name": "General Relativity", "concept": "Gravity is the curvature of spacetime caused by mass."},
+      {"name": "Newton's Second Law", "concept": "Force equals mass times acceleration (F=ma)."}
+    ],
+    "quantum_mechanics": "Subatomic particles exist in probabilistic states until measured."
+  },
+  "chemistry": {
+    "definition": "The study of matter.",
+    "composition": "Atoms are composed of protons, neutrons, and electrons.",
+    "water": "H2O",
+    "carbon": "Forms the basis of all known life due to its ability to form four stable covalent bonds."
+  },
+  "biology": {
+    "definition": "The study of living organisms.",
+    "dna": "Deoxyribonucleic acid carries genetic instructions using base pairs Adenine, Thymine, Cytosine, Guanine.",
+    "evolution": "Occurs through natural selection where advantageous traits are passed down.",
+    "photosynthesis": "Converts sunlight and carbon dioxide into oxygen and glucose."
+  },
+  "economics": {
+    "definition": "Studies the production, distribution, and consumption of goods.",
+    "free_market": "Supply and demand dictate prices.",
+    "inflation": "The decrease in purchasing power of a currency over time.",
+    "gdp": "Gross Domestic Product measures a country's economic output.",
+    "capitalism": "Relies on private ownership and profit motives."
+  },
+  "society": {
+    "definition": "Organizes humans into groups.",
+    "law": "Establishes rules enforced by institutions.",
+    "ethics": "The philosophical study of right and wrong guiding moral behavior."
+  },
+  "history": {
+    "definition": "The chronological record of human events.",
+    "industrial_revolution": "Transitioned societies from agrarian to mechanized.",
+    "ww2": "World War II ended in 1945."
+  },
+  "literature": {
+    "definition": "Captures human experience through narrative.",
+    "shakespeare": ["Hamlet", "Romeo and Juliet"],
+    "fiction": "Uses imagined events.",
+    "nonfiction": "Relies on factual truth.",
+    "poetry": "Uses rhythmic and aesthetic language.",
+    "characters": {
+      "protagonist": "The main character.",
+      "antagonist": "Opposes the main character."
+    }
+  },
+  "conversational_protocols": {
+    "greetings": [
+      {"prompt": "Hello, how are you?", "response": "I am fine, thank you."}
+    ],
+    "identity": [
+      {"prompt": "What is your name?", "response": "My name is Uchi."}
+    ],
+    "assistance": [
+      {"prompt": "Can you help me?", "response": "Yes, I can assist you."}
+    ],
+    "politeness": "If someone says 'Thank you', the polite response is 'You're welcome'.",
+    "empathy": "If someone is sad, express empathy.",
+    "answering": "Provide a direct, factual answer followed by context. Do not lie. Be concise, rational, and helpful.",
+    "debate": "Assert a claim, provide evidence, and refute counterarguments logically."
+  }
+}

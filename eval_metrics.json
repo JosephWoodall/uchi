@@ -1,0 +1,21 @@
+{
+  "recall_accuracy": 80.0,
+  "recall_n": 50,
+  "recall_correct": 40,
+  "forgetting_retention_rate": 100.0,
+  "forgetting_anchors": 10,
+  "forgetting_noise_facts": 1000,
+  "forgetting_correct": 10,
+  "latency_scaling": {
+    "10": 10665.86,
+    "100": 2567.76,
+    "500": 2281.91,
+    "1000": 2597.26
+  },
+  "latency_scaling_probe": "what is the capital of france",
+  "inference_latency_ms": 2333.1,
+  "memory_mb": 1374.2,
+  "code_completion_rate": 5.0,
+  "code_n": 20,
+  "code_passed": 1
+}

@@ -16,6 +16,8 @@ TabularPredictor / TabularRegressor / TimeSeriesClassifier all support
 partial_fit() for online / incremental learning.
 """
 
+__version__ = "0.2.0"
+
 from .predictor  import UniversalPredictor
 from .forest     import PredictorForest
 from .discretize import FeatureDiscretizer, LabelEncoder
@@ -28,8 +30,14 @@ from .long_term_store   import LongTermStore
 from .dual_predictor    import DualPredictor
 from .online_tokenizer  import OnlineTokenizer
 from .node_compressor   import NodeCompressor
+from .process           import ProcessPredictor, OntologicalState, OntologicalAction
+from .simulation_engine import LifelongSimulationEngine
 
-__version__ = "0.1.0"
+from .memory            import AssociativeMemory
+from .omni_router       import OmniRouter
+from .omni_tokenizer    import OmniTokenizer
+
+__version__ = "0.2.0"
 
 __all__ = [
     # Core engine
@@ -54,4 +62,12 @@ __all__ = [
     "DualPredictor",
     "OnlineTokenizer",
     "NodeCompressor",
+    "ProcessPredictor",
+    "OntologicalState",
+    "OntologicalAction",
+    "LifelongSimulationEngine",
+
+    "AssociativeMemory",
+    "OmniRouter",
+    "OmniTokenizer"
 ]

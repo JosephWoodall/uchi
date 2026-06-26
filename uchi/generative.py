@@ -39,18 +39,18 @@ from .discretize import FeatureDiscretizer, LabelEncoder, _to_rows
 from .tabular    import _make_predictor, _apply_order, _build_orders, _LABEL_NS
 from .long_term_store import LongTermStore
 from .online_tokenizer import OnlineTokenizer
-from .semantic_tokenizer import SemanticTokenizer
+from .omni_tokenizer import OmniTokenizer
 
 try:
     from sklearn.base import BaseEstimator
     _SKLEARN = True
 except ImportError:
-    class BaseEstimator: pass
+    class BaseEstimator:
+        pass
     _SKLEARN = False
 
 # Lazy imports for optional components
 def _get_online_tokenizer():
-    from .online_tokenizer import OnlineTokenizer
     return OnlineTokenizer
 
 def _get_dual_predictor():
@@ -58,7 +58,6 @@ def _get_dual_predictor():
     return DualPredictor
 
 def _get_long_term_store():
-    from .long_term_store import LongTermStore
     return LongTermStore
 
 
@@ -83,6 +82,11 @@ def _sample_dist(
 
     tokens = list(dist.keys())
     probs  = list(dist.values())
+
+    if temperature == 0.0:
+        # Deterministic argmax
+        best_idx = max(range(len(probs)), key=lambda i: probs[i])
+        return tokens[best_idx]
 
     # Temperature: reshape p_i ← p_i^(1/T)
     if temperature != 1.0 and temperature > 0:
@@ -141,7 +145,10 @@ def _generate_from_predictor(
     Optional: tokenizer applies merge rules to seed tokens.
     Optional: long_term_store provides three-layer fallback blending.
     """
+    # To prevent context contamination from training data, we clear history
+    # before observing the new seed tokens.
     saved = p.history[:]
+    p.history.clear()
 
     if seed:
         seed_tokens = tokenizer.tokenize(seed) if tokenizer else seed
@@ -151,12 +158,27 @@ def _generate_from_predictor(
     generated = []
     for _ in range(n_tokens):
         p.predict()
+        
+        # Halt on zero context depth to prevent "Frankenstein" word stitching
+        # If depth is <= 0, the trie has lost causal pathing and is just spitting out
+        # the most frequent unigram (or nothing).
+        if p._last_prediction_depth <= 1:
+            break
+            
         dist = dict(p._last_distribution)
 
         # Three-layer fallback (Problem 8): blend with long-term store
         if long_term_store is not None and hasattr(p, 'history') and p.history:
             ctx = tuple(p.history[-p.k:]) if len(p.history) >= p.k else tuple(p.history)
             dist = long_term_store.blend(dist, ctx, p._vocab)
+
+        # Repetition Penalty: only penalize recently *generated* tokens
+        # to prevent loops, but never penalize seed tokens (which the trie
+        # needs to reproduce in its response).
+        repetition_penalty = 1.5
+        for tok in set(generated[-20:]):
+            if tok in dist:
+                dist[tok] /= repetition_penalty
 
         token = _sample_dist(dist, temperature, top_k, top_p, rng)
         if token is None:
@@ -181,6 +203,7 @@ def _train_autoregressive(
     tokenizer=None,
     long_term_store=None,
     use_skip_grams=False,
+    unlearn=False,
 ) -> None:
     """
     Train p on every consecutive token pair within a single sequence.
@@ -198,30 +221,41 @@ def _train_autoregressive(
     total = 0
     import random
     for i, token in enumerate(tokens):
-        p.predict()
-        pred = p._last_prediction
+        if not unlearn:
+            p.predict()
+            pred = p._last_prediction
+        else:
+            pred = None
         
         # Simulated Skip-Gram attention: randomly drop one context token during training
         if use_skip_grams and i > 2 and random.random() < 0.2:
             saved = p.history[:]
             idx_to_drop = random.randint(0, len(p.history) - 1)
             p.history.pop(idx_to_drop)
-            p.observe(token)
-            p.feedback(token)
+            if unlearn:
+                p.unlearn(token)
+                p.observe(token)
+            else:
+                p.observe(token)
+                p.feedback(token)
             p.history = saved
             
-        p.observe(token)
-        p.feedback(token)
+        if unlearn:
+            p.unlearn(token)
+            p.observe(token)
+        else:
+            p.observe(token)
+            p.feedback(token)
         total += 1
         if pred == token:
             correct += 1
 
     # Update tokenizer merge scores with running accuracy
-    if tokenizer is not None and total > 0:
+    if tokenizer is not None and total > 0 and not unlearn:
         tokenizer.update(tokens, correct / total)
 
     # Replay high-confidence patterns into long-term store
-    if long_term_store is not None and total > 0:
+    if long_term_store is not None and total > 0 and not unlearn:
         long_term_store.replay(p, tokens)
 
     p.history.clear()
@@ -264,6 +298,7 @@ class SequenceGenerator(BaseEstimator):
     def __init__(
         self,
         context_length: int   = 6,
+        min_context_length: int = 1,
         temperature:    float = 1.0,
         top_k:          int   | None = None,
         top_p:          float | None = None,
@@ -281,6 +316,7 @@ class SequenceGenerator(BaseEstimator):
         use_skip_grams: bool = False,
     ):
         self.context_length = context_length
+        self.min_context_length = min_context_length
         self.temperature    = temperature
         self.top_k          = top_k
         self.top_p          = top_p
@@ -299,6 +335,19 @@ class SequenceGenerator(BaseEstimator):
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def unlearn(self, sequences) -> 'SequenceGenerator':
+        self._check_fitted()
+        tok = getattr(self, '_tokenizer', None)
+        lts = self.long_term_store
+        if isinstance(sequences, str):
+            _train_autoregressive(self._pred, list(sequences), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        elif sequences and not isinstance(sequences[0], (list, tuple)):
+            _train_autoregressive(self._pred, list(sequences), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        else:
+            for seq in sequences:
+                _train_autoregressive(self._pred, list(seq), tokenizer=tok, long_term_store=lts, use_skip_grams=self.use_skip_grams, unlearn=True)
+        return self
+
     def fit(self, sequences, y=None) -> 'SequenceGenerator':
         """
         Train on a sequence or list of sequences.
@@ -316,13 +365,14 @@ class SequenceGenerator(BaseEstimator):
                 self.context_length, self.learning_rate, self.cred_max, self.lambda_power,
                 use_similarity_fallback=self.use_similarity_fallback,
                 use_positional_weights=self.use_positional_weights,
+                min_context_length=self.min_context_length,
             )
         self._rng = random.Random(self.random_seed)
         self._tokenizer = None
         if self.use_online_tokenizer:
             OT = _get_online_tokenizer()
             self._tokenizer = OT(max_merges=self.tokenizer_max_merges)
-        self.semantic_tokenizer = SemanticTokenizer() if self.use_semantic_hashing else None
+        self.omni_tokenizer = OmniTokenizer() if self.use_semantic_hashing else None
         self.is_fitted_ = True
         self._train_sequences(sequences)
         return self
@@ -341,6 +391,10 @@ class SequenceGenerator(BaseEstimator):
         top_k:       int   | None      = None,
         top_p:       float | None      = None,
         stop_tokens: list  | None      = None,
+        use_mcts:    bool              = False,
+        bias_context: str | None       = None,
+        mcts_sims:   int               = 3,
+        mcts_depth:  int               = 3,
     ) -> list:
         """
         Sample n_tokens auto-regressively.
@@ -357,6 +411,19 @@ class SequenceGenerator(BaseEstimator):
         """
         self._check_fitted()
         seed_list = list(seed) if isinstance(seed, str) else (seed or [])
+        
+        if use_mcts:
+            return _mcts_generate_from_predictor(
+                self._pred, n_tokens, seed_list,
+                n_sims=mcts_sims,
+                top_k_candidates=top_k if top_k is not None else 3,
+                lookahead_depth=mcts_depth,
+                stop_tokens=set(stop_tokens) if stop_tokens else None,
+                tokenizer=getattr(self, '_tokenizer', None),
+                long_term_store=self.long_term_store,
+                bias_context=bias_context,
+            )
+            
         return _generate_from_predictor(
             self._pred, n_tokens, seed_list,
             temperature if temperature is not None else self.temperature,
@@ -404,9 +471,9 @@ class SequenceGenerator(BaseEstimator):
         if not tokens:
             return float('inf')
 
-        if self.semantic_tokenizer:
-            tokens = [self.semantic_tokenizer.tokenize(t) for t in tokens]
-        
+        if self.omni_tokenizer:
+            tokens = [self.omni_tokenizer.tokenize(t) for t in tokens]
+
         saved  = self._pred.history[:]
         total  = 0.0
         for token in tokens:
@@ -416,6 +483,20 @@ class SequenceGenerator(BaseEstimator):
             self._pred.observe(token)
         self._pred.history = saved
         return total / len(tokens)
+
+    def peek_distribution(self, seed_tokens: list) -> dict:
+        """
+        Return the trie's next-token probability distribution given seed_tokens
+        without modifying any predictor state.  Safe to call at any time.
+        """
+        self._check_fitted()
+        saved = self._pred.history[:]
+        k = getattr(self._pred, 'k', len(seed_tokens))
+        self._pred.history = list(seed_tokens)[-k:]
+        self._pred.predict()
+        dist = dict(self._pred._last_distribution)
+        self._pred.history = saved
+        return dist
 
     @property
     def vocab_(self) -> set:
@@ -525,7 +606,7 @@ class TabularGenerator(BaseEstimator):
         rows   = self._disc.fit_transform(X)
         labels = list(y)
         self._lenc.fit(labels)
-        y_enc  = [self._lenc.encode(l) for l in labels]
+        y_enc  = [self._lenc.encode(lbl) for lbl in labels]
 
         n_feat = self._disc.n_features
         k      = (n_feat + 1) if self.context_length is None else self.context_length
@@ -908,3 +989,125 @@ class TimeSeriesGenerator(BaseEstimator):
     def _check_fitted(self):
         if not hasattr(self, '_pred'):
             raise RuntimeError("Call fit() first.")
+def _mcts_generate_from_predictor(
+    p,
+    n_tokens: int,
+    seed: list | None,
+    n_sims: int = 3,
+    top_k_candidates: int = 3,
+    lookahead_depth: int = 3,
+    stop_tokens: set | None = None,
+    tokenizer=None,
+    long_term_store=None,
+    bias_context: str | None = None,
+) -> list:
+    """MCTS-guided token selection for Uchi."""
+    import math
+    
+    saved = p.history[:]
+    p.history.clear()
+    
+    if seed:
+        seed_tokens = tokenizer.tokenize(seed) if tokenizer else seed
+        for tok in seed_tokens:
+            p.observe(tok)
+            
+    generated = []
+    
+    for step in range(n_tokens):
+        p.predict()
+        
+        if p._last_prediction_depth <= 1:
+            break
+            
+        dist = dict(p._last_distribution)
+        
+        # Apply simple repetition penalty to dist
+        for tok in set(generated[-20:]):
+            if tok in dist:
+                dist[tok] /= 1.5
+                
+        # Get top-K candidates from dist
+        if not dist:
+            break
+            
+        sorted_candidates = sorted(dist.items(), key=lambda x: x[1], reverse=True)[:top_k_candidates]
+        
+        best_tok = sorted_candidates[0][0]
+        best_score = float('-inf')
+        
+        # Base state
+        base_history = p.history[:]
+        
+        for cand_tok, prior in sorted_candidates:
+            val_sum = 0.0
+            
+            for sim in range(n_sims):
+                p.history = base_history[:]
+                p.observe(cand_tok)
+                sim_val = 0.0
+                
+                # --- Neuro-Symbolic Integration ---
+                from uchi.neuro_symbolic import get_ssm
+                ssm = get_ssm()
+                current_state = ssm.get_state(p.history)
+                # ----------------------------------
+                
+                for d in range(lookahead_depth):
+                    p.predict()
+                    
+                    if p._last_prediction_depth <= 1:
+                        sim_val -= 5.0
+                        break
+                        
+                    # Calculate SSM value for current state
+                    v = ssm.value(current_state).squeeze(-1)
+                    sim_val += v.item()
+                    
+                    sim_dist = dict(p._last_distribution)
+                    if not sim_dist:
+                        break
+                        
+                    # Greedy choice for simulation
+                    next_tok = max(sim_dist.items(), key=lambda x: x[1])[0]
+                    if stop_tokens and next_tok in stop_tokens:
+                        sim_val += 5.0 # Reward reaching a natural stop token
+                        break
+                        
+                    # Semantic Context Masking Bonus
+                    # Check both the full synset ID ("energy.n.01") and the word root
+                    # ("energy") so plain-text web content and lemmatized memory both match.
+                    _tok_str = str(next_tok).lower()
+                    _tok_word = _tok_str.split(".")[0]
+                    if bias_context and (_tok_str in bias_context.lower() or _tok_word in bias_context.lower()):
+                        sim_val += 1.0
+                        
+                    p.observe(next_tok)
+                    current_state, v = ssm.predict_next(current_state, next_tok)
+                    sim_val += v.item() * 0.5
+                    
+                val_sum += sim_val
+                
+            avg_val = val_sum / max(1, n_sims)
+            
+            # Combine prior log-prob with value
+            lp = math.log(max(1e-9, prior))
+            score = 0.4 * lp + 0.6 * avg_val
+            
+            if score > best_score:
+                best_score = score
+                best_tok = cand_tok
+                
+        # Restore base history and observe the chosen token
+        p.history = base_history[:]
+        generated.append(best_tok)
+        if stop_tokens and best_tok in stop_tokens:
+            break
+        p.observe(best_tok)
+        
+    p.history = saved
+    
+    if tokenizer is not None:
+        generated = tokenizer.detokenize(generated)
+        
+    return generated

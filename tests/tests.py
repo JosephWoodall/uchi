@@ -10,9 +10,9 @@ Tests that probe the architecture's specific claims, not just end-to-end accurac
 import statistics
 from collections import defaultdict
 
-from predictor import UniversalPredictor
+from uchi.predictor import UniversalPredictor
 from similarity import gaussian, hamming
-from datasets import (
+from uchi_datasets import (
     load_airline_passengers,
     load_gutenberg_text,
     load_dna_sequence,

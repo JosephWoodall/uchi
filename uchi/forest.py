@@ -128,6 +128,21 @@ class PredictorForest:
     # ── active subset ─────────────────────────────────────────────────────────
 
     @property
+    def prune_stale_branches(self, max_age: int = 100000) -> int:
+        """
+        LRU Eviction (RAM Optimization): Triggers the pruning of nodes 
+        that have not been accessed or updated in `max_age` global steps
+        across all trees in the forest.
+        """
+        total_pruned = 0
+        for tree in self.trees:
+            total_pruned += tree.prune_stale_branches(max_age)
+        return total_pruned
+
+    def _get_active_trees(self) -> list[int]:
+        return [i for i in range(len(self.trees)) if i not in self._inactive]
+
+    @property
     def _active(self) -> list[int]:
         return [i for i in range(len(self.trees)) if i not in self._inactive]
 

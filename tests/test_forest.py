@@ -13,10 +13,10 @@ Forest architectural tests — one claim per test.
   classification_eq    — task='classification' identical output to task='sequence'
 """
 
-from forest import PredictorForest
+from uchi.forest import PredictorForest
 from similarity import gaussian, hamming
-from datasets import load_airline_passengers, random_integers
-from run_experiments import discretize, normalize
+from uchi_datasets import load_airline_passengers, random_integers
+from .tests import discretize, normalize
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
