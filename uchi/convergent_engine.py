@@ -50,6 +50,7 @@ MARGIN            = 0.05
 CANDIDATE_TOKENS  = 12   # was 45; factual answers are 1–3 words, 12 is generous
 
 # Adaptive computation gate thresholds.
+# After temperature calibration, _get_ssm_value() returns a probability in (0,1).
 # High confidence (value head > GREEDY_CONF and trie entropy < GREEDY_ENTROPY_CAP):
 #   bypass the MCTS loop and generate a single greedy candidate in O(1).
 # Low confidence (value < UNCERTAIN_FLOOR): scale the rollout budget up by
@@ -57,7 +58,7 @@ CANDIDATE_TOKENS  = 12   # was 45; factual answers are 1–3 words, 12 is genero
 GREEDY_CONF        = 0.85
 GREEDY_ENTROPY_CAP = 1.5  # was 0.6; allow moderately peaked distributions through
 GREEDY_ENTROPY_FLOOR = 0.05  # near-zero entropy → clear trie path, bypass regardless of SSM
-UNCERTAIN_FLOOR    = 0.0
+UNCERTAIN_FLOOR    = 0.3   # probability below this → expand rollout budget
 BUDGET_SCALE_UNCERTAIN = 2
 MCTS_WALL_BUDGET_S = 8.0   # hard wall-clock limit on the rollout loop (seconds)
 
@@ -318,6 +319,19 @@ class ConvergentEngine:
             else:
                 _think(f"[dim]MCTS budget={adaptive_budget}  min_rollouts={MIN_ROLLOUTS}[/dim]")
 
+            # 3b. Inner monologue: brief MCTS reasoning pass for complex queries.
+            #     Triggers when: query_type is generative AND (low SSM confidence OR
+            #     long query with deductive markers). Output tokens bias the rollout.
+            #     The monologue is never returned to the user.
+            _im_toks = self._run_inner_monologue(
+                concepts, initial_value, _query_type, bias_context
+            )
+            if _im_toks:
+                im_bias = " ".join(_im_toks[:12])
+                if bias_context is None:
+                    bias_context = im_bias
+                _think(f"[dim #bb9af7]inner monologue → {' '.join(_im_toks[:8])}…[/dim #bb9af7]")
+
             # 4. MCTS rollout loop
             candidates: List[Tuple[List[str], List[float]]] = []
             _loop_start = time.perf_counter()
@@ -440,6 +454,14 @@ class ConvergentEngine:
                 return ("tool", best_tool, +1.0)
 
             if not valid:
+                # HRR analogy fallback: synthesize a grounded response from
+                # the nearest known concepts instead of returning "uncertain".
+                hrr_result = self._hrr_analogy_fallback(concepts, q_vec)
+                if hrr_result is not None:
+                    hrr_tokens, hrr_score = hrr_result
+                    _think(f"[bold #bb9af7]-> HRR synthesis  score={hrr_score:.3f}[/bold #bb9af7]")
+                    return ("text", hrr_tokens, -0.05)
+
                 _think(f"[bold #f85149]-> uncertain  cos={best_text_score:.3f}  reward={reward_hint:.2f}[/bold #f85149]")
                 return ("uncertain", best_text, reward_hint)
             _think(f"[bold #3fb950]-> text  cos={best_text_score:.3f}  reward={reward_hint:.2f}[/bold #3fb950]")
@@ -451,6 +473,53 @@ class ConvergentEngine:
 
     # ── private helpers ───────────────────────────────────────────────────────
 
+    def _run_inner_monologue(
+        self,
+        concepts: List[str],
+        initial_value: Optional[float],
+        query_type: str,
+        bias_context: Optional[str],
+    ) -> List[str]:
+        """Run a short MCTS reasoning pass using the inner_monologue token.
+
+        Triggers when the query is generative (not a simple factual recall)
+        AND either:
+          - SSM confidence is below 0.5 (uncertain territory), or
+          - The query contains deductive markers and is longer than 6 tokens.
+
+        Returns the generated reasoning tokens (stripped of stop tokens and
+        the inner_monologue marker itself). Returns [] when skipped.
+        """
+        _IM_TOKEN = "<|inner_monologue|>"
+        _DEDUCTIVE = {"why", "how", "explain", "compare", "analyze", "describe",
+                      "difference", "relationship", "because", "therefore", "implies"}
+
+        # Only trigger for non-factual, non-code queries.
+        if query_type in ("factual_short", "factual_long"):
+            return []
+
+        # Skip if bias_context already set (memory retrieval bias is more specific).
+        if bias_context is not None:
+            return []
+
+        low_confidence = initial_value is not None and initial_value < 0.5
+        has_deductive  = any(t.lower() in _DEDUCTIVE for t in concepts)
+        long_query     = len(concepts) >= 6
+
+        if not (low_confidence or (has_deductive and long_query)):
+            return []
+
+        try:
+            from uchi.tree_search_engine import TreeSearchEngine
+            im_seed = concepts[-6:] + [_IM_TOKEN]
+            tree_eng = TreeSearchEngine(self._router)
+            raw = tree_eng.search(im_seed, time_limit_s=1.5)
+            _strip = _STOP_TOKENS | {_IM_TOKEN}
+            return [t for t in raw if t not in _strip][:12]
+        except Exception as exc:
+            _log.debug("Inner monologue pass failed: %s", exc)
+            return []
+
     def _safe_peek(self, tokens: List[str]) -> dict:
         try:
             return self._router.predictor.peek_distribution(tokens)
@@ -460,12 +529,101 @@ class ConvergentEngine:
     def _get_ssm_value(self, tokens: List[str]) -> Optional[float]:
         try:
             from uchi.neuro_symbolic import get_ssm
+            from uchi.calibration import TemperatureCalibrator
             import torch
             ssm = get_ssm()
             with torch.no_grad():
                 state = ssm.get_state(tokens)
-                return ssm.value(state).item()
+                raw   = ssm.value(state).item()
+            calibrator = TemperatureCalibrator.load()
+            return calibrator.predict(raw)
         except Exception:
+            return None
+
+    def _hrr_analogy_fallback(
+        self,
+        concepts: List[str],
+        q_vec: List[float],
+    ) -> Optional[Tuple[List[str], float]]:
+        """Synthesize a grounded response via HRR analogical reasoning.
+
+        When the trie has no confident path:
+          1. Encode the query into SSM state Q.
+          2. Retrieve the top-K nearest concept vectors from the HNSW index.
+          3. For each neighbor N_i, seed the trie from N_i's tokens and
+             generate a short candidate response.
+          4. Score each candidate by binding its state to Q via HRR circular
+             convolution and passing through the SSM value head.
+          5. Return the highest-scoring candidate, marked as synthesized.
+
+        The output is flagged with a small negative reward (-0.05) so the
+        GRPO loop knows it came from synthesis, not direct recall.
+        """
+        try:
+            from uchi.neuro_symbolic import get_ssm, hrr_bind
+            import torch
+
+            ssm     = get_ssm()
+            memory  = getattr(self._router, "memory", None)
+            cpu_mem = getattr(memory, "cpu_mem", None) if memory else None
+            if cpu_mem is None:
+                return None
+
+            with torch.no_grad():
+                q_state = ssm.get_state(concepts)             # (1, d_model)
+
+            q_np       = q_state.squeeze(0).detach().cpu().numpy()
+            neighbors  = cpu_mem.retrieve_with_scores(q_np, top_k=5)
+            if not neighbors:
+                return None
+
+            best_tokens: Optional[List[str]] = None
+            best_score  = -1.0
+
+            for neighbor_text, neighbor_sim in neighbors:
+                try:
+                    n_toks = self._router.tokenizer.tokenize(
+                        neighbor_text.split(), is_inference=True
+                    )
+                except Exception:
+                    n_toks = neighbor_text.split()[:8]
+
+                if not n_toks:
+                    continue
+
+                # Seed the trie from the tail of the neighbor's tokens and
+                # generate a short candidate reply.
+                try:
+                    seed   = n_toks[-4:]
+                    raw    = self._router.predictor.generate(
+                        n_tokens=10, seed=seed, temperature=0.3, use_mcts=False,
+                    )
+                    reply  = [t for t in raw if t not in _STOP_TOKENS]
+                    if not reply:
+                        continue
+
+                    # HRR bridge: bind the response state to the query state.
+                    # The value of the bound representation estimates how well
+                    # this response "fits" the query under the SSM.
+                    with torch.no_grad():
+                        r_state  = ssm.get_state(reply)
+                        bridged  = hrr_bind(r_state, q_state)
+                        raw_val  = ssm.value(bridged).item()
+
+                    # Combined score: neighbor proximity + bridged SSM value.
+                    combined = neighbor_sim * 0.6 + (raw_val + 1.0) * 0.2
+                    if combined > best_score:
+                        best_score  = combined
+                        best_tokens = reply
+                except Exception:
+                    continue
+
+            if best_tokens:
+                return best_tokens, best_score
+            return None
+
+        except Exception as exc:
+            _log.debug("HRR analogy fallback error: %s", exc)
             return None
 
     def _preflight_classify(self, seed: List[str]) -> dict:

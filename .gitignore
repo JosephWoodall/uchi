@@ -7,7 +7,10 @@ __pycache__/
 # Runtime state regenerated at startup
 uchi_cpu_memory_index.json
 uchi_cpu_memory_vectors.npy
+uchi_cpu_memory_hnsw.bin
 uchi_procedural_memory.json
+ssm_calibration.json
+*_incremental_checkpoint.json
 # PyTorch weights checkpoint
 ssm_dynamics.pt
 # Dev / one-off root scripts

@@ -102,3 +102,71 @@ class TestCPUVectorMemory:
         # Re-open from same path
         mem2 = CPUVectorMemory(db_path=self.db_path)
         assert "persisted" in mem2.records
+
+
+class TestIncrementalBrainBuilder:
+    """Unit tests for the incremental brain builder (item 5)."""
+
+    def setup_method(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.brain_path = os.path.join(self.tmp_dir, "test_brain.uchi")
+        self.checkpoint_path = os.path.join(self.tmp_dir, "checkpoint.json")
+
+    def test_checkpoint_roundtrip(self):
+        from uchi.incremental_builder import IncrementalBrainBuilder
+        builder = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        builder._save_checkpoint(current_source="mmlu", offset=42, total=100)
+        assert os.path.exists(self.checkpoint_path)
+
+        builder2 = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        assert builder2._checkpoint["current_source"] == "mmlu"
+        assert builder2._checkpoint["current_offset"] == 42
+        assert builder2._checkpoint["total_ingested"] == 100
+
+    def test_mark_source_complete(self):
+        from uchi.incremental_builder import IncrementalBrainBuilder
+        builder = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        builder._mark_source_complete("openhermes")
+        assert "openhermes" in builder._checkpoint["completed_sources"]
+        assert os.path.exists(self.checkpoint_path)
+
+    def test_clear_checkpoint(self):
+        from uchi.incremental_builder import IncrementalBrainBuilder
+        builder = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        builder._save_checkpoint(current_source="mmlu", offset=1, total=1)
+        assert os.path.exists(self.checkpoint_path)
+        builder._clear_checkpoint()
+        assert not os.path.exists(self.checkpoint_path)
+
+    def test_completed_sources_skipped(self):
+        from uchi.incremental_builder import IncrementalBrainBuilder
+        builder = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        # Mark a source complete before the run starts
+        builder._checkpoint["completed_sources"] = ["openhermes", "wikipedia",
+                                                     "mmlu", "gsm8k",
+                                                     "swebench", "humaneval"]
+        builder._save_checkpoint(total=0)
+        # run() with all sources pre-completed should not raise
+        # and should exit quickly without ingesting anything
+        builder2 = IncrementalBrainBuilder(
+            brain_path=self.brain_path,
+            checkpoint_path=self.checkpoint_path,
+        )
+        # Patch _train_ssm_delta to no-op to avoid torch cost in tests
+        builder2._train_ssm_delta = lambda router, seqs: None
+        builder2.run(limit=0, sources=["openhermes"])

@@ -111,18 +111,43 @@ def save_brain(router, path: str = "brain.uchi"):
             except Exception:
                 pass
 
+def get_bundled_brain_path() -> str:
+    """Return the path to the brain bundled with the uchi package, or '' if absent."""
+    try:
+        import importlib.resources as _ir
+        # Python 3.9+ path
+        pkg_data = _ir.files("uchi") / "data" / "brain.uchi"
+        candidate = str(pkg_data)
+        if os.path.exists(candidate):
+            return candidate
+    except Exception:
+        pass
+    # Fallback: resolve relative to this file
+    fallback = os.path.join(os.path.dirname(__file__), "data", "brain.uchi")
+    return fallback if os.path.exists(fallback) else ""
+
+
 def load_brain(path: str = "brain.uchi") -> OmniRouter:
     """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle.
-    Automatically rebuilds the brain from scratch if missing or corrupted.
+
+    Falls back in order:
+      1. User brain at `path`
+      2. Bundled brain shipped with the package (uchi/data/brain.uchi)
+      3. Full rebuild via build_full_brain()
     """
     import gzip
     print(f"[*] Loading persistent brain state from {path}...")
-    
+
     if not os.path.exists(path):
         print(f"[-] Brain file not found: {path}")
-        print("[*] Automatically triggering the Universal Builder Pipeline...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
+        bundled = get_bundled_brain_path()
+        if bundled:
+            print(f"[*] Using bundled brain: {bundled}")
+            path = bundled
+        else:
+            print("[*] Automatically triggering the Universal Builder Pipeline...")
+            from uchi.builder import build_full_brain
+            return build_full_brain(path)
         
     # Try gzip first; only fall through if the file genuinely isn't gzip-compressed
     try:

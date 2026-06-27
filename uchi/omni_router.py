@@ -17,6 +17,8 @@ from .code_engine import CodeEngine
 from .specialist_pool import SpecialistPool
 from .skill_registry import SkillRegistry
 from .convergent_engine import ConvergentEngine
+from .goal_state import GoalState
+from .experience_replay import ExperienceReplayBuffer as PrioritisedReplayBuffer
 import torch
 
 class OmniRouter:
@@ -60,6 +62,10 @@ class OmniRouter:
 
         self._conversation_history: list = []  # [(q_tokens, r_tokens), ...]
         self._context_window: int = 3           # prior turns to prepend to seed
+        self.goal_state = GoalState()           # cross-turn goal tracking
+        self.replay_buffer = PrioritisedReplayBuffer()  # experience replay for GRPO
+        self._replay_train_every: int = 8       # sample+train every N turns
+        self._turn_counter: int = 0             # counts chat() invocations
 
         self._bootstrap_persona(progress_callback)
         self._bootstrap_knowledge(progress_callback)
@@ -94,6 +100,14 @@ class OmniRouter:
             self._conversation_history = []
         if not hasattr(self, '_context_window'):
             self._context_window = 3
+        if not hasattr(self, 'goal_state'):
+            self.goal_state = GoalState()
+        if not hasattr(self, 'replay_buffer'):
+            self.replay_buffer = PrioritisedReplayBuffer()
+        if not hasattr(self, '_replay_train_every'):
+            self._replay_train_every = 8
+        if not hasattr(self, '_turn_counter'):
+            self._turn_counter = 0
 
     def __getstate__(self):
         # Exclude non-serialisable and always-reconstructed attributes.
@@ -322,17 +336,74 @@ class OmniRouter:
         (v_loss + d_loss).backward()
         self.ssm_optimizer.step()
 
-    def _compute_response_reward(self, query_tokens: list, reply_tokens: list) -> float:
-        """Coherence reward: bonus for appropriately-sized, non-repetitive responses."""
-        n = len(reply_tokens)
-        reward = 0.0
-        if 5 <= n <= 50:
-            reward += 0.1
-        if n > 0:
-            overlap = sum(1 for t in reply_tokens if t in set(query_tokens))
-            if overlap / n > 0.35:
-                reward -= 0.15
-        return reward
+    def _push_experience(
+        self,
+        concepts: list,
+        reply: list,
+        reward_hint: float,
+    ) -> None:
+        """Push a (query, response) pair to the replay buffer and trigger
+        periodic GRPO replay training every _replay_train_every turns."""
+        try:
+            self.replay_buffer.push(
+                query_tokens=concepts,
+                positive_tokens=reply,
+                priority=max(abs(reward_hint), 0.1),
+            )
+            self._turn_counter += 1
+            if self._turn_counter % self._replay_train_every == 0:
+                self._replay_train_step()
+        except Exception:
+            pass
+
+    def _replay_train_step(self) -> None:
+        """Sample a mini-batch from the replay buffer and run SSM training.
+
+        This is the stability mechanism for RL: the SSM trains on a diverse
+        sample of past interactions rather than only the most recent turn,
+        preventing overfitting to a narrow or pathological distribution.
+        """
+        try:
+            batch = self.replay_buffer.sample(batch_size=8)
+            if not batch:
+                return
+            from uchi.neuro_symbolic import get_ssm
+            ssm = get_ssm()
+            ssm.train()
+            with self.ssm_lock:
+                for exp in batch:
+                    q_toks = exp.get("query", [])
+                    r_toks = exp.get("positive", [])
+                    priority = float(exp.get("priority", 1.0))
+                    if not q_toks or not r_toks:
+                        continue
+                    seq = ["<|user|>"] + q_toks + ["<|assistant|>"] + r_toks
+                    reward = min(priority, 1.0)
+                    self.ssm_optimizer.zero_grad()
+                    v_loss = ssm.update_value(seq, reward=reward)
+                    d_loss = ssm.train_dynamics(seq)
+                    (v_loss + d_loss).backward()
+                    self.ssm_optimizer.step()
+                    # Update priority with current loss as difficulty signal.
+                    mem_id = exp.get("id")
+                    if mem_id is not None:
+                        new_pri = float((v_loss + d_loss).item())
+                        self.replay_buffer.update_priority(mem_id, new_pri)
+        except Exception:
+            pass
+
+    def _compute_response_reward(self, query_tokens: list, reply_tokens: list,
+                                  intent_key: str = None) -> float:
+        """Format reward: scores structural quality of the response.
+
+        Replaces the old length+overlap heuristic with the GRPO format reward
+        from grpo.py, which is intent-aware and calibrated to [-1, +1].
+        Scaled to [−0.15, +0.15] so it augments but does not dominate the
+        main factual reward signal.
+        """
+        from uchi.grpo import format_reward
+        raw = format_reward(reply_tokens, query_tokens, intent_key=intent_key)
+        return raw * 0.15
 
     def stream(self, concepts: list):
         """
@@ -468,6 +539,9 @@ class OmniRouter:
 
         concepts = self.tokenizer.tokenize(query_tokens, is_inference=True)
 
+        # Update cross-turn goal state before routing decisions.
+        self.goal_state.update(concepts, intent_key)
+
         # 2. Sentiment-based RL on previous turn
         positive_words = {"good", "great", "awesome", "correct", "yes", "amazing", "thanks", "thank"}
         negative_words = {"bad", "wrong", "incorrect", "no", "stop", "terrible", "awful"}
@@ -510,6 +584,12 @@ class OmniRouter:
                     self._conversation_history.append((concepts, web_answer.split()))
                     return web_answer
                 bias = retrieved if retrieved != "[Unknown Context]" else None
+                # If no memory-based bias, inject goal objective tokens to keep
+                # multi-turn responses aligned with the user's broader objective.
+                if bias is None and not self.goal_state.is_new_thread():
+                    obj_toks = self.goal_state.objective_tokens()
+                    if obj_toks:
+                        bias = " ".join(obj_toks)
                 kind, payload, reward_hint = self.convergent.generate(
                     concepts,
                     bootstrapped=self._knowledge_bootstrapped,
@@ -553,6 +633,7 @@ class OmniRouter:
                         predicted = self.tokenizer.detokenize(reply)
                         reply_str = " ".join(str(p) for p in predicted)
                         if reply_str.strip():
+                            self._push_experience(concepts, reply, reward_hint)
                             if kind == "uncertain":
                                 # Memory fallback: associative memory may know
                                 # what the MCTS could not generate from trie alone.
@@ -665,9 +746,11 @@ class OmniRouter:
             self.last_sequence = None
             return "I do not know the answer to that, even after searching the web."
 
-        # 7. Coherence reward: length + repetition signal
+        # 7. Format reward: length + coherence + structure signal
         if self.last_sequence:
-            coh_reward = self._compute_response_reward(query_tokens, reply)
+            coh_reward = self._compute_response_reward(
+                query_tokens, reply, intent_key=intent_key
+            )
             if coh_reward != 0.0:
                 self.baseline.update(coh_reward)
                 self._train_ssm(self.last_sequence, coh_reward)

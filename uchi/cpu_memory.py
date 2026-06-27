@@ -115,6 +115,23 @@ class CPUVectorMemory:
         idx.set_ef(_HNSW_EF_SEARCH)
         self._index = idx
 
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Backward compat: old CPUVectorMemory pickles have none of the HNSW attrs.
+        if not hasattr(self, '_index'):
+            self._index = None
+        if not hasattr(self, '_dim'):
+            self._dim = None
+        if not hasattr(self, '_hnsw_path'):
+            self._hnsw_path = self.db_path + "_hnsw.bin"
+        if not hasattr(self, '_idx_path'):
+            self._idx_path = self.db_path + "_index.json"
+        if not hasattr(self, '_legacy_vec_path'):
+            self._legacy_vec_path = self.db_path + "_vectors.npy"
+        # Try to restore HNSW index from disk if records exist but index wasn't pickled.
+        if self._index is None and getattr(self, 'records', None) and self._dim is not None:
+            self._load()
+
     def _save_index(self):
         if self._index is not None:
             self._index.save_index(self._hnsw_path)
@@ -183,7 +200,7 @@ class CPUVectorMemory:
             self._index.set_ef(max(_HNSW_EF_SEARCH, k))
             labels, distances = self._index.knn_query(q, k=k)
             # hnswlib "ip" space returns negative inner products as distances.
-            return [(self.records[i], -float(d))
+            return [(self.records[i], 1.0 - float(d))
                     for i, d in zip(labels[0], distances[0])
                     if i < n]
         except Exception as e:
@@ -192,7 +209,6 @@ class CPUVectorMemory:
 
     def _flat_query(self, query_emb: np.ndarray, k: int) -> List[Tuple[str, float]]:
         """O(N) fallback — used for small stores and HNSW error recovery."""
-        import hnswlib
         # Rebuild a tiny flat store from records using stored index if possible,
         # otherwise we have no vectors to scan — return empty.
         if self._index is None:
@@ -201,6 +217,6 @@ class CPUVectorMemory:
         k = min(k, len(self.records))
         self._index.set_ef(max(_HNSW_EF_SEARCH, k))
         labels, distances = self._index.knn_query(q, k=k)
-        return [(self.records[i], -float(d))
+        return [(self.records[i], 1.0 - float(d))
                 for i, d in zip(labels[0], distances[0])
                 if i < len(self.records)]

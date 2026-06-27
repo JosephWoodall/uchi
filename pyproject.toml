@@ -63,7 +63,7 @@ where   = ["."]
 include = ["uchi*"]
 
 [tool.setuptools.package-data]
-uchi = ["py.typed", "persona.txt"]
+uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/.gitkeep"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
