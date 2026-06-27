@@ -1,21 +1,22 @@
 {
   "swebench_instances": 50,
-  "swebench_code_rate": 0.56,
+  "swebench_code_rate": 0.54,
   "swebench_syntax_valid_rate": 0.0,
-  "swebench_avg_kw_overlap": 0.0028,
-  "swebench_avg_coverage": 0.0111,
-  "swebench_avg_composite": 0.1423,
-  "swebench_elapsed_s": 2569.7,
-  "swebench_ms_per_instance": 51394.4,
+  "swebench_avg_kw_overlap": 0.0015,
+  "swebench_avg_coverage": 0.0083,
+  "swebench_avg_composite": 0.1366,
+  "swebench_elapsed_s": 4104.6,
+  "swebench_ms_per_instance": 82092.4,
   "swebench_by_repo": {
-    "django": 0.132,
-    "sympy": 0.258,
-    "requests": 0.129,
-    "matplotlib": 0.05,
-    "pytest": 0.256,
-    "xarray": 0.102,
-    "sphinx": 0.127,
-    "astropy": 0.127,
-    "scikit-learn": 0.084
+    "xarray": 0.151,
+    "sympy": 0.126,
+    "django": 0.134,
+    "scikit-learn": 0.108,
+    "matplotlib": 0.191,
+    "requests": 0.127,
+    "pylint": 0.0,
+    "sphinx": 0.268,
+    "astropy": 0.126,
+    "pytest": 0.259
   }
 }
