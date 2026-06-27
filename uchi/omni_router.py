@@ -96,11 +96,17 @@ class OmniRouter:
             self._context_window = 3
 
     def __getstate__(self):
-        # Exclude non-serialisable or always-recreated transient attributes.
-        # __setstate__ rebuilds ssm_lock, ssm_optimizer, and _background_started
-        # on every load, so persisting them is both wasteful and broken
-        # (threading.Lock cannot be pickled).
-        skip = {"ssm_lock", "ssm_optimizer", "_background_started", "_daemon_procs"}
+        # Exclude non-serialisable and always-reconstructed attributes.
+        # - ssm_lock: threading.Lock cannot be pickled
+        # - ssm_optimizer: recreated in __setstate__ from current SSM params
+        # - specialist_pool, skills, convergent, code_engine: wrappers that hold
+        #   back-references to self; __setstate__ reconstructs them, so persisting
+        #   them inflates the brain file with redundant circular-reference chains
+        #   without preserving any state that can't be rebuilt in milliseconds.
+        skip = {
+            "ssm_lock", "ssm_optimizer", "_background_started", "_daemon_procs",
+            "specialist_pool", "skills", "convergent", "code_engine",
+        }
         return {k: v for k, v in self.__dict__.items() if k not in skip}
 
     def _bootstrap_persona(self, progress_callback=None):

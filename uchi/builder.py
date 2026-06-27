@@ -5,6 +5,7 @@ from tqdm import tqdm
 from uchi.cli import save_brain
 from uchi.omni_router import OmniRouter
 from uchi.neuro_symbolic import get_ssm
+from uchi.deduplication import IngestionDeduplicator
 import torch
 
 # A universal limit for dataset slicing so we don't spend 24 hours downloading 
@@ -28,6 +29,15 @@ def build_full_brain(brain_path="brain.uchi"):
     """
     print("\n[bold #bb9af7]=== UCHI UNIVERSAL BRAIN BUILDER ===[/bold #bb9af7]")
     print("[*] No existing brain detected. Initiating 5-Stage Reconstruction Pipeline.\n")
+
+    dedup = IngestionDeduplicator(threshold=0.8)
+
+    def _stream_if_unique(router, text: str) -> bool:
+        """Stream text into the trie only if it's not a near-duplicate. Returns True if ingested."""
+        if dedup.check_and_add(text):
+            return False
+        router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+        return True
 
     # ──────────────────────────────────────────────────────────────────────────
     # Phase 1: The Wipe
@@ -84,20 +94,19 @@ def build_full_brain(brain_path="brain.uchi"):
                 role = "<|user|>" if turn.get("from") == "human" else "<|assistant|>"
                 text += f"{role} {turn.get('value', '')} "
             if text:
-                router.stream(router.tokenizer.tokenize((text + "<|end|>").split(), is_inference=False))
+                _stream_if_unique(router, text + "<|end|>")
 
     # 3B: Wikipedia (Encyclopedic)
     ds_wiki = _safe_load_dataset("wikipedia", "20220301.en", split=f"train[:{KNOWLEDGE_LIMIT}]")
     if not ds_wiki:
-        # Fallback dataset format if config needed
-        ds_wiki = _safe_load_dataset("wikipedia", "20220301.en[train]") 
+        ds_wiki = _safe_load_dataset("wikipedia", "20220301.en[train]")
     if ds_wiki:
         for item in tqdm(ds_wiki, desc="Ingesting Wikipedia (Facts)"):
             text = f"<|user|> Tell me about {item.get('title', '')}. <|assistant|> {item.get('text', '')[:1000]} <|end|>"
-            router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_if_unique(router, text)
 
     # 3C: MMLU (Graduate Reasoning)
-    ds_mmlu = _safe_load_dataset("cais/mmlu", "all") # We'll just take the test split
+    ds_mmlu = _safe_load_dataset("cais/mmlu", "all")
     if not ds_mmlu:
         from datasets import load_dataset
         try:
@@ -105,14 +114,13 @@ def build_full_brain(brain_path="brain.uchi"):
         except Exception:
             ds_mmlu = None
     if ds_mmlu:
-        # Convert to list and slice to enforce KNOWLEDGE_LIMIT since split="test" returns the whole split
         ds_mmlu_subset = list(ds_mmlu)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_mmlu_subset, desc="Ingesting MMLU (Reasoning)"):
             q, choices, ans_idx = item.get('question',''), item.get('choices',[]), item.get('answer',-1)
             if 0 <= ans_idx < len(choices):
                 ans = choices[ans_idx]
                 text = f"<|user|> Question: {q} Choices: {', '.join(choices)} <|assistant|> {ans} <|end|>"
-                router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+                _stream_if_unique(router, text)
 
     # 3D: GSM8K (Math Reasoning)
     ds_gsm8k = _safe_load_dataset("gsm8k", "main")
@@ -126,7 +134,7 @@ def build_full_brain(brain_path="brain.uchi"):
         ds_gsm8k_subset = list(ds_gsm8k)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_gsm8k_subset, desc="Ingesting GSM8K (Math)"):
             text = f"<|user|> {item.get('question','')} <|assistant|> {item.get('answer','')} <|end|>"
-            router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_if_unique(router, text)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Phase 4: Rigorous Code Logic
@@ -146,7 +154,7 @@ def build_full_brain(brain_path="brain.uchi"):
         for item in tqdm(ds_swe_subset, desc="Ingesting SWE-Bench (Engineering)"):
             issue, patch = item.get('problem_statement',''), item.get('patch','')
             text = f"<|user|> Fix issue:\n{issue[:500]} <|assistant|> {patch[:500]} <|end|>"
-            router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_if_unique(router, text)
 
     # 4B: HumanEval (Algorithms)
     ds_humaneval = _safe_load_dataset("openai/openai_humaneval", "test")
@@ -154,7 +162,7 @@ def build_full_brain(brain_path="brain.uchi"):
         ds_humaneval_subset = list(ds_humaneval)[:KNOWLEDGE_LIMIT]
         for item in tqdm(ds_humaneval_subset, desc="Ingesting HumanEval (Algorithms)"):
             text = f"<|user|> Complete Python code:\n{item.get('prompt','')} <|assistant|> {item.get('canonical_solution','')} <|end|>"
-            router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_if_unique(router, text)
 
     # Save the master router
     save_brain(router, os.path.join(project_root, brain_path))
@@ -165,22 +173,33 @@ def build_full_brain(brain_path="brain.uchi"):
     print("\n[bold #7dcfff][*] Phase 5/5: Building MoE Specialist Sub-Brains...[/bold #7dcfff]")
     _build_specialists(project_root)
 
+    stats = dedup.stats()
+    print(f"\n[*] Deduplication: {stats['duplicates_blocked']} duplicates blocked "
+          f"({stats['duplicate_rate']*100:.1f}% of candidates), "
+          f"{stats['seen']} unique documents ingested.")
     print("\n[bold #9ece6a][+] RECONSTRUCTION COMPLETE. Uchi is Online.[/bold #9ece6a]")
     return router
 
 def _build_specialists(project_root):
     from uchi.omni_router import OmniRouter
     from uchi.cli import save_brain
+    from uchi.deduplication import IngestionDeduplicator
+
+    def _stream_unique(router, text, dedup):
+        if dedup.check_and_add(text):
+            return
+        router.stream(router.tokenizer.tokenize(text.split(), is_inference=False))
 
     # Brain Code — trained on HumanEval function completions
     print("  [*] Building brain_code.uchi...")
     r_code = OmniRouter(use_bpe=False)
+    dedup_code = IngestionDeduplicator()
     ds_he = _safe_load_dataset("openai/openai_humaneval", "test")
     if ds_he:
         for item in tqdm(list(ds_he)[:KNOWLEDGE_LIMIT], desc="  brain_code ← HumanEval"):
             text = (f"<|user|> Complete Python code:\n{item['prompt']} "
                     f"<|assistant|> {item['canonical_solution']} <|end|>")
-            r_code.stream(r_code.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_unique(r_code, text, dedup_code)
     else:
         r_code.stream(["<|user|>", "complete", "python", "code", "<|assistant|>", "def", "f", "return", "<|end|>"])
     save_brain(r_code, os.path.join(project_root, "brain_code.uchi"))
@@ -188,11 +207,12 @@ def _build_specialists(project_root):
     # Brain Math — trained on GSM8K
     print("  [*] Building brain_math.uchi...")
     r_math = OmniRouter(use_bpe=False)
+    dedup_math = IngestionDeduplicator()
     ds_math = _safe_load_dataset("gsm8k", "main")
     if ds_math:
         for item in tqdm(list(ds_math)[:KNOWLEDGE_LIMIT], desc="  brain_math ← GSM8K"):
             text = f"<|user|> {item['question']} <|assistant|> {item['answer']} <|end|>"
-            r_math.stream(r_math.tokenizer.tokenize(text.split(), is_inference=False))
+            _stream_unique(r_math, text, dedup_math)
     else:
         r_math.stream(["<|user|>", "math", "equation", "<|assistant|>", "1", "+", "1", "=", "2", "<|end|>"])
     save_brain(r_math, os.path.join(project_root, "brain_math.uchi"))
@@ -200,6 +220,7 @@ def _build_specialists(project_root):
     # Brain Convo — trained on OpenHermes conversational turns
     print("  [*] Building brain_convo.uchi...")
     r_convo = OmniRouter(use_bpe=False)
+    dedup_convo = IngestionDeduplicator()
     ds_convo = _safe_load_dataset("teknium/OpenHermes-2.5", f"train[:{KNOWLEDGE_LIMIT}]")
     if ds_convo:
         for item in tqdm(ds_convo, desc="  brain_convo ← OpenHermes"):
@@ -208,7 +229,7 @@ def _build_specialists(project_root):
                 role = "<|user|>" if turn.get("from") == "human" else "<|assistant|>"
                 text += f"{role} {turn.get('value', '')} "
             if text:
-                r_convo.stream(r_convo.tokenizer.tokenize((text + "<|end|>").split(), is_inference=False))
+                _stream_unique(r_convo, text + "<|end|>", dedup_convo)
     else:
         r_convo.stream(["<|user|>", "hello", "<|assistant|>", "hi", "how", "are", "you", "<|end|>"])
     save_brain(r_convo, os.path.join(project_root, "brain_convo.uchi"))

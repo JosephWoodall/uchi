@@ -1,0 +1,21 @@
+{
+  "swebench_instances": 50,
+  "swebench_code_rate": 0.0,
+  "swebench_syntax_valid_rate": 0.0,
+  "swebench_avg_kw_overlap": 0.0,
+  "swebench_avg_coverage": 0.0,
+  "swebench_avg_composite": 0.0,
+  "swebench_elapsed_s": 16.4,
+  "swebench_ms_per_instance": 327.1,
+  "swebench_by_repo": {
+    "django": 0.0,
+    "flask": 0.0,
+    "pylint": 0.0,
+    "pytest": 0.0,
+    "scikit-learn": 0.0,
+    "matplotlib": 0.0,
+    "sympy": 0.0,
+    "sphinx": 0.0,
+    "astropy": 0.0
+  }
+}
