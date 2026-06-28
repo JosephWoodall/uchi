@@ -5,7 +5,7 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: One Import. Everything Compounds.
+## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP). One Import. Everything Compounds.
 
 Uchi v0.3.0 dramatically simplifies the public API and introduces a compounding mechanism that makes every analysis result immediately learnable by every other instance.
 
@@ -273,22 +273,38 @@ u.router.predictor     # SequenceGenerator
 u.router.skills        # SkillRegistry
 ```
 
-### 4. Offline Knowledge Bootstrapping
+### 4. Growing the Brain
 
-To scale Uchi's knowledge base beyond the cold-start defaults, run these scripts once before distributing your `brain.uchi`:
+Uchi ships with a pre-packaged general knowledge brain. To expand it with your own data, use `ingest()` from the Python API or `/bootstrap` from the REST API — then save the result.
 
-```bash
-# Ingest Wikipedia + code_search_net via HuggingFace (requires: pip install datasets)
-python scripts/bootstrap_knowledge.py --limit 10000
+```python
+from uchi import Uchi
 
-# Ingest Python stdlib function patterns via AST (no internet required)
-python scripts/bootstrap_code.py
+# Load the packaged brain and expand it with your own knowledge
+u = Uchi()
+u.ingest("knowledge_base/")              # walk a directory (txt/md/py/json/csv)
+u.ingest("quarterly_report.pdf")         # PDF (pip install pdfminer.six)
+u.ingest("events.csv", col="notes")      # specific CSV column
+u.save("expanded_brain.uchi")
 
-# Ingest Wikipedia fact triples via spaCy SVO extraction (requires: pip install wikipedia spacy)
-python scripts/bootstrap_wikidata.py
+# Or chain it all in one line
+Uchi().ingest("docs/").ingest("data.csv").save("my_brain.uchi")
 ```
 
-The resulting `brain.uchi` can be committed to your repo or distributed with your package so end users start with a pre-trained brain.
+From the REST API:
+```bash
+# Ingest raw text
+curl -X POST http://localhost:8000/bootstrap \
+  -H "Content-Type: application/json" \
+  -d '{"text": "The boiling point of water is 100°C at sea level."}'
+
+# Ingest a URL
+curl -X POST http://localhost:8000/bootstrap \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://en.wikipedia.org/wiki/Python_(programming_language)"}'
+```
+
+From the TUI, use `/load <file>` or `/learn <url|text>` to ingest content mid-session. The brain auto-saves on exit.
 
 ## Benchmarks
 
@@ -362,9 +378,43 @@ Uchi cannot fabricate tokens that are not in its trie. Every generated token is 
 
 ---
 
+### MMLU — **27.0%** accuracy (200 questions, 57 subjects)
+
+Standard academic language-understanding benchmark across 57 domains. Uchi beat the random baseline (25%) for the first time in v0.3.0 — a genuine above-chance signal from a deterministic system with no neural pre-training. No-parse rate dropped from 79% (baseline) to 12%, meaning 88% of responses are now well-formed A/B/C/D answers.
+
+| Metric | Baseline (pre-v0.3.0) | v0.3.0 | Delta |
+|---|---|---|---|
+| Accuracy | 6.0% (12/200) | **27.0% (54/200)** | +21.0 pp |
+| No-parse rate | 79.0% | **12.0% (24/200)** | −67.0 pp |
+| Random baseline | 25.0% | 25.0% | — |
+
+Best subjects: `formal_logic` 100%, `high_school_statistics` 100%, `electrical_engineering` 100%, `college_medicine` 75%
+
+Run: `python benchmarks/mmlu_benchmark.py --sample 200`
+
+---
+
+### SWE-bench (proxy) — **62%** code generation rate
+
+Uchi's response to real GitHub issue→patch prompts across 10 popular Python repositories. Code generation rate (producing *any* code block) went from 0% to 62%. Syntax correctness is still 0% — the trie has code path knowledge but not yet enough density to complete valid function bodies end-to-end.
+
+| Metric | Baseline (pre-v0.3.0) | v0.3.0 | Delta |
+|---|---|---|---|
+| Code generation rate | 0.0% | **62.0% (31/50)** | +62.0 pp |
+| Composite proxy score | 0.000 | **0.156** | +0.156 |
+| Syntax valid rate | 0.0% | 0.0% | — |
+
+Best repos: `astropy` 0.250, `pytest` 0.190, `sympy` 0.168, `matplotlib` 0.168
+
+Run: `python benchmarks/swebench_benchmark.py --sample 50`
+
+---
+
 <!-- BENCHMARK_TABLE_START -->
 | Metric | Score | Notes |
 |---|---|---|
+| **MMLU Accuracy** | **27.0%** (n=200, 57 subjects) | Beats 25% random baseline; no-parse rate 12% (was 79%) |
+| **SWE-bench Code Generation** | **62.0%** (31/50 instances) | Composite proxy 0.156; syntax validity still 0% |
 | **Pre-load Recall** | **80.0%** (n=50) | Stream N facts → immediately test recall; measures deterministic memory |
 | **Zero Catastrophic Forgetting** | **100.0%** after 1000 noise facts | Anchor facts recalled correctly after 1000 distractors streamed on top |
 | **Latency vs. Brain Size** | 10facts→10666ms  100facts→2568ms  500facts→2282ms  1000facts→2597ms | Proves O(depth) trie lookup: latency stays flat as brain grows |

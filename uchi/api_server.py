@@ -67,14 +67,15 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
+        from uchi.response_normalizer import normalize
         msg = request.message.strip()
         if msg.startswith("/"):
             parts = msg[1:].split(None, 1)
             name = parts[0]
             args = parts[1] if len(parts) > 1 else ""
-            reply = _router.skills.dispatch(name, args)
+            reply = normalize(_router.skills.dispatch(name, args) or "")
         else:
-            reply = _router.chat(msg)
+            reply = normalize(_router.chat(msg) or "")
 
         save_brain(_router)
         return ChatResponse(reply=reply)

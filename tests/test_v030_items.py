@@ -244,3 +244,75 @@ class TestFormatReward:
         for tokens in [[], ["a"], ["x"] * 5, ["the", "quick", "brown"] * 20]:
             score = format_reward(tokens, ["hello"])
             assert -1.0 <= score <= 1.0
+
+    def test_synset_tokens_penalised(self):
+        """Naturalness penalty: synset-heavy responses score lower."""
+        from uchi.grpo import format_reward
+        synset_resp  = ["water.n.01", "is.v.01", "boiling.n.01", "at.r.01", "100.n.01"]
+        clean_resp   = ["water", "is", "boiling", "at", "100", "degrees"]
+        assert format_reward(synset_resp, []) < format_reward(clean_resp, [])
+
+    def test_control_tokens_penalised(self):
+        from uchi.grpo import format_reward
+        control_resp = ["<|assistant|>", "paris", "is", "the", "capital", "<|user|>"]
+        clean_resp   = ["paris", "is", "the", "capital", "of", "france"]
+        assert format_reward(control_resp, []) < format_reward(clean_resp, [])
+
+
+# ── Item 14: Response Normalizer ─────────────────────────────────────────────
+
+class TestResponseNormalizer:
+    def test_strips_synset_markers(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("the water.n.01 boil.v.01 at 100 degree.n.01")
+        assert ".n.01" not in result
+        assert ".v.01" not in result
+        assert "water" in result
+
+    def test_strips_control_tokens(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("<|assistant|> paris is the capital <|user|>")
+        assert "<|" not in result
+        assert "paris" in result.lower()
+
+    def test_strips_uncertain_marker(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("[Uncertain] the answer may be photosynthesis.n.01")
+        assert "[Uncertain]" not in result
+        assert "photosynthesis" in result
+
+    def test_capitalises_first_letter(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("the answer is 42")
+        assert result[0].isupper()
+
+    def test_expands_underscore_compounds(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("united_states is a country")
+        assert "_" not in result
+        assert "united states" in result.lower()
+
+    def test_terminal_punctuation_added(self):
+        from uchi.response_normalizer import normalize
+        result = normalize("paris is the capital of france")
+        assert result[-1] in ".!?"
+
+    def test_empty_string_passthrough(self):
+        from uchi.response_normalizer import normalize
+        assert normalize("") == ""
+        assert normalize("  ") == "  "
+
+    def test_already_clean_unchanged(self):
+        from uchi.response_normalizer import normalize
+        clean = "The capital of France is Paris."
+        result = normalize(clean)
+        assert result == clean
+
+    def test_combined_artifacts(self):
+        from uchi.response_normalizer import normalize
+        raw = "<|assistant|> the capital.n.01 of france.n.01 is paris.n.01 <|user|>"
+        result = normalize(raw)
+        assert "<|" not in result
+        assert ".n.01" not in result
+        assert result[0].isupper()
+        assert "paris" in result.lower()

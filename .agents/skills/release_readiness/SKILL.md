@@ -1,6 +1,6 @@
 ---
 name: Release Readiness
-description: Executes the release readiness checklist - run regression tests, verify dual-layer documentation, check CI/CD pipelines, and safely push to the active branch.
+description: Executes the release readiness checklist - run regression tests, verify dual-layer documentation, check CI/CD pipelines, and prepare the release commit for the user to push.
 ---
 
 # Release Readiness Checklist
@@ -49,10 +49,23 @@ Ensure the repository adheres to elite open-source standards:
 Ensure that the codebase works perfectly for a new user:
 - Verify that all core dependencies required to run the CLI, API Harness, and tests are explicitly defined in `pyproject.toml` (e.g., `fastapi`, `uvicorn`, `requests`, `beautifulsoup4`, `tqdm`).
 - Run a simulated installation (`pip install -e .`) to guarantee that the `uchi` entrypoint binds correctly without missing external packages.
+- **Normalizer smoke test**: Run the following and verify the response contains no `.n.01` / `.v.02` synset markers, no `<|...|>` control tokens, starts with a capital letter, and ends with punctuation:
+  ```python
+  from uchi import Uchi
+  u = Uchi()
+  reply = u.ask("What is photosynthesis?")
+  print(repr(reply))
+  ```
 
-## 6. Final Push
-Once all checks pass, push the changes to GitHub:
-- Stage all changes (`git add .`).
-- Commit with a descriptive message (e.g., "chore: final release readiness sweep").
-- Push to the current branch (`git push`).
-- *Note:* If GitHub rejects the push due to workflow scope restrictions, un-stage `.github/workflows/`, push the rest, and instruct the user to update the workflow via the GitHub Web UI.
+## 6. Prepare Release Commit
+Once all checks pass, stage and commit the release. **Do NOT push** — the user runs the final push themselves.
+- Stage relevant files (be explicit; avoid `git add .` which can accidentally include runtime artifacts):
+  ```
+  git add uchi/ tests/ docs/ benchmarks/ README.md CHANGELOG.md pyproject.toml
+  ```
+- Commit with a descriptive message (e.g., `chore: vX.Y.Z release readiness sweep`).
+- Print the exact push command for the user to run:
+  ```
+  git push -u origin <current-branch-name>
+  ```
+- *Note:* If GitHub is expected to reject the push due to workflow scope restrictions, instruct the user to un-stage `.github/workflows/` before pushing and update the workflow via the GitHub Web UI instead.
