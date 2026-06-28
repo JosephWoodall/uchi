@@ -6,6 +6,7 @@ Phase 4 (Infinite Context), and Phase 5 (Associative Memory) into a
 single, coherent Omni-Modal architecture.
 """
 
+import re
 import threading
 from .omni_tokenizer import OmniTokenizer
 from .online_tokenizer import OnlineTokenizer
@@ -20,6 +21,36 @@ from .convergent_engine import ConvergentEngine
 from .goal_state import GoalState
 from .experience_replay import ExperienceReplayBuffer as PrioritisedReplayBuffer
 import torch
+
+_FENCED_CODE_RE = re.compile(r'```(?:python)?\s*(.*?)```', re.DOTALL)
+_INLINE_CODE_RE = re.compile(r'`([^`\n]{6,})`')
+
+
+def _extract_code_bias(message: str) -> str | None:
+    """Return key tokens from any code block in the message for MCTS bias.
+
+    Fenced blocks take priority; then inline backtick code containing
+    a def/class keyword; then bare indented lines. Returns at most 25
+    tokens so the bias is focused rather than overwhelming.
+    """
+    m = _FENCED_CODE_RE.search(message)
+    if m:
+        tokens = m.group(1).strip().split()[:25]
+        return " ".join(tokens) if tokens else None
+
+    for snippet in _INLINE_CODE_RE.findall(message):
+        if any(kw in snippet for kw in ("def ", "class ", "return ", "import ")):
+            return snippet.strip()[:120]
+
+    code_lines = [
+        ln.strip() for ln in message.split("\n")
+        if ln.strip().startswith(("def ", "class ", "return ", "import ", "    "))
+    ]
+    if code_lines:
+        return " ".join(" ".join(ln.split()) for ln in code_lines[:5])[:120]
+
+    return None
+
 
 class OmniRouter:
     """
@@ -594,6 +625,14 @@ class OmniRouter:
                     obj_toks = self.goal_state.objective_tokens()
                     if obj_toks:
                         bias = " ".join(obj_toks)
+                # Code-context conditioning: if the message contains a code
+                # block, extract key tokens and prepend to bias so every MCTS
+                # rollout is conditioned on the existing function body.  This
+                # also suppresses the greedy bypass (by making bias non-None),
+                # forcing deliberate MCTS generation for code modification queries.
+                _code_bias = _extract_code_bias(message)
+                if _code_bias:
+                    bias = (_code_bias + " " + bias) if bias else _code_bias
                 kind, payload, reward_hint = self.convergent.generate(
                     concepts,
                     bootstrapped=self._knowledge_bootstrapped,

@@ -17,7 +17,11 @@ Reference: DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL (2025)
 
 import ast
 import math
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from typing import List, Optional
 
 import torch
@@ -102,9 +106,18 @@ def format_reward(
         has_op    = any(op in r_text for op in ["+", "-", "*", "/", "=", "^"])
         structure_score = 0.5 * float(has_digit) + 0.5 * float(has_op)
     else:
-        # General: reward non-empty, lower-cased, natural-looking tokens.
-        natural = sum(1 for t in response_tokens if t.islower() and len(t) > 2)
-        structure_score = min(natural / max(n, 1), 1.0)
+        # Type-Token Ratio: vocabulary richness (standard NLP metric)
+        unique_t = len(set(t.lower() for t in response_tokens))
+        ttr = unique_t / max(n, 1)
+        # Sentence completeness: terminal punctuation in last 3 tokens
+        has_terminal = any(
+            response_tokens[i].endswith((".", "!", "?"))
+            for i in range(max(0, n - 3), n)
+        )
+        # Content density: alphabetic tokens longer than 3 chars (excludes function words/artifacts)
+        content = sum(1 for t in response_tokens if t.isalpha() and len(t) > 3)
+        content_density = content / max(n, 1)
+        structure_score = 0.40 * ttr + 0.30 * float(has_terminal) + 0.30 * content_density
 
     # ── naturalness penalty (synset / control token leakage) ─────────────────
     # Counts raw trie vocabulary tokens that should never reach the user.
@@ -124,6 +137,98 @@ def format_reward(
         + naturalness_penalty
     )
     return float(max(-1.0, min(1.0, total)))
+
+
+_FENCED_CODE_RE = re.compile(r'```(?:python)?\s*(.*?)```', re.DOTALL)
+
+
+def _extract_code_only(text: str) -> str:
+    """Extract just the code portion from a mixed natural-language + code response.
+
+    Priority: fenced code block > def/class lines > raw text.
+    """
+    m = _FENCED_CODE_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    lines = text.split("\n")
+    code_lines: list[str] = []
+    in_block = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith(("def ", "class ", "import ", "from ")):
+            in_block = True
+        if in_block:
+            code_lines.append(ln)
+    return "\n".join(code_lines) if code_lines else text
+
+
+def _run_in_sandbox(script: str, timeout: float) -> float:
+    fname = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".py", mode="w", delete=False, dir=tempfile.gettempdir()
+        ) as f:
+            f.write(script)
+            fname = f.name
+        result = subprocess.run([sys.executable, fname], timeout=timeout, capture_output=True)
+        return 1.0 if result.returncode == 0 else -0.5
+    except subprocess.TimeoutExpired:
+        return -0.25
+    except Exception:
+        return 0.0
+    finally:
+        if fname:
+            try:
+                os.unlink(fname)
+            except OSError:
+                pass
+
+
+def execution_reward(code: str, assertion: str, timeout: float = 5.0) -> float:
+    """Execute generated code + assertion in a subprocess sandbox.
+
+    Handles mixed natural-language + code responses by trying to extract
+    just the code block if the raw text fails execution.
+
+    Returns:
+      +1.0  all assertions passed
+      -0.5  assertion failed (wrong output, NameError, etc.)
+      -0.25 timeout (likely infinite loop)
+       0.0  empty input or unexpected error
+    """
+    if not code.strip() or not assertion.strip():
+        return 0.0
+    result = _run_in_sandbox(f"{code}\n{assertion}\n", timeout)
+    if result == 1.0:
+        return result
+    extracted = _extract_code_only(code)
+    if extracted.strip() and extracted != code:
+        result2 = _run_in_sandbox(f"{extracted}\n{assertion}\n", timeout)
+        if result2 > result:
+            return result2
+    return result
+
+
+def dpo_preference_signal(
+    preferred_reward: float,
+    rejected_reward: float,
+    beta: float = 0.1,
+) -> tuple:
+    """DPO-inspired preference signal for SSM training.
+
+    Computes a contrastive training signal: how strongly to push toward
+    the preferred response and away from the rejected one. Beta controls
+    sharpness — lower beta (0.1) gives smoother gradients than standard DPO (0.5).
+
+    Returns (push_signal, pull_signal) where:
+      push_signal > 0  — use as reward for the preferred sequence
+      pull_signal < 0  — use as reward for the rejected sequence
+
+    Reference: Rafailov et al. 2023, "Direct Preference Optimization" (NeurIPS).
+    """
+    margin = preferred_reward - rejected_reward
+    dpo_val = float(torch.sigmoid(torch.tensor(beta * margin)).item())
+    return +dpo_val, -(1.0 - dpo_val)
 
 
 def grpo_advantage(rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:

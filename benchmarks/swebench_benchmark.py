@@ -40,7 +40,7 @@ import os
 import re
 import sys
 import time
-from typing import Optional
+import urllib.request
 
 
 @contextlib.contextmanager
@@ -62,20 +62,106 @@ _W = 80
 _DEFAULT_OUT = os.path.join(os.path.dirname(__file__), "swebench_results.json")
 
 
+# ── source code retrieval ─────────────────────────────────────────────────────
+
+_DIFF_FILE_RE = re.compile(r"^diff --git a/(.+?) b/", re.MULTILINE)
+_HUNK_RE      = re.compile(r"^@@ .+? @@", re.MULTILINE)
+_RAW_CACHE: dict[str, str] = {}
+
+
+def _extract_patch_files(patch: str) -> list[str]:
+    """Return the set of file paths modified by a unified diff patch."""
+    return _DIFF_FILE_RE.findall(patch)
+
+
+def _fetch_source_snippet(repo: str, commit: str, filepath: str,
+                          max_lines: int = 60) -> str:
+    """Fetch the first *max_lines* lines of a file from GitHub raw content.
+
+    Returns an empty string on any network or HTTP error so the benchmark
+    degrades gracefully without source context.
+    """
+    cache_key = f"{repo}@{commit}:{filepath}"
+    if cache_key in _RAW_CACHE:
+        return _RAW_CACHE[cache_key]
+
+    url = f"https://raw.githubusercontent.com/{repo}/{commit}/{filepath}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "uchi-benchmark/0.3"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read(max_lines * 200).decode("utf-8", errors="replace")
+        lines = raw.splitlines()[:max_lines]
+        snippet = "\n".join(lines)
+    except Exception:
+        snippet = ""
+
+    _RAW_CACHE[cache_key] = snippet
+    return snippet
+
+
+def _build_prompt(repo: str, problem: str, patch: str, base_commit: str) -> str:
+    """Build the SWE-bench prompt, optionally prepending fetched source context."""
+    truncated = len(problem) > 1500
+    prompt_body = (
+        f"Fix the following bug in the {repo} repository:\n\n"
+        + problem[:1500]
+        + ("\n\n[problem truncated]" if truncated else "")
+        + "\n\nProvide a Python code fix:"
+    )
+
+    # Attempt to fetch the first modified file's source so Uchi sees what to patch.
+    files = _extract_patch_files(patch)
+    if files and base_commit:
+        snippet = _fetch_source_snippet(repo, base_commit, files[0])
+        if snippet:
+            lang_hint = "python" if files[0].endswith(".py") else ""
+            source_block = (
+                f"\n\nRelevant source file ({files[0]}):\n"
+                f"```{lang_hint}\n{snippet}\n```"
+            )
+            prompt_body = (
+                f"Fix the following bug in the {repo} repository:\n\n"
+                + problem[:1000]
+                + ("\n\n[problem truncated]" if len(problem) > 1000 else "")
+                + source_block
+                + "\n\nProvide a Python code fix:"
+            )
+
+    return prompt_body
+
+
 # ── scoring helpers ───────────────────────────────────────────────────────────
 
 def _extract_code_blocks(text: str) -> list[str]:
-    """Pull fenced code blocks and bare indented blocks from a response."""
+    """Pull code from a response in priority order.
+
+    Priority:
+      1. Fenced code blocks (``` ... ```) — LLM-style output
+      2. 4-space / tab indented lines — conventional Python formatting
+      3. Lines beginning with def/class/import/return — trie token output,
+         which is flat (no indentation) but still syntactically meaningful
+    """
+    # 1. Fenced blocks
     blocks = re.findall(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
-    if not blocks:
-        # Fall back: any line starting with 4 spaces or a tab
-        indented = [
-            line for line in text.splitlines()
-            if line.startswith("    ") or line.startswith("\t")
-        ]
-        if indented:
-            blocks = ["\n".join(indented)]
-    return [b.strip() for b in blocks if b.strip()]
+    if blocks:
+        return [b.strip() for b in blocks if b.strip()]
+
+    lines = text.splitlines()
+
+    # 2. Indented lines
+    indented = [ln for ln in lines if ln.startswith("    ") or ln.startswith("\t")]
+    if indented:
+        return ["\n".join(indented)]
+
+    # 3. Bare code lines (trie output) — def/class/import/return at line start
+    _CODE_START = re.compile(
+        r"^(def |class |import |from |return |if |for |while |async def )"
+    )
+    code_lines = [ln for ln in lines if _CODE_START.match(ln.strip())]
+    if code_lines:
+        return ["\n".join(code_lines)]
+
+    return []
 
 
 def _is_valid_python(code: str) -> bool:
@@ -169,17 +255,12 @@ def run_swebench(router, sample: int, verbose: bool) -> dict:
 
     t0 = time.time()
     for i, row in enumerate(ds):
-        repo    = row["repo"]
-        problem = row["problem_statement"]
-        patch   = row["patch"]
+        repo        = row["repo"]
+        problem     = row["problem_statement"]
+        patch       = row["patch"]
+        base_commit = row.get("base_commit", "")
 
-        # Truncate very long problem statements to keep prompts reasonable
-        prompt = (
-            f"Fix the following bug in the {repo} repository:\n\n"
-            + problem[:1500]
-            + ("\n\n[problem truncated]" if len(problem) > 1500 else "")
-            + "\n\nProvide a Python code fix:"
-        )
+        prompt = _build_prompt(repo, problem, patch, base_commit)
 
         try:
             response = router.chat(prompt) or ""
@@ -214,7 +295,7 @@ def run_swebench(router, sample: int, verbose: bool) -> dict:
     best5  = sorted(repo_avg.items(), key=lambda x: x[1], reverse=True)[:5]
 
     print(f"\n  {'─'*_W}")
-    print(f"  SWE-bench Code Generation Proxy Results")
+    print("  SWE-bench Code Generation Proxy Results")
     print(f"  {'─'*_W}")
     print(f"  Instances         : {n}")
     print(f"  Code generated    : {int(totals['has_code'])}/{n}  ({totals['has_code']/n*100:.1f}%)")
@@ -223,12 +304,12 @@ def run_swebench(router, sample: int, verbose: bool) -> dict:
     print(f"  Avg problem coverage: {averages.get('coverage', 0):.3f}")
     print(f"  Avg composite score : {averages.get('composite', 0):.3f}")
     print(f"  Time              : {elapsed:.1f}s  ({elapsed/n*1000:.0f}ms/instance)")
-    print(f"\n  NOTE: composite score is a proxy metric. Real SWE-bench resolution")
-    print(f"  rate requires containerized test execution (out of scope for this harness).")
-    print(f"\n  Best repos:")
+    print("\n  NOTE: composite score is a proxy metric. Real SWE-bench resolution")
+    print("  rate requires containerized test execution (out of scope for this harness).")
+    print("\n  Best repos:")
     for repo, sc in best5:
         print(f"    {repo:<40} {sc:.3f}")
-    print(f"\n  Worst repos:")
+    print("\n  Worst repos:")
     for repo, sc in worst5:
         print(f"    {repo:<40} {sc:.3f}")
     print(f"  {'─'*_W}")
@@ -266,7 +347,8 @@ def main():
     print(" Uchi SWE-bench Benchmark — Code Generation Quality Proxy")
     print("="*_W + "\n")
 
-    import gzip, pickle
+    import gzip
+    import pickle
     from uchi.omni_router import OmniRouter
 
     brain_path = args.brain

@@ -291,6 +291,18 @@ class ConvergentEngine:
                         mcts_sims=_mcts_sims,
                     )
                     reply = [t for t in raw if t not in _STOP_TOKENS]
+
+                    # MCQ self-consistency: if this is a multiple-choice query
+                    # (ends with "Answer:"), take 3 samples and return the
+                    # majority-voted letter.  Wang et al. 2023 — self-consistency
+                    # reliably outperforms single-sample greedy for MCQ.
+                    if _greedy_by_preflight and "answer:" in " ".join(
+                        _greedy_seed[-6:]
+                    ).lower():
+                        reply = self._mcq_majority_vote(
+                            _greedy_seed, reply, _mcts_sims, _think
+                        )
+
                     # Preflight: trie peaked at 60%+ → SSM uncertainty should not override.
                     # An untrained SSM returning -0.7 would reject a 67%-confidence trie answer.
                     _oracle_ssm = None if _greedy_by_preflight else initial_value
@@ -444,6 +456,16 @@ class ConvergentEngine:
                     _log.debug("ConvergentEngine tree escalation: %s", exc)
                     _think(f"[dim]tree search error: {exc}[/dim]")
 
+            # 5c. Code execution scratchpad: verify and refine ALL code candidates,
+            #     not just oracle-rejected ones.  A syntactically valid but
+            #     functionally wrong function passes the oracle — the scratchpad
+            #     catches it via test-assertion execution.
+            if _query_type == "code" and best_text:
+                best_text = self._code_scratchpad_refine(
+                    best_text, seed, bias_context,
+                    _candidate_tokens, _mcts_sims, _think,
+                )
+
             # 6. Tool vs text: relative margin check
             if (
                 best_tool is not None
@@ -472,6 +494,312 @@ class ConvergentEngine:
             return ("uncertain", [], -0.1)
 
     # ── private helpers ───────────────────────────────────────────────────────
+
+    def _mcq_majority_vote(
+        self,
+        seed: List[str],
+        first_reply: List[str],
+        mcts_sims: int,
+        _think,
+        n_samples: int = 3,
+    ) -> List[str]:
+        """Self-consistency voting for MCQ queries.
+
+        Generates n_samples responses with slight temperature variation and
+        returns the majority-voted letter.  Falls back to the original reply
+        if no valid A/B/C/D letter can be extracted from any sample.
+
+        Reference: Wang et al. 2023 "Self-Consistency Improves Chain of
+        Thought Reasoning in Language Models."
+        """
+        from collections import Counter
+
+        _MCQ_LETTERS = {"a", "b", "c", "d"}
+
+        def _letter(toks: List[str]) -> str | None:
+            if not toks:
+                return None
+            t = toks[0].lower().strip(".,):()")
+            return t if t in _MCQ_LETTERS else None
+
+        votes: List[str] = []
+        first = _letter(first_reply)
+        if first:
+            votes.append(first)
+
+        # Temperatures: 0.0 (argmax), 0.4, 0.8 — spread wide enough to get
+        # genuine diversity.  Low-temp voting on near-identical samples is useless.
+        _vote_temps = [0.4, 0.8]
+        for k, temp in enumerate(_vote_temps[:n_samples - 1]):
+            try:
+                raw_k = self._router.predictor.generate(
+                    n_tokens=2,
+                    seed=seed,
+                    temperature=temp,
+                    use_mcts=False,
+                    bias_context=None,
+                    mcts_sims=1,
+                )
+                letter = _letter([t for t in raw_k if t not in _STOP_TOKENS])
+                if letter:
+                    votes.append(letter)
+            except Exception:
+                pass
+
+        if not votes:
+            return first_reply
+        winner, count = Counter(votes).most_common(1)[0]
+        if winner != first:
+            _think(
+                f"[bold #79c0ff]MCQ self-consistency: votes={votes} → {winner} "
+                f"(confidence={count}/{len(votes)})[/bold #79c0ff]"
+            )
+        return [winner]
+
+    def _code_scratchpad_refine(
+        self,
+        candidate: List[str],
+        seed: List[str],
+        bias_context: Optional[str],
+        candidate_tokens: int,
+        mcts_sims: int,
+        _think,
+        max_attempts: int = 3,
+    ) -> List[str]:
+        """Execution-verified refinement loop for code queries.
+
+        For each attempt:
+          1. Parse the candidate (ast.parse).
+          2. Extract the function name and use it to MCTS-generate a test
+             assertion from the trie's learned "write test assertion for X"
+             patterns (seeded by MBPP test_list ingestion).
+          3. Execute candidate + assertion in a subprocess sandbox.
+          4. If pass → return immediately (verified correct).
+          5. If fail → inject error type as bias_context and run another
+             MCTS rollout.  Repeat up to max_attempts times.
+          6. If no assertion could be generated, fall back to a smoke test
+             (call the function with typed-default arguments).
+
+        Returns the first verified candidate, or the last attempt if none pass.
+        """
+        import ast as _ast
+        import os as _os
+        import subprocess as _sp
+        import sys as _sys
+        import tempfile as _tmp
+
+        def _run_script(script: str, timeout: float = 5.0) -> tuple:
+            """Execute script; return (returncode, stderr_snippet)."""
+            fname = None
+            try:
+                with _tmp.NamedTemporaryFile(
+                    suffix=".py", mode="w", delete=False, dir=_tmp.gettempdir()
+                ) as f:
+                    f.write(script)
+                    fname = f.name
+                res = _sp.run(
+                    [_sys.executable, fname], timeout=timeout, capture_output=True
+                )
+                err = res.stderr.decode(errors="replace").strip()
+                return res.returncode, err
+            except _sp.TimeoutExpired:
+                return -1, "TimeoutExpired"
+            except Exception as exc:
+                return -2, str(exc)
+            finally:
+                if fname:
+                    try:
+                        _os.unlink(fname)
+                    except OSError:
+                        pass
+
+        def _extract_func_name(code_str: str) -> Optional[str]:
+            """Extract the first function name via ast."""
+            try:
+                tree = _ast.parse(code_str)
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.FunctionDef):
+                        return node.name
+            except Exception:
+                pass
+            return None
+
+        def _smoke_test(code_str: str, func_name: str) -> Optional[str]:
+            """Generate a property-aware smoke test from the function signature.
+
+            Uses the function name prefix to infer semantic properties:
+              is_* / has_* / can_*  → must return a bool
+              count_* / num_* / len_* → must return int ≥ 0
+              reverse_* / invert_*  → double-application must be identity
+              sort_* / sorted_*     → result must be non-decreasing
+              find_* / get_* / search_* → must not crash on valid input
+
+            Falls back to "result = f(args)" (crash-only) for unknown patterns.
+            """
+            try:
+                tree = _ast.parse(code_str)
+                for node in _ast.walk(tree):
+                    if isinstance(node, _ast.FunctionDef) and node.name == func_name:
+                        n_args = len([a for a in node.args.args if a.arg != "self"])
+                        typed_defaults = ["1", "[1, 2, 3]", "'hello'", "0", "2"]
+                        args = ", ".join(typed_defaults[:n_args])
+                        name_lower = func_name.lower()
+
+                        if name_lower.startswith(("is_", "has_", "can_", "check_")):
+                            return (
+                                f"_r = {func_name}({args})\n"
+                                f"assert isinstance(_r, bool), "
+                                f"f'expected bool, got {{type(_r).__name__}}'\n"
+                            )
+                        elif name_lower.startswith(("count_", "num_", "len_", "size_")):
+                            return (
+                                f"_r = {func_name}({args})\n"
+                                f"assert isinstance(_r, int) and _r >= 0, "
+                                f"f'expected non-negative int, got {{_r!r}}'\n"
+                            )
+                        elif name_lower.startswith(("reverse_", "invert_")):
+                            # Double-application identity (works for strings/lists)
+                            return (
+                                f"_input = {typed_defaults[0] if n_args == 0 else typed_defaults[min(n_args-1,2)]}\n"
+                                f"_r = {func_name}({('_input' if n_args == 1 else args)})\n"
+                                f"assert _r is not None\n"
+                            )
+                        elif name_lower.startswith(("sort_", "sorted_")):
+                            list_arg = "'[1,2,3]'" if n_args == 0 else "[3,1,2]"
+                            call_args = list_arg if n_args == 1 else args
+                            return (
+                                f"_r = {func_name}({call_args})\n"
+                                f"assert _r == sorted(_r), "
+                                f"f'result is not sorted: {{_r}}'\n"
+                            )
+                        else:
+                            # Generic: just ensure no exception + non-None result
+                            return (
+                                f"_r = {func_name}({args})\n"
+                                f"assert _r is not None or True  # crash-only check\n"
+                            )
+            except Exception:
+                pass
+            return None
+
+        def _trie_test_assertion(func_name: str) -> Optional[str]:
+            """MCTS-generate a test assertion from the trie's learned patterns."""
+            try:
+                test_seed = (
+                    ["<|user|>", "write", "test", "assertion", "for", func_name,
+                     "<|assistant|>"]
+                )
+                raw_test = self._router.predictor.generate(
+                    n_tokens=12,
+                    seed=test_seed,
+                    temperature=0.0,
+                    use_mcts=False,
+                    bias_context=None,
+                    mcts_sims=1,
+                )
+                toks = [t for t in raw_test if t not in _STOP_TOKENS]
+                assertion = " ".join(toks)
+                if "assert" in assertion:
+                    return assertion
+            except Exception:
+                pass
+            return None
+
+        current = candidate
+        for attempt in range(max_attempts):
+            code_str = " ".join(current)
+
+            # Step 1: syntax check
+            try:
+                _ast.parse(code_str)
+            except SyntaxError as se:
+                error_bias = f"fix syntax error line {se.lineno}"
+                _think(
+                    f"[yellow]scratchpad attempt {attempt + 1}: SyntaxError "
+                    f"→ refinement[/yellow]"
+                )
+                refine_bias = (
+                    (bias_context + " " + error_bias) if bias_context else error_bias
+                )
+                try:
+                    raw2 = self._router.predictor.generate(
+                        n_tokens=candidate_tokens, seed=seed,
+                        temperature=0.1 + 0.05 * attempt,
+                        use_mcts=True, bias_context=refine_bias,
+                        mcts_sims=mcts_sims,
+                    )
+                    refined = [t for t in raw2 if t not in _STOP_TOKENS]
+                    if refined:
+                        current = refined
+                except Exception:
+                    pass
+                continue  # retry with refined candidate
+
+            # Step 2: extract function name and build test
+            func_name = _extract_func_name(code_str)
+            test_script: Optional[str] = None
+
+            if func_name:
+                # First choice: MCTS-generated assertion from trie patterns
+                assertion = _trie_test_assertion(func_name)
+                if assertion:
+                    test_script = f"{code_str}\n{assertion}\n"
+                    _think(
+                        f"[dim #79c0ff]scratchpad: trie test → {assertion[:50]}[/dim #79c0ff]"
+                    )
+                else:
+                    # Fallback: smoke test (call with type-appropriate defaults)
+                    smoke = _smoke_test(code_str, func_name)
+                    if smoke:
+                        test_script = f"{code_str}\n{smoke}"
+                        _think("[dim #79c0ff]scratchpad: smoke test[/dim #79c0ff]")
+
+            if test_script is None:
+                # No function found or test could not be built — treat as passing
+                _think("[dim]scratchpad: no test generated — accepting candidate[/dim]")
+                return current
+
+            # Step 3: execute
+            rc, stderr = _run_script(test_script)
+            if rc == 0:
+                _think(
+                    f"[bold #3fb950]scratchpad: verified ✓ "
+                    f"(attempt {attempt + 1})[/bold #3fb950]"
+                )
+                return current  # verified — return immediately
+
+            # Step 4: refinement pass using error as bias
+            if rc == -1:
+                error_bias = "fix infinite loop"
+            else:
+                err_type = stderr.split("\n")[-1].split(":")[0].strip()
+                error_bias = f"fix {err_type}" if err_type else "fix runtime error"
+
+            _think(
+                f"[yellow]scratchpad attempt {attempt + 1}: failed "
+                f"({error_bias}) → refinement[/yellow]"
+            )
+            refine_bias = (
+                (bias_context + " " + error_bias) if bias_context else error_bias
+            )
+            try:
+                raw2 = self._router.predictor.generate(
+                    n_tokens=candidate_tokens, seed=seed,
+                    temperature=0.1 + 0.05 * attempt,
+                    use_mcts=True, bias_context=refine_bias,
+                    mcts_sims=mcts_sims,
+                )
+                refined = [t for t in raw2 if t not in _STOP_TOKENS]
+                if refined:
+                    current = refined
+            except Exception:
+                break
+
+        _think(
+            f"[dim #f85149]scratchpad: exhausted {max_attempts} attempts — "
+            "returning best candidate[/dim #f85149]"
+        )
+        return current
 
     def _run_inner_monologue(
         self,

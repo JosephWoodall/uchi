@@ -20,7 +20,11 @@ Run the benchmarking suite to measure Uchi's language understanding (MMLU) and c
   - **MMLU** (language understanding): samples questions from the Massive Multitask Language Understanding dataset across 57 academic subjects. Reports accuracy per subject and overall accuracy.
   - **SWE-bench** (coding): runs a subset of real GitHub issue→patch tasks. Reports resolve rate (% of issues where Uchi's generated patch passes all tests).
 - Verify MMLU accuracy ≥ the prior baseline and SWE-bench resolve rate ≥ prior baseline. If either drops, treat it as a regression and fix before proceeding.
-- **CRITICAL**: Update the `README.md` "Benchmarks" section with the latest scores (MMLU accuracy, SWE-bench resolve rate) produced by the script.
+- **CRITICAL — Publish Benchmarks to README**: After every benchmark run, update the `README.md` "Benchmarks" section with the new scores. This is mandatory, not optional. Specifically:
+  - Update the MMLU narrative section: accuracy %, no-parse rate, and the best/worst subject table.
+  - Update the SWE-bench narrative section: code generation rate and composite proxy score.
+  - Update the `<!-- BENCHMARK_TABLE_START --> ... <!-- BENCHMARK_TABLE_END -->` summary table with the new MMLU and SWE-bench rows.
+  - The prior scores must be replaced, not appended — the table always reflects the current brain, not history. Benchmark history belongs in `tasks/0.X.0 Itemized Deliverables.md`.
 
 ## 3. Documentation Verification
 Ensure the documentation architecture is pristine:
