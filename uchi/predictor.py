@@ -342,6 +342,31 @@ class UniversalPredictor:
 
 
 
+    def train(self, sequence) -> None:
+        """Feed a complete labeled sequence into the trie.
+
+        Uses the abstained-update path so node credibilities grow rather than
+        degrade (no prior prediction means no 'wrong prediction' to penalise).
+        """
+        saved_pred = self._last_prediction
+        saved_abs  = self._last_abstained
+        self._last_abstained = True
+        self._last_prediction = None
+        try:
+            for value in sequence:
+                self.observe(value)
+                self.feedback(value)
+        finally:
+            self._last_abstained = saved_abs
+            self._last_prediction = saved_pred
+
+    def predict_next(self, context) -> Any:
+        """Observe context tokens and return the most likely next item."""
+        for item in context:
+            self.observe(item)
+        pred, _ = self.predict()
+        return pred
+
     def _distribution(self) -> dict:
         """Return last predictive distribution (for log-loss evaluation)."""
         return dict(self._last_distribution)

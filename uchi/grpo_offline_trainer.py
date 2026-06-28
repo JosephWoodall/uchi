@@ -69,6 +69,29 @@ _SEED_QUERIES: List[Tuple[str, str]] = [
     ("How do you sort a list in Python?", "code"),
     ("What is a dictionary in Python?", "code"),
     ("How do you handle exceptions in Python?", "code"),
+    # mcq — MMLU-style
+    ("The following is a multiple choice question about mathematics. What is 7 times 8? A. 54 B. 56 C. 64 D. 72 Answer:", "mcq"),
+    ("The following is a multiple choice question about biology. What is the powerhouse of the cell? A. Nucleus B. Ribosome C. Mitochondria D. Vacuole Answer:", "mcq"),
+    ("The following is a multiple choice question about physics. What is the unit of force? A. Joule B. Watt C. Newton D. Pascal Answer:", "mcq"),
+    ("The following is a multiple choice question about history. Who was the first US president? A. Thomas Jefferson B. John Adams C. George Washington D. Benjamin Franklin Answer:", "mcq"),
+    ("The following is a multiple choice question about chemistry. What is the chemical symbol for water? A. WA B. HO C. H2O D. W2O Answer:", "mcq"),
+    ("The following is a multiple choice question about geography. What is the capital of France? A. Berlin B. Madrid C. Rome D. Paris Answer:", "mcq"),
+    ("The following is a multiple choice question about mathematics. What is the square root of 81? A. 7 B. 8 C. 9 D. 10 Answer:", "mcq"),
+    ("The following is a multiple choice question about science. What planet is closest to the Sun? A. Venus B. Mercury C. Earth D. Mars Answer:", "mcq"),
+    ("The following is a multiple choice question about language. What part of speech is 'quickly'? A. Noun B. Verb C. Adjective D. Adverb Answer:", "mcq"),
+    ("The following is a multiple choice question about mathematics. How many sides does a hexagon have? A. 5 B. 6 C. 7 D. 8 Answer:", "mcq"),
+    # naturalness — trains the policy to produce clean, human-readable output
+    # rather than raw trie vocabulary (synset tokens, control markers, etc.)
+    ("What is the boiling point of water?", "factual"),
+    ("What is the capital of Japan?", "factual"),
+    ("Who wrote Romeo and Juliet?", "factual"),
+    ("What is photosynthesis?", "factual"),
+    ("How many planets are in the solar system?", "factual"),
+    ("What causes thunder?", "factual"),
+    ("What is the speed of sound?", "factual"),
+    ("What is DNA?", "factual"),
+    ("What is gravity?", "factual"),
+    ("Who invented the telephone?", "factual"),
 ]
 
 
@@ -89,13 +112,11 @@ def _load_router(brain_path: str):
 
 
 def _disable_web(router) -> None:
-    """Patch router to skip web search so training stays fast."""
+    """Disable web search so training stays fast and offline."""
+    router.web_search_enabled = False
     try:
         import uchi.web_search as _ws
-        _ws.perform_web_search = lambda *a, **kw: []
-        # Also patch any bound reference the router holds.
-        if hasattr(router, "_web_search"):
-            router._web_search = lambda *a, **kw: []
+        _ws.perform_web_search = lambda *a, **kw: ""
     except Exception:
         pass
 

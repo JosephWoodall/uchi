@@ -723,6 +723,8 @@ class UchiApp(App):
 
     def display_reply(self, cmd: str, reply_text: str) -> None:
         from rich.markdown import Markdown
+        from uchi.response_normalizer import normalize
+        reply_text = normalize(reply_text)
         log = self.query_one("#chat-log", RichLog)
         log.write("\n[#7dcfff][bold]Uchi:[/bold][/#7dcfff]")
         log.write(Markdown(reply_text))

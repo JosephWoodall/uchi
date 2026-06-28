@@ -182,8 +182,7 @@ def run_swebench(router, sample: int, verbose: bool) -> dict:
         )
 
         try:
-            with _no_web():
-                response = router.chat(prompt) or ""
+            response = router.chat(prompt) or ""
         except Exception as e:
             response = ""
             if verbose:
@@ -290,6 +289,7 @@ def main():
         OmniRouter._bootstrap_persona   = lambda self, *a, **kw: None
         router = OmniRouter(use_bpe=False)
 
+    router.web_search_enabled = False
     results = run_swebench(router, sample=sample, verbose=args.verbose)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

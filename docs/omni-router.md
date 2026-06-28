@@ -1,3 +1,17 @@
+# OmniRouter
+
+> **Python users:** `OmniRouter` is the internal engine. The recommended interface is `Uchi` — it wraps `OmniRouter` and exposes everything through a single clean API. See [Python API →](python-api.md)
+>
+> ```python
+> from uchi import Uchi
+> u = Uchi()
+> u.learn("text")           # streams into OmniRouter trie
+> u.ask("question")         # routes through OmniRouter chat()
+> u.router                  # escape hatch: direct OmniRouter access
+> ```
+
+---
+
 # OmniRouter: The Multi-Modal Deterministic LLM
 
 The `OmniRouter` is the master controller of the Uchi sequence predictor. Rather than treating Text, Math Telemetry, and Python Agent objects as isolated pipelines, the `OmniRouter` acts as a "Prefrontal Cortex" to ingest, compress, and predict across all modalities simultaneously. 

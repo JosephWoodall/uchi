@@ -1,5 +1,11 @@
 # Convergent Engine (MCTS)
 
+> **Python users:** the convergent engine runs automatically when you call `u.ask("...")` on any `Uchi` instance. No direct configuration is required for standard use. See [Python API →](python-api.md)
+
+---
+
+
+
 The `ConvergentEngine` adds a deliberative "System 2" search mechanism on top of the deterministic sequence predictor. By simulating multiple generation paths via Monte Carlo Tree Search (MCTS), filtering them through binary Oracles, and ranking them via SSM Vector Geometry, Uchi transforms probabilistic hallucinations into verified intelligence.
 
 ## Core Mechanisms

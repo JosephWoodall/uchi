@@ -1,5 +1,18 @@
 # Core Engine
 
+> **Python users:** access the core sequence predictor through `u.predictor` on any `Uchi` instance. The classes below are the internals. See [Python API →](python-api.md)
+>
+> ```python
+> from uchi import Uchi
+> u = Uchi()
+> u.predictor.train(["a", "b", "c", "d"])    # online single-sequence update
+> u.predictor.predict_next(["b", "c"])        # → "d"
+> u.predictor.fit([["a", "b"], ["c", "d"]])  # batch training
+> u.predictor.generate(n=10, seed=["a"])     # sample continuations
+> ```
+
+---
+
 The core engine of Uchi is built around an instance-based sequence predictor that maintains a prefix trie of observed contexts.
 
 ## UniversalPredictor

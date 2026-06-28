@@ -221,9 +221,11 @@ def phase_package(
         mmlu = benchmark_results.get("mmlu", {})
         swe  = benchmark_results.get("swebench", {})
 
-        acc       = mmlu.get("accuracy", 0.0)
-        noparse   = mmlu.get("no_parse_rate", 1.0)
-        composite = swe.get("avg_composite_score", 0.0)
+        acc          = mmlu.get("mmlu_accuracy", mmlu.get("accuracy", 0.0))
+        _no_parse    = mmlu.get("mmlu_no_parse", 0)
+        _total       = mmlu.get("mmlu_total", 1)
+        noparse      = _no_parse / _total if _total else 1.0
+        composite    = swe.get("swebench_avg_composite", swe.get("avg_composite_score", 0.0))
 
         gate_details = {
             "mmlu_accuracy":       acc,

@@ -1,3 +1,9 @@
+# Architecture
+
+> **Python users:** you do not interact with the architecture directly. Use `from uchi import Uchi` — the `Uchi` class exposes everything through `learn()`, `ask()`, and `predictor`. See [Python API →](python-api.md)
+
+---
+
 # The Core Idea
 
 The algorithm keeps a trie of contexts. Every node in the trie stores two things: a credibility-weighted distribution over successor symbols, and a track record of how reliable that context has been as a predictor. When predicting, it blends the distributions from shallow (general) to deep (specific), where each depth's influence is proportional to its track record. When updating after a wrong prediction, a node that was confidently wrong loses trust faster than one that was fresh and uncertain.

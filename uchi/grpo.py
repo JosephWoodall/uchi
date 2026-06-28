@@ -15,11 +15,16 @@ Benefits:
 Reference: DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL (2025)
 """
 
+import ast
 import math
 import re
 from typing import List, Optional
 
 import torch
+
+# Detects raw trie vocabulary that should never reach the user
+_SYNSET_TOKEN  = re.compile(r"^[\w'-]+\.(n|v|a|r|s)\.\d{2}$")
+_CONTROL_TOKEN = re.compile(r"^<\|.+\|>$|^\[(?:Uncertain|uncertain|UNCERTAIN)\]$")
 
 
 # ── format reward ─────────────────────────────────────────────────────────────
@@ -41,6 +46,11 @@ def format_reward(
     """
     if not response_tokens:
         return -1.0
+
+    # MCQ: only the first token matters — A/B/C/D or not.
+    if intent_key == "mcq":
+        first = response_tokens[0].lower().strip(".,):") if response_tokens else ""
+        return 1.0 if first in {"a", "b", "c", "d"} else -1.0
 
     n = len(response_tokens)
 
@@ -79,8 +89,14 @@ def format_reward(
     if intent_key == "code":
         _CODE_KW = {"def", "return", "import", "class", "for", "while", "if",
                     "print", "true", "false", "none", "self", "else", "elif"}
-        hits = sum(1 for kw in _CODE_KW if kw in r_text)
-        structure_score = min(hits / 3.0, 1.0)
+        kw_hits = sum(1 for kw in _CODE_KW if kw in r_text)
+        kw_score = min(kw_hits / 3.0, 1.0)
+        try:
+            ast.parse(" ".join(response_tokens))
+            syntax_bonus = 0.5
+        except SyntaxError:
+            syntax_bonus = 0.0
+        structure_score = min(kw_score + syntax_bonus, 1.0)
     elif intent_key == "math":
         has_digit = bool(re.search(r"\d", r_text))
         has_op    = any(op in r_text for op in ["+", "-", "*", "/", "=", "^"])
@@ -90,11 +106,22 @@ def format_reward(
         natural = sum(1 for t in response_tokens if t.islower() and len(t) > 2)
         structure_score = min(natural / max(n, 1), 1.0)
 
+    # ── naturalness penalty (synset / control token leakage) ─────────────────
+    # Counts raw trie vocabulary tokens that should never reach the user.
+    # Each leaked token is evidence the policy is not learning clean output.
+    # Full penalty (-1.0 additive) kicks in at ≥25% leakage rate.
+    leaked = sum(
+        1 for t in response_tokens
+        if _SYNSET_TOKEN.match(t) or _CONTROL_TOKEN.match(t)
+    )
+    naturalness_penalty = -1.0 * min(leaked / max(n * 0.25, 1), 1.0) if leaked else 0.0
+
     total = (
         0.30 * length_score
         + 0.30 * coherence_score
         + 0.25 * overlap_score
         + 0.15 * structure_score
+        + naturalness_penalty
     )
     return float(max(-1.0, min(1.0, total)))
 

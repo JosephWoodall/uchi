@@ -1,14 +1,29 @@
 ![Uchi Logo](docs/logo.png)
 
-# Universal Sequence Predictor
-
 [![PyPI version](https://img.shields.io/pypi/v/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
-Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It adds a structured routing layer with intent-based query dispatch via `ProceduralMemory`, a trainable SSM confidence signal via GRPO, persistent vector memory, TUI, REST API, and SDK — all without introducing an LLM dependency.
+## Core Mission: One Import. Everything Compounds.
+
+Uchi v0.3.0 dramatically simplifies the public API and introduces a compounding mechanism that makes every analysis result immediately learnable by every other instance.
+
+```python
+from uchi import Uchi
+
+u = Uchi()
+u.learn("Q3 revenue was $4.2M, up 23% YoY.")
+report = u.ask("/classify", X=X_train, y=churn_labels)
+
+u2 = Uchi()
+u2.learn(report)                          # analysis becomes knowledge
+u2.ask("What does this imply for Q4?")   # knowledge compounds
+```
+
+`ask()` always returns a string. `learn()` always accepts a string. This is the compounding guarantee — outputs of one instance are directly learnable by another, with no serialisation, schema, or orchestration layer required.
+
+Under the hood, Uchi is an **Omni-modal Deterministic Universal Sequence Predictor (ODUSP)** — it ingests text, tabular data, time series, and code simultaneously without any neural weights or pre-training. A trainable SSM confidence signal (GRPO), persistent vector memory, intent-based routing, and a full analytical skill layer are all accessible through the single `Uchi` entry point. No LLM dependency at any layer.
 
 
 > [!NOTE]
@@ -85,23 +100,177 @@ curl http://localhost:8000/debug/walk
 
 ### 3. Python API
 
+`Uchi` is the single entry point for the entire library. One import, everything discoverable.
+
 ```python
-from uchi.omni_router import OmniRouter
-from uchi.cli import load_brain, save_brain
+from uchi import Uchi
+```
 
-# Load existing brain or create a new one
-router = load_brain("brain.uchi") or OmniRouter()
+#### Knowledge & Q&A
 
-# Chat
-reply = router.chat("what is the capital of France?")
-print(reply)  # → "paris"
+```python
+u = Uchi()                                          # loads pre-packaged brain
+u.learn("The boiling point of water is 100°C.")    # stream text into the trie
+u.ask("At what temperature does water boil?")      # → "100°C"
+```
 
-# Teach it something new
-router.stream(["<|user|>", "what", "is", "the", "capital", "of", "germany",
-               "<|assistant|>", "berlin"])
+#### File and directory ingestion
 
-# Save
-save_brain(router, "brain.uchi")
+```python
+u.ingest("knowledge_base/")           # walk directory — all .txt .md .py .json .csv
+u.ingest("report.pdf")                # PDF extraction (pip install pdfminer.six)
+u.ingest("events.csv", col="notes")   # specific CSV column
+
+# chainable — returns self
+u = Uchi().ingest("docs/").ingest("data.csv").ingest("handbook.md")
+u.save("expanded_brain.uchi")
+```
+
+#### Analytical tools via slash commands
+
+Every tool returns a plain string you can immediately feed into another instance.
+
+```python
+result = u.ask("/classify", X=X_train, y=y_train)  # classification report
+result = u.ask("/regress",  X=X_train, y=y_train)  # regression report
+result = u.ask("/anomaly",  X=sensor_matrix)        # anomaly detection report
+result = u.ask("/forecast", X=time_series, steps=20)# forecast report
+result = u.ask("/tsclassify", X=windows, y=labels) # time series classification
+```
+
+The same commands accept a CSV path when called from the TUI:
+
+```
+/classify data.csv --label target_col
+/anomaly  sensors.csv
+```
+
+#### Compounding analysis — the core value
+
+`ask()` always returns a string. `learn()` always accepts a string.
+This means any analysis result is directly learnable by any other `Uchi` instance —
+no serialisation, no schema, no glue code required.
+
+```python
+# Step 1: domain-specific analysis
+u_sales = Uchi()
+u_sales.learn(open("quarterly_report.txt").read())
+classification_report = u_sales.ask("/classify", X=X_sales, y=churn_labels)
+forecast_report       = u_sales.ask("/forecast", X=revenue_series, steps=4)
+
+# Step 2: a strategy instance learns from the analysis
+u_strategy = Uchi()
+u_strategy.learn(classification_report)    # churn analysis becomes knowledge
+u_strategy.learn(forecast_report)          # forecast becomes knowledge
+u_strategy.ask("What do these results imply for Q4 headcount planning?")
+
+# Step 3: chain as many instances as you like
+u_exec = Uchi()
+u_exec.learn(u_strategy.ask("Summarise the risk factors in one paragraph."))
+u_exec.ask("What should the board prioritise this quarter?")
+```
+
+Every `ask()` result is a first-class learnable artifact. Pipelines of `Uchi`
+instances compound knowledge without any external orchestration layer.
+
+#### Sequence generation
+
+```python
+u.predictor.fit([["the", "cat", "sat"], ["the", "dog", "ran"]])
+u.predictor.generate(n=5, seed=["the"])     # → ["the", "cat", "sat", ...]
+u.predictor.train(["a", "b", "c", "d"])    # online single-sequence update
+u.predictor.predict_next(["b", "c"])       # → "d"
+```
+
+#### Configuration & persistence
+
+```python
+u.web_search = True    # enable live web sourcing on knowledge gaps
+u.web_search = False   # back to fully offline (default)
+u.save("my_brain.uchi")
+
+u2 = Uchi(brain_path="my_brain.uchi")     # load a saved brain
+u2.ask("What did we discuss earlier?")
+```
+
+#### Escape hatch for power users
+
+```python
+u.router      # direct access to OmniRouter
+u.router.predictor   # the SequenceGenerator (trie + sampling controls)
+```
+
+#### Complete public API reference
+
+```python
+from uchi import Uchi
+import numpy as np
+
+# ── Construction ──────────────────────────────────────────────────────────────
+u = Uchi()                              # pre-packaged brain, fully offline
+u = Uchi(brain_path="my_brain.uchi")   # load a custom brain
+u = Uchi(web_search=True)              # enable live web sourcing at startup
+
+# ── Knowledge ingestion ───────────────────────────────────────────────────────
+u.learn("Paris is the capital of France.")          # any string
+u.learn(open("company_handbook.md").read())         # large documents
+
+u.ingest("knowledge_base/")                        # walk directory (txt/md/py/json/csv)
+u.ingest("quarterly_report.pdf")                   # PDF (pip install pdfminer.six)
+u.ingest("events.csv", col="description")          # specific CSV column
+u = Uchi().ingest("docs/").ingest("data.csv")      # chainable — returns self
+
+# ── Natural-language Q&A ──────────────────────────────────────────────────────
+answer = u.ask("What is the capital of France?")   # → "paris"
+summary = u.ask("Summarise the risk factors in one paragraph.")
+
+# ── Analytical tools (slash commands) ────────────────────────────────────────
+X = np.random.randn(200, 4)
+y = (X[:, 0] > 0).astype(str)
+
+clf_report  = u.ask("/classify",  X=X, y=y)           # classification report  ─┐
+reg_report  = u.ask("/regress",   X=X, y=X[:, 0])     # regression report       │
+anml_report = u.ask("/anomaly",   X=X)                 # anomaly detection        │ all return str
+fore_report = u.ask("/forecast",  X=X, steps=10)       # multi-step forecast      │
+ts_report   = u.ask("/tsclassify",X=X, y=y)            # time-series classify    ─┘
+
+# ── Compounding — the core value ──────────────────────────────────────────────
+# ask() always returns str. learn() always accepts str.
+# Analysis from one instance becomes knowledge for another.
+u2 = Uchi()
+u2.learn(clf_report)          # classification report → knowledge
+u2.learn(fore_report)         # forecast → knowledge
+insight = u2.ask("What do these patterns imply for next quarter?")
+
+u3 = Uchi()
+u3.learn(insight)
+u3.ask("Write a two-sentence board summary.")
+
+# ── Sequence predictor ────────────────────────────────────────────────────────
+u.predictor.fit([["a", "b", "c"], ["b", "c", "d"]])   # batch train
+u.predictor.train(["x", "y", "z"])                     # single sequence update
+u.predictor.partial_fit([["p", "q", "r"]])             # incremental update
+u.predictor.predict_next(["a", "b"])                   # → "c"
+u.predictor.generate(n=10, seed=["a"])                 # sample continuations
+u.predictor.generate_text(n=50, sep=" ")               # generate joined string
+u.predictor.score(["a", "b", "c"])                     # bits/token
+
+# ── Raw token stream (low-level) ──────────────────────────────────────────────
+u.stream(["<|user|>", "hello", "<|assistant|>", "world"])
+
+# ── Configuration ────────────────────────────────────────────────────────────
+u.web_search          # → False  (check current state)
+u.web_search = True   # enable live web sourcing
+u.web_search = False  # back to offline
+
+# ── Persistence ──────────────────────────────────────────────────────────────
+u.save("my_brain.uchi")
+u2 = Uchi(brain_path="my_brain.uchi")
+
+# ── Escape hatch for advanced use ────────────────────────────────────────────
+u.router               # underlying OmniRouter
+u.router.predictor     # SequenceGenerator
+u.router.skills        # SkillRegistry
 ```
 
 ### 4. Offline Knowledge Bootstrapping

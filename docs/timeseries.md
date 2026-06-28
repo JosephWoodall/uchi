@@ -1,5 +1,28 @@
 # Time Series Models
 
+> **Python users:** time series tools are callable directly from any `Uchi` instance via slash commands. The classes below are available for direct use but `u.ask()` is the recommended path. See [Python API →](python-api.md)
+>
+> ```python
+> from uchi import Uchi
+> u = Uchi()
+>
+> # All return a plain string you can immediately feed into another u.learn()
+> report = u.ask("/forecast",   X=time_series, steps=20)  # multi-step forecast
+> report = u.ask("/anomaly",    X=sensor_matrix)            # anomaly detection
+> report = u.ask("/tsclassify", X=windows, y=labels)       # window classification
+>
+> # The compounding pattern
+> u2 = Uchi()
+> u2.learn(report)
+> u2.ask("What does the forecast imply about capacity planning next quarter?")
+> ```
+>
+> `X` accepts a pandas DataFrame, numpy array, or list-of-lists. `steps` is an integer.
+
+---
+
+
+
 **`MultivariateTSPredictor`**
 
 Online step-ahead predictor for multivariate (or univariate) time series. Each timestep is encoded as a compound token `(bin_0, bin_1, ..., bin_{M-1})` — a hashable tuple the trie matches exactly. Context is the last k compound tokens. Adapts immediately to distribution shift without retraining.

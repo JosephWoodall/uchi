@@ -513,7 +513,7 @@ class ConvergentEngine:
             from uchi.tree_search_engine import TreeSearchEngine
             im_seed = concepts[-6:] + [_IM_TOKEN]
             tree_eng = TreeSearchEngine(self._router)
-            raw = tree_eng.search(im_seed, time_limit_s=1.5)
+            raw = tree_eng.search(im_seed, time_limit_s=0.3)
             _strip = _STOP_TOKENS | {_IM_TOKEN}
             return [t for t in raw if t not in _strip][:12]
         except Exception as exc:

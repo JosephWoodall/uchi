@@ -1,36 +1,137 @@
 # Uchi Documentation
 
-Online, instance-based sequence predictor. Given any stream of discrete observations, it learns to predict what comes next — for any symbol type, in any domain — without assuming a fixed distribution, a known alphabet, or a stationary process.
+> **The API has been dramatically simplified.** One import. Everything discoverable. Analysis compounds across instances without glue code. Start here.
 
-The `uchi` package extends this core engine to tabular classification, regression, multivariate time series forecasting, anomaly detection, and generative modeling. All classes are sklearn-compatible.
+---
 
-## What this is for
+## The New Way to Use Uchi
 
-**Its clearest domain: discrete event streams where the underlying pattern shifts over time.**
+```python
+from uchi import Uchi
 
-If you have a stream of categorical states and need to predict the next one — without knowing in advance how the pattern will change — this is the right tool. It beats count-based methods (N-gram, PPM, CTW) and online neural methods specifically in non-stationary settings, and it does so with no retraining, no drift detector, and no forgetting window to tune.
+u = Uchi()
+u.learn("Q3 revenue was $4.2M, up 23% YoY.")
+print(u.ask("What was Q3 revenue growth?"))
+```
 
-**Natural fits:**
+`Uchi` is the single public entry point for the entire library. Every feature — the sequence predictor, every analytical tool, web search, persistence — is reachable through this one class.
 
-- **System observability** — sequences of log event codes, API call chains, process state transitions. Predicts next failure type. When a deployment changes the pattern, adaptation is automatic.
-- **User behavior** — clickstreams, navigation paths, in-app action sequences. Next-action prediction that updates on every new user event without a retraining cycle.
-- **Industrial / IoT** — machine state sequences (idle / running / warning / fault), energy consumption states, production line events. Works on tiny datasets where neural methods don't have enough data.
-- **Financial regimes** — discretized price movements, order flow states, market microstructure events. Handles regime shifts that break count-based models.
-- **Anomaly detection** — when the predictor is consistently wrong, something structurally unusual is happening. Confidence collapses before a human notices; no separate anomaly model needed.
-- **Game AI / opponent modeling** — predict next move in any discrete-action game. Adapts to opponent strategy shifts in real time.
+**[Full Python API reference →](python-api.md)**
 
-**Where it is not competitive:**
+---
 
-- **Tabular classification where the data is large and stationary** — on tabular datasets >10K rows without concept drift, gradient boosting will typically win by 5–10pp. The trie shines when data is small, streaming, or drifting.
-- **Long-range sequence dependencies** — the context window is fixed at k. Anything requiring memory beyond the last k observations needs a transformer or RNN.
-- **Large stationary corpora** — on 50K tokens of text or DNA, count-based methods (CTW, KN) hold a 1–2pp accuracy advantage because their unbounded counts eventually outcompete the credibility cap. The gap closes on noisy or drifting data.
-- **Continuous regression targets** — the regressor bins the output; precision is bounded by `n_target_bins`. Point-prediction accuracy on smooth regression tasks is below random forests.
+## The Compounding Mechanism
 
+`ask()` always returns a plain string. `learn()` always accepts a plain string. This means the output of any analysis is immediately learnable by any other `Uchi` instance — no serialisation, no schema, no glue code.
 
-### Realistic Use Cases
-- **Example 1**: Deploying Index in a high-frequency trading environment to predict sequence anomalies.
-- **Example 2**: Using Index in an edge-device embedded system with strict memory constraints.
-- **Example 3**: Integrating Index into an enterprise continuous-learning pipeline for customer behavior modeling.
+```python
+# Instance 1: domain analysis
+u_data = Uchi()
+u_data.learn(open("sales_data.txt").read())
+report = u_data.ask("/classify", X=X_train, y=churn_labels)
 
-### The Ultimate Benefit
-By utilizing this module, enterprise teams achieve deterministic, $O(1)$ latency sequence prediction without the catastrophic hallucination and massive RAM overhead of traditional Large Language Models.
+# Instance 2: learns from the analysis
+u_strategy = Uchi()
+u_strategy.learn(report)
+u_strategy.ask("What does this churn pattern imply for Q4 headcount?")
+
+# Instance 3: compounds further
+u_exec = Uchi()
+u_exec.learn(u_strategy.ask("Summarise the top three risks."))
+u_exec.ask("What should the board prioritise this quarter?")
+```
+
+Every `ask()` result is a first-class learnable artifact. Pipelines of `Uchi` instances build compounding analytical context without any external orchestration layer.
+
+---
+
+## What Uchi Does
+
+Uchi is an **online, instance-based sequence predictor** that learns to predict what comes next across any symbol type and domain — without neural weights, without pre-training, and without catastrophic forgetting.
+
+Its clearest domain is **discrete event streams where the underlying pattern shifts over time**. It beats count-based methods (N-gram, PPM, CTW) and online neural methods specifically in non-stationary settings — with no retraining, no drift detector, and no forgetting window to tune.
+
+The `Uchi` class exposes all of this through a single API: natural-language Q&A, tabular ML, time series forecasting, anomaly detection, and sequence generation.
+
+---
+
+## Quickstart
+
+### Knowledge & Q&A
+
+```python
+u = Uchi()
+u.learn("The boiling point of water is 100°C at sea level.")
+u.ask("At what temperature does water boil?")   # → "100°C"
+```
+
+### Analytical tools
+
+```python
+result = u.ask("/classify",  X=X_train, y=y_train)    # classification report
+result = u.ask("/regress",   X=X_train, y=y_train)    # regression report
+result = u.ask("/anomaly",   X=sensor_matrix)          # anomaly detection report
+result = u.ask("/forecast",  X=time_series, steps=20)  # forecast report
+result = u.ask("/tsclassify",X=windows,    y=labels)   # time series classification
+```
+
+### Sequence prediction
+
+```python
+u.predictor.fit([["a", "b", "c", "d"]])
+u.predictor.predict_next(["b", "c"])          # → "d"
+u.predictor.train(["x", "y", "z"])            # online single-sequence update
+u.predictor.generate(n=10, seed=["a"])        # sample continuations
+```
+
+### File and directory ingestion
+
+```python
+u.ingest("knowledge_base/")            # walk directory — txt/md/py/json/csv
+u.ingest("report.pdf")                 # PDF (pip install pdfminer.six)
+u.ingest("events.csv", col="notes")    # specific CSV column
+u = Uchi().ingest("docs/").ingest("data.csv")  # chainable, returns self
+```
+
+### Persistence and configuration
+
+```python
+u.web_search = True          # enable live web sourcing on knowledge gaps
+u.save("my_brain.uchi")
+u2 = Uchi(brain_path="my_brain.uchi")
+```
+
+---
+
+## Natural Fits
+
+- **System observability** — log event codes, API call chains, process state transitions
+- **User behavior** — clickstreams, navigation paths, in-app action sequences
+- **Industrial / IoT** — machine state sequences, energy consumption, production line events
+- **Financial regimes** — discretized price movements, order flow states, market microstructure
+- **Anomaly detection** — confidence collapse before a human notices; no separate anomaly model
+- **Game AI / opponent modeling** — predict next move, adapts to strategy shifts in real time
+
+## Where It Is Not Competitive
+
+- **Large stationary tabular data (>10K rows, no drift)** — gradient boosting wins by 5–10pp
+- **Long-range dependencies** — context window is fixed at k; needs a transformer for longer memory
+- **Smooth continuous regression** — binned output bounds precision below random forests
+
+---
+
+## Documentation
+
+| Section | Contents |
+|---|---|
+| **[Python API](python-api.md)** | Full `Uchi` class reference — `learn`, `ask`, `stream`, `predictor`, `web_search`, `save` |
+| **[Architecture](architecture.md)** | Trie algorithm, credibility update, routing layer design |
+| **[Core Engine](core-engine.md)** | `UniversalPredictor`, `PredictorForest` — low-level sequence predictor API |
+| **[OmniRouter](omni-router.md)** | Multi-modal routing, `ProceduralMemory`, SSM GRPO value head |
+| **[Generative Models](generative.md)** | `SequenceGenerator`, `TabularGenerator`, `TimeSeriesGenerator` |
+| **[Tabular ML](tabular.md)** | `TabularPredictor`, `TabularRegressor` — sklearn-compatible classifiers |
+| **[Time Series](timeseries.md)** | `MultivariateTSPredictor`, `TimeSeriesClassifier`, `AnomalyDetector` |
+| **[Convergent Engine](convergent-engine.md)** | MCTS, Oracles, vector ranking |
+| **[Benchmarks](benchmarks.md)** | Standard and concept-drift benchmark results |
+| **[Algorithmic Walkthrough](algorithmic-walkthrough.md)** | Step-by-step derivation of the core algorithm |
+| **[Simulation Engine](simulation-engine.md)** | `SimulationEngine` for scenario modeling |

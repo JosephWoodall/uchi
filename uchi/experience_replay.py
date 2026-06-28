@@ -188,6 +188,7 @@ class ExperienceReplayBuffer:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.executescript(_SCHEMA)   # idempotent; ensures schema survives db deletion/rotation
         return conn
 
     def _write(self, query: str, positive: str, negative: Optional[str], priority: float) -> None:

@@ -1,3 +1,26 @@
+# Tabular ML
+
+> **Python users:** tabular tools are callable directly from any `Uchi` instance via slash commands. The classes below are available for direct use but `u.ask()` is the recommended path. See [Python API →](python-api.md)
+>
+> ```python
+> from uchi import Uchi
+> u = Uchi()
+>
+> # All return a plain string you can immediately feed into another u.learn()
+> report = u.ask("/classify",  X=X_train, y=y_train)   # classification report
+> report = u.ask("/regress",   X=X_train, y=y_train)   # regression report
+> report = u.ask("/anomaly",   X=sensor_matrix)          # anomaly report
+>
+> # The compounding pattern
+> u2 = Uchi()
+> u2.learn(report)
+> u2.ask("What does this classification result imply about our data quality?")
+> ```
+>
+> `X` accepts a pandas DataFrame, numpy array, or list-of-lists. `y` accepts a list or 1-D array.
+
+---
+
 # Tabular ML and Preprocessing
 
 ## Preprocessing

@@ -148,8 +148,7 @@ def run_mmlu(router, sample: int, subjects: Optional[list[str]], verbose: bool) 
         prompt = _format_prompt(question, choices, subject)
 
         try:
-            with _no_web():
-                response = router.chat(prompt) or ""
+            response = router.chat(prompt) or ""
         except Exception as e:
             response = ""
             if verbose:
@@ -257,6 +256,7 @@ def main():
         OmniRouter._bootstrap_persona   = lambda self, *a, **kw: None
         router = OmniRouter(use_bpe=False)
 
+    router.web_search_enabled = False
     results = run_mmlu(router, sample=sample, subjects=subjects, verbose=args.verbose)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

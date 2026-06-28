@@ -1,5 +1,22 @@
 # Generative Models
 
+> **Python users:** `SequenceGenerator` is available directly through `u.predictor` on any `Uchi` instance. See [Python API →](python-api.md)
+>
+> ```python
+> from uchi import Uchi
+> u = Uchi()
+> u.predictor.fit([["the", "cat", "sat"], ["the", "dog", "ran"]])
+> u.predictor.generate(n=5, seed=["the"])           # → list of tokens
+> u.predictor.generate_text(n=50, sep=" ")           # → joined string
+> u.predictor.train(["a", "b", "c"])                # online update
+> u.predictor.predict_next(["a", "b"])               # → "c"
+> u.predictor.score(["the", "cat", "sat"])           # bits/token
+> ```
+
+---
+
+
+
 The three generators (`SequenceGenerator`, `TabularGenerator`, `TimeSeriesGenerator`) share the same trie engine as the predictors. Generation is sampling from the learned conditional distribution rather than taking the argmax. All sampling controls (temperature, top-k, top-p, stop tokens) operate on that distribution at runtime.
 
 **`SequenceGenerator`**

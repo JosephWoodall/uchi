@@ -50,6 +50,7 @@ class OmniRouter:
         self.ssm_optimizer = torch.optim.Adam(_ssm.parameters(), lr=1e-3)
         self.ssm_lock = threading.Lock()
         self._knowledge_bootstrapped = False
+        self.web_search_enabled = True
 
         # Phase 1+3: Parallel MCTS code generation with REPL oracle
         self.code_engine = CodeEngine(self.predictor, n_workers=4)
@@ -108,6 +109,8 @@ class OmniRouter:
             self._replay_train_every = 8
         if not hasattr(self, '_turn_counter'):
             self._turn_counter = 0
+        if not hasattr(self, 'web_search_enabled'):
+            self.web_search_enabled = True
 
     def __getstate__(self):
         # Exclude non-serialisable and always-reconstructed attributes.
@@ -466,31 +469,32 @@ class OmniRouter:
                 return str(ans_concept)
 
         # Autonomous Web Sourcing Hook
-        try:
-            from uchi.web_search import perform_web_search
-            # Strip OmniTokenizer lemma IDs (e.g. "capital.n.01" → "capital") so the
-            # web search receives plain English rather than lemmatised synset tokens.
-            raw_query = " ".join(str(c).split(".")[0] for c in concept_query)
-            print(f"\n[!] Knowledge gap detected for '{raw_query}'. Engaging Autonomous Web Sourcing...")
-            web_context = perform_web_search(raw_query)
-            if web_context:
-                print(f"[+] Sourced {len(web_context)} bytes of structural truth from the web.")
-                # Stream raw content first (fills trie vocabulary)
-                self.stream(web_context.split())
-                # Also stream as a QA pair so <|assistant|> → answer path exists in trie.
-                # Without this, MCTS can't select the web tokens as a response.
-                raw_q_words = raw_query.split()
-                qa_seq = ["<|user|>"] + raw_q_words + ["<|assistant|>"] + web_context[:250].split()
-                self.stream(qa_seq)
-                ans_concept2, ans_score2 = self.memory.query(concept_query)
-                if ans_concept2 and ans_score2 is not None and ans_score2 >= 0.5:
-                    return str(ans_concept2)
-                # Cosine memory gate failed (cold SSM — embedding space untrained).
-                # Tag the return so callers can distinguish web content from memory results
-                # and return it directly when MCTS fails to use it as generation guidance.
-                return "\x00WEB\x00" + web_context[:250]
-        except Exception as e:
-            print(f"[-] Web Sourcing error: {e}")
+        if getattr(self, 'web_search_enabled', True):
+            try:
+                from uchi.web_search import perform_web_search
+                # Strip OmniTokenizer lemma IDs (e.g. "capital.n.01" → "capital") so the
+                # web search receives plain English rather than lemmatised synset tokens.
+                raw_query = " ".join(str(c).split(".")[0] for c in concept_query)
+                print(f"\n[!] Knowledge gap detected for '{raw_query}'. Engaging Autonomous Web Sourcing...")
+                web_context = perform_web_search(raw_query)
+                if web_context:
+                    print(f"[+] Sourced {len(web_context)} bytes of structural truth from the web.")
+                    # Stream raw content first (fills trie vocabulary)
+                    self.stream(web_context.split())
+                    # Also stream as a QA pair so <|assistant|> → answer path exists in trie.
+                    # Without this, MCTS can't select the web tokens as a response.
+                    raw_q_words = raw_query.split()
+                    qa_seq = ["<|user|>"] + raw_q_words + ["<|assistant|>"] + web_context[:250].split()
+                    self.stream(qa_seq)
+                    ans_concept2, ans_score2 = self.memory.query(concept_query)
+                    if ans_concept2 and ans_score2 is not None and ans_score2 >= 0.5:
+                        return str(ans_concept2)
+                    # Cosine memory gate failed (cold SSM — embedding space untrained).
+                    # Tag the return so callers can distinguish web content from memory results
+                    # and return it directly when MCTS fails to use it as generation guidance.
+                    return "\x00WEB\x00" + web_context[:250]
+            except Exception as e:
+                print(f"[-] Web Sourcing error: {e}")
 
         return "[Unknown Context]"
         
