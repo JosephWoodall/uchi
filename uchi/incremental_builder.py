@@ -28,16 +28,12 @@ import os
 from datetime import datetime, timezone
 from typing import Iterator, List, Optional
 
-import torch
 from tqdm import tqdm
 
 _log = logging.getLogger(__name__)
 
 KNOWLEDGE_LIMIT = 200
 ALL_SOURCES = ["openhermes", "wikipedia", "mmlu", "gsm8k", "swebench", "humaneval"]
-
-# Maximum new token sequences to accumulate for SSM delta training.
-_MAX_DELTA_SEQS = 2000
 
 
 class IncrementalBrainBuilder:
@@ -198,35 +194,6 @@ class IncrementalBrainBuilder:
                     f"<|assistant|> {item.get('canonical_solution', '')} <|end|>"
                 )
 
-    # ── SSM delta training ────────────────────────────────────────────────────
-
-    def _train_ssm_delta(self, router, delta_seqs: list) -> None:
-        """Run a short SSM training pass over new-token sequences only."""
-        if not delta_seqs:
-            return
-        from uchi.neuro_symbolic import get_ssm
-
-        ssm = get_ssm()
-        optimizer = torch.optim.Adam(ssm.parameters(), lr=5e-4)
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-        print(f"\n[*] Phase 3: SSM delta training on {len(delta_seqs)} new sequences…")
-        for tokens in tqdm(delta_seqs, desc="SSM delta train"):
-            if len(tokens) < 2:
-                continue
-            optimizer.zero_grad()
-            try:
-                v_loss = ssm.update_value(tokens, reward=1.0)
-                d_loss = ssm.train_dynamics(tokens)
-                (v_loss + d_loss).backward()
-                optimizer.step()
-            except Exception as e:
-                _log.debug("SSM step skipped: %s", e)
-
-        pt_path = os.path.join(project_root, "ssm_dynamics.pt")
-        torch.save(ssm.state_dict(), pt_path)
-        print(f"[+] SSM weights saved to {os.path.basename(pt_path)}")
-
     # ── main entry ────────────────────────────────────────────────────────────
 
     def run(self, limit: int = KNOWLEDGE_LIMIT,
@@ -268,7 +235,6 @@ class IncrementalBrainBuilder:
             router = OmniRouter(use_bpe=False)
 
         dedup = IngestionDeduplicator(threshold=0.8)
-        delta_seqs: list = []   # token sequences of newly ingested docs
         total_ingested = self._checkpoint.get("total_ingested", 0)
 
         # ── Phase 2: Incremental ingestion ────────────────────────────────────
@@ -308,10 +274,6 @@ class IncrementalBrainBuilder:
                 source_count += 1
                 total_ingested += 1
 
-                # Accumulate for delta SSM training (cap to avoid OOM).
-                if len(delta_seqs) < _MAX_DELTA_SEQS:
-                    delta_seqs.append(tokens)
-
                 # Checkpoint every 50 unique docs ingested.
                 if source_count % 50 == 0:
                     self._save_checkpoint(current_source=source,
@@ -326,11 +288,8 @@ class IncrementalBrainBuilder:
               f"({dedup_stats['duplicate_rate']*100:.1f}%), "
               f"{total_ingested} unique documents added.")
 
-        # ── Phase 3: SSM delta training ───────────────────────────────────────
-        self._train_ssm_delta(router, delta_seqs)
-
-        # ── Phase 4: Persist updated brain ────────────────────────────────────
-        print(f"\n[*] Phase 4: Saving updated brain to {self.brain_path}…")
+        # ── Phase 3: Persist updated brain ────────────────────────────────────
+        print(f"\n[*] Phase 3: Saving updated brain to {self.brain_path}…")
         save_brain(router, self.brain_path)
         print("[+] Done. Brain updated incrementally.")
 

@@ -69,6 +69,15 @@ class ExperienceReplayBuffer:
         self._lock = threading.Lock()
         self._init_db()
 
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        del state["_lock"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
     # ── public API ────────────────────────────────────────────────────────────
 
     def push(
