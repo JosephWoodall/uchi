@@ -239,7 +239,6 @@ class TestOmniRouterSkillsAttribute:
     def test_setstate_adds_skills(self):
         from uchi.omni_router import OmniRouter
         from uchi.generative import SequenceGenerator
-        from uchi.grpo import AgenticBaseline
         from uchi.procedural_memory import ProceduralMemory
         from uchi.memory import AssociativeMemory
         from uchi.omni_tokenizer import OmniTokenizer
@@ -247,7 +246,6 @@ class TestOmniRouterSkillsAttribute:
         router = OmniRouter.__new__(OmniRouter)
         router.__setstate__({
             "predictor": SequenceGenerator(context_length=6),
-            "baseline": AgenticBaseline(),
             "procedural": ProceduralMemory(),
             "memory": AssociativeMemory(),
             "tokenizer": OmniTokenizer(),

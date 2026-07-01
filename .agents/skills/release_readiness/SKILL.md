@@ -13,17 +13,31 @@ Run the comprehensive test suite to ensure zero regressions.
 - Verify that all tests pass successfully. If any tests fail, stop and fix them before proceeding.
 
 ## 2. Performance & Capability Benchmarks
-Run the benchmarking suite to measure Uchi's language understanding (MMLU) and coding ability (SWE-bench), the two authoritative public benchmarks reported on the README.
+Run the compounding benchmarking suite to measure Uchi's intelligence across reasoning (MMLU, ARC-Challenge), patching (SWE-bench), agency (OPS/WebArena), and synthesis (HumanEval). All benchmarks must be run on every release to ensure zero regression.
+
+**CRITICAL — Brain Knowledge Prerequisite**: Before running any benchmark, verify the brain contains training data for each benchmark domain. The following sources must have been ingested via `incremental_builder` before results are meaningful:
+- **MMLU**: `mmlu_qna` (auxiliary_train split, minimum 5000 examples)
+- **SWE-bench**: `swebench` + `humaneval` (minimum 500 examples each)
+- **ARC-Challenge**: `arc` (ARC-Challenge train split, minimum 500 examples)
+
+If any source is missing, run `python -m uchi.incremental_builder --sources <missing_source> --limit 500` and re-run GRPO before benchmarking.
 
 - Execute `python benchmarks/run_benchmarks.py --mini`
-  - `--mini` mode runs **5 MMLU questions** and **5 SWE-bench instances** — fast enough for release-gate CI. For a full publication-quality run use `--mmlu-samples 500 --swe-samples 50` (drops `--mini`).
-  - **MMLU** (language understanding): samples questions from the Massive Multitask Language Understanding dataset across 57 academic subjects. Reports accuracy per subject and overall accuracy.
-  - **SWE-bench** (coding): runs a subset of real GitHub issue→patch tasks. Reports resolve rate (% of issues where Uchi's generated patch passes all tests).
-- Verify MMLU accuracy ≥ the prior baseline and SWE-bench resolve rate ≥ prior baseline. If either drops, treat it as a regression and fix before proceeding.
+  - `--mini` mode runs **5 instances of each benchmark** — fast enough for release-gate CI. For a full publication-quality run, omit `--mini`.
+  - **MMLU** (language understanding): measures factual recall and reasoning accuracy across 57 academic subjects.
+  - **ARC-Challenge** (reasoning): measures multi-concept reasoning on elementary science questions specifically designed to resist pattern matching. This is the primary reasoning signal — a higher bar than MMLU.
+  - **SWE-bench** (coding): measures ability to resolve GitHub issues via repository patches.
+  - **OPS** (Operations Per Second): measures agentic latency and throughput for autonomous loops.
+  - **WebArena**: measures autonomous web navigation and task completion.
+  - **HumanEval**: measures pure Python algorithmic synthesis and unit test passing.
+- Run individual benchmark scripts for detailed per-benchmark output:
+  - `python benchmarks/mmlu_benchmark.py --sample 200 --brain brain.uchi`
+  - `python benchmarks/arc_benchmark.py --sample 200 --brain brain.uchi`
+  - `python benchmarks/swebench_benchmark.py --sample 50 --brain brain.uchi`
+- Verify that **ALL** scores (MMLU, ARC-Challenge, SWE-bench, OPS, WebArena, HumanEval) are ≥ the prior baseline. If any score drops, treat it as an architectural regression and fix before proceeding.
 - **CRITICAL — Publish Benchmarks to README**: After every benchmark run, update the `README.md` "Benchmarks" section with the new scores. This is mandatory, not optional. Specifically:
-  - Update the MMLU narrative section: accuracy %, no-parse rate, and the best/worst subject table.
-  - Update the SWE-bench narrative section: code generation rate and composite proxy score.
-  - Update the `<!-- BENCHMARK_TABLE_START --> ... <!-- BENCHMARK_TABLE_END -->` summary table with the new MMLU and SWE-bench rows.
+  - Update the narrative sections for each benchmark (MMLU, ARC-Challenge, SWE-bench, OPS, WebArena, HumanEval).
+  - Update the `<!-- BENCHMARK_TABLE_START --> ... <!-- BENCHMARK_TABLE_END -->` summary table with rows for all active benchmarks.
   - The prior scores must be replaced, not appended — the table always reflects the current brain, not history. Benchmark history belongs in `tasks/0.X.0 Itemized Deliverables.md`.
 
 ## 3. Documentation Verification
@@ -37,7 +51,7 @@ Ensure the documentation architecture is pristine:
 - **Codebase Hygiene Sweep**: Scan the entire repository for outdated, non-necessary, or irrelevant files and remove them before release. Specifically check:
   - Root-level scratch/debug scripts (`debug_*.py`, `test_*.py` at root, `evaluate_*.py`, `fix_*.py`, `patch_*.py`, `api_*.py`) — remove any that are not part of the public interface.
   - `scripts/` directory: remove one-off tools, old patch scripts, and any script whose function is now covered by a module in `uchi/`. Keep only scripts referenced in `README.md` (e.g., bootstrap scripts).
-  - `benchmarks/` directory: remove superseded benchmark runners. Keep only `run_benchmarks.py`, `mmlu_benchmark.py`, and `swebench_benchmark.py` plus their result JSON files.
+  - `benchmarks/` directory: remove superseded benchmark runners. Keep only `run_benchmarks.py`, `mmlu_benchmark.py`, `arc_benchmark.py`, and `swebench_benchmark.py` plus their result JSON files.
   - `examples/` directory: remove any example that uses the old `OmniRouter`-direct or `UniversalPredictor`-direct API. All examples must use `from uchi import Uchi`.
   - Temporary/runtime artifacts on disk: delete `*.tmp`, `*.pkl` caches, `replay.db`, `ssm_dynamics.pt`, `uchi_cpu_memory_*.{json,bin,npy}`, `uchi_procedural_memory.json`, and the `site/` build directory. These are all listed in `.gitignore` and must not exist in a clean release state.
   - Verify `.gitignore` covers all generated artifacts so they cannot be accidentally committed.

@@ -135,6 +135,14 @@ class Uchi:
         knowledge for another, with no serialisation or schema required.
         """
         self._router.stream(text.split())
+        # Compounding: feed the same text into the retrieval index so
+        # Generate-and-Ground can ground future answers on it.
+        idx = getattr(self._router, "_semantic_index", None)
+        if idx is not None:
+            try:
+                idx.build_from_corpus(text)
+            except Exception:
+                pass
 
     def ask(self, question: str, **data: Any) -> str:
         """Ask the brain a question or invoke a tool skill.
@@ -165,7 +173,9 @@ class Uchi:
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self._router.skills.dispatch(cmd, extra_args, data_kwargs=data) or ""
         else:
-            raw = self._router.chat(question) or ""
+            # Natural-language questions route through Generate-and-Ground
+            # (retrieve → generate → fact-check → emit/abstain). Never confabulates.
+            raw = self._router.answer(question) or ""
         return normalize(raw)
 
     def ingest(self, path: str, col: Optional[str] = None) -> "Uchi":

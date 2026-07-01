@@ -121,12 +121,13 @@ async def metrics_endpoint():
         if hasattr(_router.memory, "cpu_mem")
         else 0
     )
+    idx = getattr(_router, "_semantic_index", None)
     return {
         "status": "online",
         "memory_records": memory_records,
-        "ssm_baseline_mean": round(_router.baseline.mean, 4),
+        "indexed_passages": len(idx) if idx is not None else 0,
         "skills_loaded": len(_router.skills.list_skills()),
-        "mode": "deterministic",
+        "mode": "grounded",
     }
 
 

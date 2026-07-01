@@ -1,0 +1,43 @@
+{
+  "n": 800,
+  "answerable": 391,
+  "unanswerable": 409,
+  "indexed_passages": 3073,
+  "curve": [
+    {
+      "min_answerable": 0.0,
+      "coverage": 0.9923,
+      "precision_at_answered": 0.5541,
+      "honest_abstention": 0.0147,
+      "hallucination_rate": 0.7282
+    },
+    {
+      "min_answerable": 0.5,
+      "coverage": 0.9105,
+      "precision_at_answered": 0.5674,
+      "honest_abstention": 0.2005,
+      "hallucination_rate": 0.7042
+    },
+    {
+      "min_answerable": 0.7,
+      "coverage": 0.8312,
+      "precision_at_answered": 0.5815,
+      "honest_abstention": 0.3056,
+      "hallucination_rate": 0.6897
+    },
+    {
+      "min_answerable": 0.85,
+      "coverage": 0.7136,
+      "precision_at_answered": 0.5699,
+      "honest_abstention": 0.4059,
+      "hallucination_rate": 0.6954
+    },
+    {
+      "min_answerable": 0.95,
+      "coverage": 0.5703,
+      "precision_at_answered": 0.574,
+      "honest_abstention": 0.533,
+      "hallucination_rate": 0.6908
+    }
+  ]
+}

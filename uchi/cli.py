@@ -127,48 +127,39 @@ def get_bundled_brain_path() -> str:
     return fallback if os.path.exists(fallback) else ""
 
 
-def load_brain(path: str = "brain.uchi") -> OmniRouter:
-    """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle.
+def load_brain(path: str = "brain.uchi"):
+    """Deserialize the brain from disk (gzip or plain pickle).
 
-    Falls back in order:
-      1. User brain at `path`
-      2. Bundled brain shipped with the package (uchi/data/brain.uchi)
-      3. Full rebuild via build_full_brain()
+    Returns the OmniRouter, or ``None`` if no loadable brain exists. Callers
+    create a fresh cold router on ``None`` — load failures no longer trigger a
+    heavy auto-rebuild (that was the retired Family C pipeline).
     """
     import gzip
     print(f"[*] Loading persistent brain state from {path}...")
 
     if not os.path.exists(path):
-        print(f"[-] Brain file not found: {path}")
         bundled = get_bundled_brain_path()
-        if bundled:
-            print(f"[*] Using bundled brain: {bundled}")
+        if bundled and bundled != path:
             path = bundled
         else:
-            print("[*] Automatically triggering the Universal Builder Pipeline...")
-            from uchi.builder import build_full_brain
-            return build_full_brain(path)
-        
-    # Try gzip first; only fall through if the file genuinely isn't gzip-compressed
+            print(f"[-] Brain file not found: {path}")
+            return None
+
     try:
         with gzip.open(path, "rb") as f:
             return pickle.load(f)
     except gzip.BadGzipFile:
-        pass  # not a gzip file — try plain pickle
+        pass  # not gzip — try plain pickle
     except Exception as e:
-        print(f"[-] Failed to load brain (gzip/pickle error): {e}")
-        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
-        
+        print(f"[-] Failed to load brain (gzip/pickle): {e}")
+        return None
+
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
     except Exception as e:
         print(f"[-] Failed to load brain: {e}")
-        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
+        return None
 
 def preload_context(router, path: str):
     """

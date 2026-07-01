@@ -89,49 +89,21 @@ def phase_ingest(
 
 def phase_train(
     brain_path: str,
-    grpo_steps: int,
-    grpo_batch: int,
-    grpo_lr: float,
+    grpo_steps: int = 0,
+    grpo_batch: int = 0,
+    grpo_lr: float = 0.0,
 ) -> Dict:
-    _print_header("Phase 2 — GRPO Format-Reward Training")
-    from .grpo_offline_trainer import run_offline_grpo
-
-    t0 = time.time()
-    run_offline_grpo(
-        brain_path=brain_path,
-        steps=grpo_steps,
-        batch_size=grpo_batch,
-        lr=grpo_lr,
-    )
-
-    result = {
-        "steps": grpo_steps,
-        "batch_size": grpo_batch,
-        "elapsed": _elapsed(t0),
-    }
-    print(f"[+] GRPO training complete in {result['elapsed']}")
-    return result
+    # Retired with Family C (SSM GRPO training). The Generate-and-Ground decoder
+    # is trained via experiments/train_decoder.py and shipped as data/decoder.pt.
+    return {"skipped": "retired with Family C"}
 
 
 # ── Phase 3: Calibrate ───────────────────────────────────────────────────────
 
 def phase_calibrate(brain_path: str, n_samples: int = 200) -> Dict:
-    _print_header("Phase 3 — SSM Confidence Calibration")
-    import gzip
-    import pickle
-    from .calibration import run_calibration
-
-    t0 = time.time()
-    try:
-        with gzip.open(brain_path, "rb") as f:
-            router = pickle.load(f)
-        calibrator = run_calibration(router, n_samples=n_samples)
-        T = calibrator.temperature.item()
-        print(f"[+] Calibration complete: T={T:.4f}  (elapsed {_elapsed(t0)})")
-        return {"temperature": T, "n_samples": n_samples, "elapsed": _elapsed(t0)}
-    except Exception as e:
-        print(f"[!] Calibration failed: {e}  — continuing with T=1.0")
-        return {"temperature": 1.0, "error": str(e), "elapsed": _elapsed(t0)}
+    # Retired with Family C (SSM value-head calibration). Generate-and-Ground
+    # grounds answers via retrieval + fact-check, not an SSM confidence head.
+    return {"temperature": 1.0, "skipped": "retired with Family C"}
 
 
 # ── Phase 4: Benchmark ───────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ Sources (default: all):
     wikipedia           — encyclopedic (wikipedia 20220301.en)
     wikipedia_targeted  — one Wikipedia article per MMLU subject (no HF dependency)
     mmlu                — academic reasoning (cais/mmlu)
+    arc                 — reasoning MCQ (ARC-Challenge train)
     gsm8k               — math (gsm8k)
     swebench            — code/bugs (princeton-nlp/SWE-bench)
     humaneval           — algorithm completion (openai/openai_humaneval)
@@ -37,7 +38,7 @@ _log = logging.getLogger(__name__)
 KNOWLEDGE_LIMIT = 200
 ALL_SOURCES = [
     "openhermes", "wikipedia", "wikipedia_targeted",
-    "mmlu", "mmlu_qna", "gsm8k", "swebench", "humaneval", "mbpp",
+    "mmlu", "mmlu_qna", "arc", "gsm8k", "swebench", "humaneval", "mbpp",
 ]
 
 # One Wikipedia article per MMLU subject category.
@@ -257,8 +258,32 @@ class IncrementalBrainBuilder:
                 correct_letter = _LABELS[ans_idx]
                 yield f"<|user|> {prompt} <|assistant|> {correct_letter} <|end|>"
 
+        elif source == "arc":
+            # ARC-Challenge train split in exact benchmark MCQ format.
+            # Matches mmlu_qna format so trie paths align with MCQ voting.
+            ds = _safe_load_dataset("allenai/ai2_arc", "ARC-Challenge", split="train")
+            if ds is None:
+                return
+            for i, item in enumerate(list(ds)[:limit]):
+                if i < start_offset:
+                    continue
+                question = item.get("question", "").strip()
+                choices  = item.get("choices", {})
+                labels   = choices.get("label", [])
+                texts    = choices.get("text", [])
+                answer   = item.get("answerKey", "").strip().upper()
+                if not question or not texts or answer not in labels:
+                    continue
+                lines = ["The following is a multiple choice question.", "", question, ""]
+                for label, text in zip(labels, texts):
+                    lines.append(f"{label}. {text}")
+                lines.append("")
+                lines.append("Answer:")
+                prompt = "\n".join(lines)
+                yield f"<|user|> {prompt} <|assistant|> {answer} <|end|>"
+
         elif source == "gsm8k":
-            ds = _safe_load_dataset("gsm8k", "main", split="test")
+            ds = _safe_load_dataset("openai/gsm8k", "main", split="test")
             if ds is None:
                 return
             for i, item in enumerate(list(ds)[:limit]):
@@ -392,13 +417,27 @@ class IncrementalBrainBuilder:
     # ── main entry ────────────────────────────────────────────────────────────
 
     def run(self, limit: int = KNOWLEDGE_LIMIT,
-            sources: Optional[List[str]] = None) -> None:
+            sources: Optional[List[str]] = None,
+            no_resume: bool = False) -> None:
         """Execute the incremental build.
 
         Args:
-            limit:   Max documents to ingest per source.
-            sources: List of source names to process (default: ALL_SOURCES).
+            limit:     Max documents to ingest per source.
+            sources:   List of source names to process (default: ALL_SOURCES).
+            no_resume: If True, ignore existing checkpoint and re-ingest all
+                       requested sources from scratch (useful for re-running a
+                       source with a higher limit).
         """
+        if no_resume:
+            self._checkpoint = {
+                "completed_sources": [],
+                "current_source":    None,
+                "current_offset":    0,
+                "total_ingested":    0,
+                "started_at":        __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc).isoformat(),
+                "last_updated":      None,
+            }
         from uchi.cli import save_brain
         from uchi.omni_router import OmniRouter
         from uchi.deduplication import IngestionDeduplicator
@@ -432,6 +471,15 @@ class IncrementalBrainBuilder:
         dedup = IngestionDeduplicator(threshold=0.8)
         total_ingested = self._checkpoint.get("total_ingested", 0)
 
+        # Generate-and-Ground: ensure the brain has a retrieval index so ingested
+        # knowledge is groundable at answer time.
+        if getattr(router, "_semantic_index", None) is None:
+            try:
+                router.build_semantic_index([])   # seed with shipped embeddings
+                print("[*] Semantic retrieval index initialised.")
+            except Exception as e:
+                print(f"[!] Semantic index init skipped: {e}")
+
         # ── Phase 2: Incremental ingestion ────────────────────────────────────
         print(f"\n[*] Phase 2: Ingesting from {len(sources)} sources (limit={limit}/source)…")
         if self._checkpoint["completed_sources"]:
@@ -462,10 +510,17 @@ class IncrementalBrainBuilder:
                 if dedup.check_and_add(text):
                     continue  # near-duplicate, skip
 
-                tokens = router.tokenizer.tokenize(
-                    text.split(), is_inference=False
-                )
-                router.stream(tokens)
+                # Pass raw words — router.stream() tokenizes internally.
+                # Pre-tokenizing here causes double-tokenization: the second
+                # pass maps already-canonical tokens to the same bigrams,
+                # adding zero new paths to the trie.
+                router.stream(text.split())
+                # Feed the same knowledge into the retrieval index (grounding).
+                idx = getattr(router, "_semantic_index", None)
+                if idx is not None:
+                    clean = (text.replace("<|user|>", " ").replace("<|assistant|>", " ")
+                                 .replace("<|end|>", " "))
+                    idx.build_from_corpus(clean)
                 source_count += 1
                 total_ingested += 1
 
@@ -504,6 +559,9 @@ def main() -> None:
                              f"Options: {', '.join(ALL_SOURCES)}")
     parser.add_argument("--checkpoint", default=None,
                         help="Path to checkpoint file (default: auto)")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Ignore existing checkpoint and re-ingest all requested sources "
+                             "from scratch (useful when re-running a source with a higher limit)")
     args = parser.parse_args()
 
     sources = (
@@ -515,7 +573,7 @@ def main() -> None:
         brain_path=args.brain,
         checkpoint_path=args.checkpoint,
     )
-    builder.run(limit=args.limit, sources=sources)
+    builder.run(limit=args.limit, sources=sources, no_resume=args.no_resume)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 """Tests for the routing layer components added in v0.3.0."""
 import pytest
 from uchi.procedural_memory import ProceduralMemory
-from uchi.grpo import AgenticBaseline, grpo_agentic_advantage
 from uchi.cpu_memory import CPUVectorMemory
 import numpy as np
 import tempfile
@@ -40,31 +39,6 @@ class TestProceduralMemory:
         self.mem.update("cooking", "identify the recipe")
         result = self.mem.retrieve("cooking pasta")
         assert result is not None
-
-
-class TestAgenticBaseline:
-    def test_initial_advantage_is_finite(self):
-        baseline = AgenticBaseline()
-        adv = baseline.advantage(1.0)
-        assert isinstance(adv, float)
-        assert adv == pytest.approx(1.0, abs=1.0)
-
-    def test_update_shifts_mean(self):
-        baseline = AgenticBaseline(alpha=0.5)
-        baseline.update(10.0)
-        assert baseline.mean > 0
-
-    def test_advantage_normalizes(self):
-        baseline = AgenticBaseline()
-        for _ in range(20):
-            baseline.update(1.0)
-        # After many updates of 1.0, advantage of 1.0 should be near 0
-        adv = baseline.advantage(1.0)
-        assert abs(adv) < 2.0
-
-    def test_grpo_agentic_advantage(self):
-        adv = grpo_agentic_advantage(reward=1.0, running_mean=0.0, running_std=1.0)
-        assert adv == pytest.approx(1.0)
 
 
 class TestCPUVectorMemory:

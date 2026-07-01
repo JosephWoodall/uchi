@@ -12,15 +12,12 @@ from .omni_tokenizer import OmniTokenizer
 from .online_tokenizer import OnlineTokenizer
 from .memory import AssociativeMemory
 from .generative import SequenceGenerator
-from .grpo import AgenticBaseline
 from .procedural_memory import ProceduralMemory
 from .code_engine import CodeEngine
 from .specialist_pool import SpecialistPool
 from .skill_registry import SkillRegistry
-from .convergent_engine import ConvergentEngine
 from .goal_state import GoalState
 from .experience_replay import ExperienceReplayBuffer as PrioritisedReplayBuffer
-import torch
 
 _FENCED_CODE_RE = re.compile(r'```(?:python)?\s*(.*?)```', re.DOTALL)
 _INLINE_CODE_RE = re.compile(r'`([^`\n]{6,})`')
@@ -72,25 +69,16 @@ class OmniRouter:
             context_length=context_length,
             min_context_length=0
         ) 
-        self.baseline = AgenticBaseline()
         self.procedural = ProceduralMemory()
-
-        # SSM optimizer persisted on self so Adam's momentum accumulates across turns
-        from uchi.neuro_symbolic import get_ssm
-        _ssm = get_ssm()
-        self.ssm_optimizer = torch.optim.Adam(_ssm.parameters(), lr=1e-3)
-        self.ssm_lock = threading.Lock()
         self._knowledge_bootstrapped = False
         self.web_search_enabled = True
 
-        # Phase 1+3: Parallel MCTS code generation with REPL oracle
+        # Code generation with REPL oracle (a skill)
         self.code_engine = CodeEngine(self.predictor, n_workers=4)
-        # Phase 2: MoE SpecialistPool (lazy-loads specialist brains on first use)
+        # MoE SpecialistPool (lazy-loads specialist brains on first use)
         self.specialist_pool = SpecialistPool(self)
-        # Skill toolkit: markdown-defined /commands
+        # Skill toolkit: markdown-defined /commands + dynamically-callable skills
         self.skills = SkillRegistry(self)
-        # Convergent MCTS engine for deliberative response generation
-        self.convergent = ConvergentEngine(self)
 
         self._conversation_history: list = []  # [(q_tokens, r_tokens), ...]
         self._context_window: int = 3           # prior turns to prepend to seed
@@ -98,6 +86,7 @@ class OmniRouter:
         self.replay_buffer = PrioritisedReplayBuffer()  # experience replay for GRPO
         self._replay_train_every: int = 8       # sample+train every N turns
         self._turn_counter: int = 0             # counts chat() invocations
+        self._semantic_index = None             # Generate-and-Ground retrieval index
 
         self._bootstrap_persona(progress_callback)
         self._bootstrap_knowledge(progress_callback)
@@ -107,11 +96,6 @@ class OmniRouter:
         self.__dict__.update(state)
         if not hasattr(self, 'procedural'):
             self.procedural = ProceduralMemory()
-        if not hasattr(self, 'baseline'):
-            self.baseline = AgenticBaseline()
-        # Always re-bind optimizer to the current SSM instance (architecture may have changed)
-        from uchi.neuro_symbolic import get_ssm
-        self.ssm_optimizer = torch.optim.Adam(get_ssm().parameters(), lr=1e-3)
         if not hasattr(self, '_knowledge_bootstrapped'):
             self._knowledge_bootstrapped = True
         if not hasattr(self, 'code_engine'):
@@ -120,10 +104,6 @@ class OmniRouter:
             self.specialist_pool = SpecialistPool(self)
         if not hasattr(self, 'skills'):
             self.skills = SkillRegistry(self)
-        if not hasattr(self, 'convergent'):
-            self.convergent = ConvergentEngine(self)
-        if not hasattr(self, 'ssm_lock'):
-            self.ssm_lock = threading.Lock()
         if not hasattr(self, '_background_started'):
             self._background_started = False
         if not hasattr(self, '_daemon_procs'):
@@ -142,6 +122,8 @@ class OmniRouter:
             self._turn_counter = 0
         if not hasattr(self, 'web_search_enabled'):
             self.web_search_enabled = True
+        if not hasattr(self, '_semantic_index'):
+            self._semantic_index = None
 
     def __getstate__(self):
         # Exclude non-serialisable and always-reconstructed attributes.
@@ -152,10 +134,71 @@ class OmniRouter:
         #   them inflates the brain file with redundant circular-reference chains
         #   without preserving any state that can't be rebuilt in milliseconds.
         skip = {
-            "ssm_lock", "ssm_optimizer", "_background_started", "_daemon_procs",
-            "specialist_pool", "skills", "convergent", "code_engine",
+            "_background_started", "_daemon_procs",
+            "specialist_pool", "skills", "code_engine",
+            "_decoder", "_answerability",   # torch model caches; lazy-reloaded
         }
         return {k: v for k, v in self.__dict__.items() if k not in skip}
+
+    # ── Generate-and-Ground: primary answering path ───────────────────────────
+    def _default_embeddings_path(self):
+        import os
+        return os.path.join(os.path.dirname(__file__), "data", "skipgram_emb.pt")
+
+    def build_semantic_index(self, texts, embeddings_path=None):
+        """Build the retrieval index from ingested corpus text (called at brain build)."""
+        from uchi.retrieval import SemanticIndex
+        path = embeddings_path or self._default_embeddings_path()
+        idx = SemanticIndex.from_embeddings_file(path)
+        for t in texts:
+            if isinstance(t, str) and t.strip():
+                idx.build_from_corpus(t)
+        self._semantic_index = idx
+        return idx
+
+    def _load_decoder(self):
+        """Lazy-load the trained answer decoder from data/decoder.pt (or None)."""
+        import os
+        if getattr(self, "_decoder", "unset") == "unset":
+            self._decoder = None
+            path = os.path.join(os.path.dirname(__file__), "data", "decoder.pt")
+            try:
+                from uchi.decoder import NeuralDecoder
+                if NeuralDecoder.exists(path):
+                    self._decoder = NeuralDecoder.load(path)
+            except Exception:
+                self._decoder = None
+        return self._decoder
+
+    def _load_answerability(self):
+        """Lazy-load the answerability checker from data/answerability.pt (or None)."""
+        import os
+        if getattr(self, "_answerability", "unset") == "unset":
+            self._answerability = None
+            path = os.path.join(os.path.dirname(__file__), "data", "answerability.pt")
+            try:
+                from uchi.answerability import AnswerabilityChecker
+                if AnswerabilityChecker.exists(path):
+                    self._answerability = AnswerabilityChecker.load(path)
+            except Exception:
+                self._answerability = None
+        return self._answerability
+
+    def answer(self, question: str, callback=None) -> str:
+        """Primary endpoint: retrieve → answerability-gate → generate →
+        fact-check → emit / abstain.
+
+        Never confabulates: with no grounded knowledge (empty/absent index) or
+        when the evidence does not actually answer the question, it abstains.
+        """
+        idx = getattr(self, "_semantic_index", None)
+        if idx is not None and len(idx) > 0:
+            from uchi.generate_and_ground import GenerateAndGround
+            gg = GenerateAndGround(idx, decoder=self._load_decoder(),
+                                   answerability=self._load_answerability(),
+                                   predictor=self.predictor, min_answerable=0.6)
+            return gg.answer(question)
+        return "I don't have grounded knowledge to answer that."
 
     def _bootstrap_persona(self, progress_callback=None):
         """
@@ -190,22 +233,9 @@ class OmniRouter:
         # Simulate Massive Positive Reinforcement RL during cold start
         total_steps = 5 * len(turns)
         current_step = 0
-        from uchi.neuro_symbolic import get_ssm
-        ssm = get_ssm()
-        ssm.train()
         for _ in range(5):
             for turn in turns:
-                tokens = turn.split()
-                self.stream(tokens)
-
-                # Jumpstart the value head so it doesn't randomly output < 0.0.
-                # Single compute_loss call avoids running two GRU forward passes
-                # before .backward() — double-pass invalidates gradient graphs.
-                self.ssm_optimizer.zero_grad()
-                loss = ssm.compute_loss(tokens, reward=1.0)
-                loss.backward()
-                self.ssm_optimizer.step()
-                
+                self.stream(turn.split())
                 current_step += 1
                 if progress_callback:
                     progress_callback(current_step, total_steps)
@@ -271,9 +301,7 @@ class OmniRouter:
 
         # Persist SSM weights so they survive across restarts
         try:
-            import torch
-            from uchi.neuro_symbolic import get_ssm
-            torch.save(get_ssm().state_dict(), "ssm_dynamics.pt")
+            pass  # SSM checkpoint retired with the Family C generation path
         except Exception:
             pass
 
@@ -292,33 +320,9 @@ class OmniRouter:
         if not hasattr(self, '_daemon_procs'):
             self._daemon_procs = []
 
-        import sys
-        import subprocess
-        import os
-        scripts_dir = os.path.normpath(
-            os.path.join(os.path.dirname(__file__), '..', 'scripts')
-        )
-
-        # Legacy RL daemon (predict_future + sandbox)
-        rl_script = os.path.join(scripts_dir, 'background_rl.py')
-        if os.path.exists(rl_script):
-            proc = subprocess.Popen(
-                [sys.executable, rl_script],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self._daemon_procs.append(proc)
-
-        # Convergent dream daemon: ConvergentEngine self-play → SSM alignment
-        # Runs forever (--daemon), periodically saving ssm_dynamics.pt.
-        dream_script = os.path.join(scripts_dir, 'offline_dream.py')
-        if os.path.exists(dream_script):
-            proc = subprocess.Popen(
-                [sys.executable, dream_script, '--daemon'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self._daemon_procs.append(proc)
+        # Background self-play daemons were part of the retired Family C
+        # (SSM self-alignment) path; Generate-and-Ground needs no daemons.
+        return
 
     def stop_background_jobs(self):
         """Terminate all daemons spawned by start_background_jobs().
@@ -332,112 +336,6 @@ class OmniRouter:
                 proc.terminate()
         self._daemon_procs = []
         self._background_started = False
-
-    def _fire_contrastive_update(
-        self,
-        query_tokens: list,
-        response_tokens: list,
-        reward: float,
-    ) -> None:
-        """
-        Enqueue a contrastive SSM update on a daemon thread.
-
-        The lock prevents concurrent optimizer.step() calls from colliding
-        gradients or corrupting Adam's moment buffers.  Daemon=True ensures
-        the thread does not block interpreter shutdown.
-        """
-        from uchi.vector_oracle import contrastive_update as _cu
-        opt = self.ssm_optimizer
-        lock = self.ssm_lock
-        q = list(query_tokens)
-        r = list(response_tokens)
-        rew = float(reward)
-
-        def _bg():
-            with lock:
-                _cu(q, r, rew, opt)
-
-        threading.Thread(target=_bg, daemon=True).start()
-
-    def _train_ssm(self, sequence: list, reward: float):
-        """Train SSM value head + dynamics on one sequence/reward pair."""
-        from uchi.neuro_symbolic import get_ssm
-        ssm = get_ssm()
-        ssm.train()
-        self.ssm_optimizer.zero_grad()
-        v_loss = ssm.update_value(sequence, reward=reward)
-        d_loss = ssm.train_dynamics(sequence)
-        (v_loss + d_loss).backward()
-        self.ssm_optimizer.step()
-
-    def _push_experience(
-        self,
-        concepts: list,
-        reply: list,
-        reward_hint: float,
-    ) -> None:
-        """Push a (query, response) pair to the replay buffer and trigger
-        periodic GRPO replay training every _replay_train_every turns."""
-        try:
-            self.replay_buffer.push(
-                query_tokens=concepts,
-                positive_tokens=reply,
-                priority=max(abs(reward_hint), 0.1),
-            )
-            self._turn_counter += 1
-            if self._turn_counter % self._replay_train_every == 0:
-                self._replay_train_step()
-        except Exception:
-            pass
-
-    def _replay_train_step(self) -> None:
-        """Sample a mini-batch from the replay buffer and run SSM training.
-
-        This is the stability mechanism for RL: the SSM trains on a diverse
-        sample of past interactions rather than only the most recent turn,
-        preventing overfitting to a narrow or pathological distribution.
-        """
-        try:
-            batch = self.replay_buffer.sample(batch_size=8)
-            if not batch:
-                return
-            from uchi.neuro_symbolic import get_ssm
-            ssm = get_ssm()
-            ssm.train()
-            with self.ssm_lock:
-                for exp in batch:
-                    q_toks = exp.get("query", [])
-                    r_toks = exp.get("positive", [])
-                    priority = float(exp.get("priority", 1.0))
-                    if not q_toks or not r_toks:
-                        continue
-                    seq = ["<|user|>"] + q_toks + ["<|assistant|>"] + r_toks
-                    reward = min(priority, 1.0)
-                    self.ssm_optimizer.zero_grad()
-                    v_loss = ssm.update_value(seq, reward=reward)
-                    d_loss = ssm.train_dynamics(seq)
-                    (v_loss + d_loss).backward()
-                    self.ssm_optimizer.step()
-                    # Update priority with current loss as difficulty signal.
-                    mem_id = exp.get("id")
-                    if mem_id is not None:
-                        new_pri = float((v_loss + d_loss).item())
-                        self.replay_buffer.update_priority(mem_id, new_pri)
-        except Exception:
-            pass
-
-    def _compute_response_reward(self, query_tokens: list, reply_tokens: list,
-                                  intent_key: str = None) -> float:
-        """Format reward: scores structural quality of the response.
-
-        Replaces the old length+overlap heuristic with the GRPO format reward
-        from grpo.py, which is intent-aware and calibrated to [-1, +1].
-        Scaled to [−0.15, +0.15] so it augments but does not dominate the
-        main factual reward signal.
-        """
-        from uchi.grpo import format_reward
-        raw = format_reward(reply_tokens, query_tokens, intent_key=intent_key)
-        return raw * 0.15
 
     def stream(self, concepts: list):
         """
@@ -561,139 +459,10 @@ class OmniRouter:
         return predicted
 
     def chat(self, message: str, callback=None) -> str:
-        """
-        High-level Conversational API with GRPO RL, MoE routing, and REPL-oracle code.
-        """
-
-        # 1. Intent detection + procedural context prepend
-        query_tokens = message.split()
+        """Conversational entry. Analytical/code intents route to skills; every
+        other natural-language question goes through Generate-and-Ground
+        (retrieve → generate → fact-check → emit/abstain)."""
         intent_key = self.procedural.get_intent_key(message)
-        procedure = self.procedural.retrieve(message)
-        if procedure:
-            query_tokens = procedure.split() + ["|"] + query_tokens
-
-        concepts = self.tokenizer.tokenize(query_tokens, is_inference=True)
-
-        # Update cross-turn goal state before routing decisions.
-        self.goal_state.update(concepts, intent_key)
-
-        # 2. Sentiment-based RL on previous turn
-        positive_words = {"good", "great", "awesome", "correct", "yes", "amazing", "thanks", "thank"}
-        negative_words = {"bad", "wrong", "incorrect", "no", "stop", "terrible", "awful"}
-        score_val = sum(
-            (1 if w.lower().strip(".,!?") in positive_words else
-             -1 if w.lower().strip(".,!?") in negative_words else 0)
-            for w in message.split()
-        )
-
-        if hasattr(self, 'last_sequence') and self.last_sequence:
-            reward = 0.0
-            if score_val > 0:
-                if callback:
-                    callback("reinforce", "Positive Momentum: Reinforcing previous sequence!")
-                reward = 1.0
-            elif score_val < 0:
-                if callback:
-                    callback("prune", "Synaptic Pruning: Eradicating previous hallucination!")
-                self.predictor.unlearn(self.last_sequence)
-                reward = -1.0
-
-            if reward != 0.0:
-                advantage = self.baseline.advantage(reward)
-                self.baseline.update(reward)
-                self._train_ssm(self.last_sequence, advantage)
-
-        _WEB_TAG = "\x00WEB\x00"
-
-        # 3a. Convergent MCTS: unified vector routing + generation
-        #     Retrieves memory bias first so candidates are grounded in context.
-        #     Keyword intent (steps 3b/3c) runs AFTER as a more specific override.
-        if intent_key is None:
-            try:
-                retrieved = self.query(concepts)
-                # Web-sourced content is tagged with _WEB_TAG. Return it directly:
-                # MCTS cannot reliably steer toward a sparsely-streamed trie path,
-                # so we surface the retrieval result rather than hallucinating over it.
-                if retrieved.startswith(_WEB_TAG):
-                    web_answer = retrieved[len(_WEB_TAG):]
-                    self._conversation_history.append((concepts, web_answer.split()))
-                    return web_answer
-                bias = retrieved if retrieved != "[Unknown Context]" else None
-                # If no memory-based bias, inject goal objective tokens to keep
-                # multi-turn responses aligned with the user's broader objective.
-                if bias is None and not self.goal_state.is_new_thread():
-                    obj_toks = self.goal_state.objective_tokens()
-                    if obj_toks:
-                        bias = " ".join(obj_toks)
-                # Code-context conditioning: if the message contains a code
-                # block, extract key tokens and prepend to bias so every MCTS
-                # rollout is conditioned on the existing function body.  This
-                # also suppresses the greedy bypass (by making bias non-None),
-                # forcing deliberate MCTS generation for code modification queries.
-                _code_bias = _extract_code_bias(message)
-                if _code_bias:
-                    bias = (_code_bias + " " + bias) if bias else _code_bias
-                kind, payload, reward_hint = self.convergent.generate(
-                    concepts,
-                    bootstrapped=self._knowledge_bootstrapped,
-                    bias_context=bias,
-                    context=self._conversation_history[-self._context_window:],
-                    callback=callback,
-                )
-                if kind == "tool" and payload and self.skills.has(payload):
-                    skill = self.skills._skills.get(payload)
-                    if skill:
-                        desc_toks = (skill.name + " " + skill.description).lower().split()
-                        self._fire_contrastive_update(concepts, desc_toks, reward_hint)
-                    return self.skills.dispatch(payload, message, callback)
-
-                elif kind == "uncertain" and not payload and bias:
-                    # MCTS produced no valid candidates but retrieval found grounding context.
-                    # Return the retrieved content directly rather than the fallback string.
-                    self._conversation_history.append((concepts, bias.split()))
-                    return bias
-
-                elif kind in ("text", "uncertain") and payload:
-                    reply = [t for t in payload if t not in
-                             ("<|user|>", "<|assistant|>", "<|end|>")]
-                    if reply:
-                        self.last_sequence = (
-                            ["<|user|>"] + concepts + ["<|assistant|>"] + reply
-                        )
-                        self._fire_contrastive_update(concepts, reply, reward_hint)
-                        self.stream(self.last_sequence)
-                        self.last_walk_data = {
-                            "prediction_depth": getattr(
-                                self.predictor._pred, "_last_prediction_depth", 0
-                            ),
-                            "contributions": getattr(
-                                self.predictor._pred, "_last_contributions", {}
-                            ),
-                            "max_sim": getattr(
-                                self.predictor._pred, "_last_max_sim", 0.0
-                            ),
-                        }
-                        predicted = self.tokenizer.detokenize(reply)
-                        reply_str = " ".join(str(p) for p in predicted)
-                        if reply_str.strip():
-                            self._push_experience(concepts, reply, reward_hint)
-                            if kind == "uncertain":
-                                # Memory fallback: associative memory may know
-                                # what the MCTS could not generate from trie alone.
-                                mem_result = self.query(concepts)
-                                if mem_result.startswith(_WEB_TAG):
-                                    mem_result = mem_result[len(_WEB_TAG):]
-                                if mem_result != "[Unknown Context]":
-                                    self._conversation_history.append((concepts, mem_result.split()))
-                                    return mem_result
-                                self._conversation_history.append((concepts, reply))
-                                return f"[Uncertain] {reply_str}"
-                            self._conversation_history.append((concepts, reply))
-                            return reply_str
-            except Exception:
-                pass
-
-        # 3b. Analytical intents: auto-dispatch when a data file path is present
         _ANALYTICAL = {"classify", "regress", "anomaly", "forecast", "tsclassify"}
         if intent_key in _ANALYTICAL:
             import os as _os
@@ -701,111 +470,14 @@ class OmniRouter:
             data_path = _fp(message)
             if data_path and _os.path.exists(data_path):
                 return self.skills.dispatch(intent_key, message, callback)
-            elif data_path:
+            if data_path:
                 return f"File not found: {data_path}"
-            else:
-                return (
-                    f"I can run {intent_key} analysis. "
-                    f"Please provide a data file path, e.g.:\n"
-                    f"  /{intent_key} yourdata.csv"
-                )
-
-        # 3c. Phase 1+2: Route CODE intent through CodeEngine + SpecialistPool
+            return (f"I can run {intent_key} analysis. Please provide a data file "
+                    f"path, e.g.:\n  /{intent_key} yourdata.csv")
         if intent_key == "code":
-            return self._handle_code_intent(message, query_tokens, concepts, callback)
-
-        # 4. Conversation path: memory retrieval + MCTS prediction
-        retrieved_context_str = self.query(concepts)
-        # Strip web tag if present (specialist path also handles web-sourced content)
-        if retrieved_context_str.startswith(_WEB_TAG):
-            web_answer = retrieved_context_str[len(_WEB_TAG):]
-            self._conversation_history.append((concepts, web_answer.split()))
-            return web_answer
-        # Prepend prior turns so specialist predictor sees rolling context
-        history_prefix = []
-        for q_toks, r_toks in self._conversation_history[-self._context_window:]:
-            history_prefix += ["<|user|>"] + q_toks[:6] + ["<|assistant|>"] + r_toks[:6]
-        tokens = history_prefix + ["<|user|>"] + concepts + ["<|assistant|>"]
-
-        bias = retrieved_context_str if retrieved_context_str != "[Unknown Context]" else None
-        prompt_entropy = self.predictor.score(tokens)
-
-        # Route to specialist if available (Phase 2)
-        specialist = self.specialist_pool.route(intent_key or "convo")
-        # Stream grounding context to specialist trie so its MCTS can select those tokens.
-        # Web/memory content is only in the main trie; specialist has its own trie.
-        # Frame as a proper QA pair so <|assistant|> → answer path exists in trie.
-        if bias and specialist is not self:
-            raw_q_words = [str(c).split(".")[0] for c in concepts]
-            qa_seq = ["<|user|>"] + raw_q_words + ["<|assistant|>"] + bias.split()
-            specialist.stream(qa_seq)
-        pred = specialist.predict_future(tokens, steps=60, temperature=0.0, creativity=0.0, bias_context=bias)
-
-        # 5. Hallucination gate — bypassed when retrieval provides grounding context.
-        # If we have bias (memory match or web snippet), trust the grounded generation.
-        if pred and bias is None:
-            ssm_trained = abs(self.baseline.mean) > 0.01 or self.baseline.var < 0.95
-            if ssm_trained:
-                from uchi.neuro_symbolic import get_ssm
-                ssm = get_ssm()
-                state_vec = ssm.get_state(tokens)
-                value_conf = ssm.value(state_vec).item()
-                should_reject = value_conf < -0.5
-            else:
-                value_conf = 0.0
-                should_reject = prompt_entropy > 12.0
-
-            if should_reject:
-                if callback:
-                    callback("hallucination", f"Unknown context (entropy={prompt_entropy:.1f}, value={value_conf:.2f})")
-                fallback = "I do not know the answer to that, even after searching the web."
-                self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + fallback.split()
-                return fallback
-
-        self.last_walk_data = {
-            "prediction_depth": self.predictor._pred._last_prediction_depth,
-            "contributions": self.predictor._pred._last_contributions,
-            "max_sim": self.predictor._pred._last_max_sim,
-        }
-
-        # 6. Extract reply tokens
-        reply = []
-        for p in pred:
-            if p in ("<|user|>", "<|assistant|>", "<|end|>"):
-                break
-            reply.append(p)
-
-        if reply:
-            self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + reply
-        else:
-            self.last_sequence = None
-
-        predicted = self.tokenizer.detokenize(reply)
-        reply_str = " ".join(str(p) for p in predicted)
-
-        if not reply_str.strip():
-            if callback:
-                callback("hallucination", "Empty prediction path.")
-            self.last_sequence = None
-            return "I do not know the answer to that, even after searching the web."
-
-        # 7. Format reward: length + coherence + structure signal
-        if self.last_sequence:
-            coh_reward = self._compute_response_reward(
-                query_tokens, reply, intent_key=intent_key
-            )
-            if coh_reward != 0.0:
-                self.baseline.update(coh_reward)
-                self._train_ssm(self.last_sequence, coh_reward)
-
-        # 8. Stream full interaction AFTER generation (Root 3 fix)
-        if self.last_sequence:
-            self.stream(self.last_sequence)
-
-        if reply:
-            self._conversation_history.append((concepts, reply))
-
-        return reply_str
+            concepts = self.tokenizer.tokenize(message.split(), is_inference=True)
+            return self._handle_code_intent(message, message.split(), concepts, callback)
+        return self.answer(message, callback=callback)
 
     def _handle_code_intent(self, message: str, query_tokens: list, concepts: list, callback) -> str:
         """
@@ -829,15 +501,9 @@ class OmniRouter:
             if callback:
                 callback("prune", "REPL oracle: no candidate compiled — showing best attempt.")
 
-        # GRPO: train SSM on code result
         self.last_sequence = ["<|user|>"] + query_tokens + ["<|assistant|>"] + code_str.split()
-        advantage = self.baseline.advantage(reward)
-        self.baseline.update(reward)
-        self._train_ssm(self.last_sequence, advantage)
-
         if not passed and reward < 0:
             self.predictor.unlearn(self.last_sequence)
-
         self.stream(self.last_sequence)
         return code_str
 

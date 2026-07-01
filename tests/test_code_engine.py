@@ -222,7 +222,6 @@ class TestOmniRouterIntegration:
     def test_setstate_adds_code_engine(self):
         from uchi.omni_router import OmniRouter
         from uchi.generative import SequenceGenerator
-        from uchi.grpo import AgenticBaseline
         from uchi.procedural_memory import ProceduralMemory
         from uchi.memory import AssociativeMemory
         from uchi.omni_tokenizer import OmniTokenizer
@@ -231,7 +230,6 @@ class TestOmniRouterIntegration:
         # Simulate a minimal pickled state that lacks the new attributes
         mock_state = {
             'predictor': SequenceGenerator(context_length=6),
-            'baseline': AgenticBaseline(),
             'procedural': ProceduralMemory(),
             'memory': AssociativeMemory(),
             'tokenizer': OmniTokenizer(),
@@ -241,7 +239,6 @@ class TestOmniRouterIntegration:
         router.__setstate__(mock_state)
         assert hasattr(router, 'code_engine')
         assert hasattr(router, 'specialist_pool')
-        assert hasattr(router, 'ssm_optimizer')
 
     def test_get_intent_key(self):
         from uchi.procedural_memory import ProceduralMemory

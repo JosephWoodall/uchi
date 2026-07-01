@@ -1,49 +1,74 @@
 # This Repo's North Star
 
-**One sentence:** Uchi is a credibility-weighted context trie that learns to predict any sequence without neural weights, using MCTS to generate coherent multi-step futures and a thin GRU value head to grade its own confidence.
+**One sentence:** Uchi is a phenomenal recall machine — a credibility-weighted
+context trie — fused with a grounded reasoner: a 256D vector-symbolic manifold
+that synthesizes answers to out-of-distribution questions it has never seen, by
+reasoning *forward from evidence retrieved from its own brain*, never inventing
+facts that aren't grounded there.
 
 ## The Core Intuition
 
-Context collision is the brittleness of deterministic sequence modeling: when two different past patterns map to the same context window, the predictor has no principled way to pick. Uchi solves this with CTW-style multi-order blending — it doesn't pick a single order; it averages across all valid context lengths, weighted by per-node credibility scores that are updated via multiplicative weights update (MWU). The credibility scores are the memory of what worked.
+Two capabilities, one system, no LLM:
 
-The second insight: pure trie generation produces rigid, repetitive text because it follows the single highest-probability edge. MCTS over the trie explores multiple futures simultaneously, using UCB1 to balance exploitation (high-probability sequences) with exploration (low-probability, potentially better paths). This is the same principle that took AlphaGo from superhuman to god-level — applied to text generation.
+1. **Recall (the trie).** CTW-style multi-order blending over a prefix trie,
+   credibility-updated by MWU. When the answer has been seen, exact-match
+   retrieval returns it with calibrated confidence. This is already excellent
+   and must be preserved untouched.
+
+2. **Grounded generalization (the manifold).** When the trie backs off — i.e.
+   the question is out of distribution — the system must not collapse to a prior
+   (random) or free-generate (confabulate). Instead it: (a) encodes the query
+   into the 256D manifold, (b) retrieves the nearest *real* brain facts, (c)
+   binds query⊗evidence via HRR, and (d) lets the SSM policy/value heads
+   synthesize an answer **constrained to that retrieved evidence**. If no
+   evidence grounds an answer, Uchi abstains rather than invents.
+
+The leash is the point: generalization is only trustworthy because every
+synthesized token is anchored to something actually in the brain. Reasoning
+forward from grounded evidence ≠ hallucination.
+
+## What Changed From v0.3.0 (and why)
+
+The prior North Star claimed the trie "generates by extrapolation." The code
+proved it does pure exact-n-gram retrieval with backoff — no semantic
+extrapolation exists (`use_similarity_fallback=False` everywhere;
+`semantic_index.py` never wired in). That is why MMLU sat at 22.5% ≈ random on
+OOD questions. We reject the old assumption. The SSM is promoted from
+confidence-scaffold to **grounded co-generator**, governed by trie credibility:
+deep trie match → trie answers; trie backoff → retrieval-grounded SSM synthesis.
 
 ## State-of-the-Art Grounding
 
-- **CTW (Context Tree Weighting)** — Willems et al. 1995, IEEE Trans. Inf. Theory. The trie blending strategy is mathematically optimal for stationary sources. Uchi adapts it for online, non-stationary streams.
-- **MWU (Multiplicative Weights Update)** — Arora, Hazan, Kale 2012. The credibility update is a regret-minimizing online learning algorithm with provable no-regret guarantees over adversarial sequences.
-- **MCTS with UCB1** — Kocsis & Szepesvári 2006. Applied here to sequence generation, yielding better-than-greedy token selection with O(log n) rollout overhead.
-- **GRPO (Group Relative Policy Optimization)** — DeepSeekMath 2024. Used for value head training without a separate critic, making the SSM self-improving from user sentiment signals.
+- **CTW** — Willems et al. 1995. The recall trie (unchanged).
+- **MWU** — Arora, Hazan, Kale 2012. Credibility = depth-selection regret bound.
+- **kNN-LM** — Khandelwal et al. 2020. Interpolate parametric model with a
+  datastore, weighted by retrieval confidence. Uchi inverts the usual default:
+  trie (datastore) dominates in-distribution; SSM (parametric) takes over on
+  backoff. The mixing weight λ is a function of trie credibility / match depth.
+- **HRR / VSA** — Plate 1995. Circular-convolution binding of query⊗evidence;
+  enables grounded analogical synthesis (King−Man+Woman≈Queen) with zero
+  representational cost.
+- **Hard-negative contrastive learning** — the manifold learns to separate a
+  correct answer from its distractors (InfoNCE with option-level negatives).
+- **MCTS / UCB1** — Kocsis & Szepesvári 2006. Deliberation over candidates.
 
-## Why This Architecture Beats Alternatives
+## Why This Beats Alternatives
 
 | Alternative | Why Rejected |
 |-------------|--------------|
-| Transformer LLM | 100B+ parameters, opaque, not truly deterministic, requires GPU clusters |
-| N-gram model (fixed order) | Context collision at every boundary; no interpolation; brittle |
-| Pure RNN/LSTM | Requires training corpus upfront; can't online-learn per conversation turn |
-| KNN retrieval | No generative capability; answers must exist verbatim in corpus |
+| Transformer LLM | 100B+ params, opaque, confabulates, GPU clusters |
+| Pure trie (v0.3.0) | Exact-match only → random on OOD; cannot synthesize |
+| Free parametric SSM generator | Confabulates; not grounded in the brain |
+| KNN retrieval alone | No synthesis; answer must exist verbatim |
 
-Uchi's trie is the only approach that: (1) learns online from every token seen, (2) generates by extrapolation rather than retrieval, (3) provides exact probability bounds via CTW blending, and (4) requires zero GPU at inference.
-
-## Current Architecture (v0.3.0)
-
-```
-User Input
-    ↓
-OmniRouter.chat()
-    ├─ ProceduralMemory (intent: CODE / MATH / SEARCH / CONVERSATIONAL)
-    ├─ OmniTokenizer (WordNet synset normalization)
-    ├─ AssociativeMemory.query() → CPUVectorMemory cosine search via SSM states
-    ├─ SequenceGenerator.generate() → MCTS over CTW trie
-    ├─ SSM value head → hallucination gating
-    └─ GRPO update → SSM self-improves from reward signal
-
-Offline Bootstrap (cold start, once):
-    bootstrap_code.py    → 1000 Python stdlib function patterns
-    bootstrap_wikidata.py → 25 Wikipedia topic triples via SPARQL
-```
+Uchi is the only design that recalls verbatim when it can AND synthesizes
+grounded answers when it can't — online, deterministic-where-possible, no GPU,
+and constitutionally unable to assert facts it cannot retrieve.
 
 ## Drift Check
 
-Every code change must answer: **Does this make the trie's predictions more accurate or the routing more precise?** If a change adds neural weights as the primary generator (rather than a confidence scaffold), it violates the North Star.
+Every change must answer: **Does this improve grounded generalization without
+letting the system assert anything it cannot trace back to brain content?** A
+change that lets the SSM emit ungrounded tokens (confabulation) violates the
+North Star. A change that improves recall, retrieval quality, manifold
+discrimination, or the grounding/abstention gate aligns with it.

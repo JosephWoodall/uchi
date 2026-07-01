@@ -515,6 +515,48 @@ class StateSpaceModel(nn.Module):
     def train_dynamics(self, sequence: list):
         return self.compute_loss(sequence, reward=None)
 
+    # ── QA grounding loss (Phase 1: OOD discrimination) ───────────────────────
+
+    def qa_contrastive_loss(
+        self,
+        question_tokens: list,
+        correct_tokens: list,
+        distractor_tokens: list[list],
+    ) -> torch.Tensor:
+        """
+        InfoNCE that binds a question to its CORRECT answer and pushes its
+        distractors away — directly trains the manifold geometry the MCQ
+        discrimination spike measures (cos(question, option_text)).
+
+        anchor   = encode(question)               (1, d) on the unit sphere
+        positive = encode(correct_answer_text)
+        negatives= encode(each distractor_text)
+
+        Loss = −log  exp(sim(a,pos)/τ) / Σ exp(sim(a,·)/τ)
+
+        This is the missing objective: the existing geometric InfoNCE uses
+        temporal-neighbour positives and never relates a question to its answer,
+        so correct and wrong options land equidistant from the question.
+        """
+        device = self.embedder.char_emb.weight.device
+        if not question_tokens or not correct_tokens or not distractor_tokens:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        # All states are already L2-normalised by the encoder → dot = cosine.
+        anchor = self.get_state(question_tokens)              # (1, d)
+        pos    = self.get_state(correct_tokens)               # (1, d)
+        negs   = torch.cat(
+            [self.get_state(d) for d in distractor_tokens if d], dim=0
+        )                                                     # (k, d)
+        if negs.shape[0] == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        pos_sim  = (anchor @ pos.T).squeeze(0) / _INFONCE_TAU   # (1,)
+        neg_sims = (anchor @ negs.T).squeeze(0) / _INFONCE_TAU  # (k,)
+        logits   = torch.cat([pos_sim, neg_sims], dim=0)        # (1 + k,)
+        target   = torch.zeros(1, dtype=torch.long, device=device)
+        return F.cross_entropy(logits.unsqueeze(0), target)
+
     # ── training loss ─────────────────────────────────────────────────────────
 
     def compute_loss(self, sequence: list, reward=None) -> torch.Tensor:
