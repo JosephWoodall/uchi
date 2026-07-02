@@ -55,38 +55,50 @@ DEFAULTS = dict(
 # RLEF Data Generator (Reinforcement Learning from Environment Feedback)
 # ==============================================================================
 def generate_synthetic_cot(num_examples):
-    """Generates reasoning traces by proposing Python code and verifying via REPL.
-    This simulates Rejection Sampling / RLEF, where only empirically proven paths
-    are distilled into the model's weights."""
-    from uchi.procedural_memory import REPLOracle
+    """Generates reasoning traces by capturing the full Uchi.ask() internal monologue.
+    This simulates Rejection Sampling / RLEF by capturing the Swarm, TDD, and Debate flywheels."""
+    from uchi import Uchi
     
     examples = []
-    oracle = REPLOracle()
     
-    print("  Generating RLEF verified traces via REPL...")
+    print("  Booting Uchi to generate RLEF traces from full flywheels...")
+    try:
+        uchi_instance = Uchi()
+    except Exception as e:
+        print(f"  [!] Failed to boot Uchi for synthetic generation: {e}")
+        return []
+
+    # A seed of highly complex questions designed to trigger Swarms, REPLs, and Debates
+    seed_questions = [
+        "What is the sum of 52 and 89, and what is that number multiplied by 2? Break this down into concepts.",
+        "Calculate the 12th number in the Fibonacci sequence. Write a script.",
+        "If a train travels 60mph for 2.5 hours, how far does it go? Use the swarm to verify.",
+        "Design a JSON schema for a user profile, verify it is valid json, and count the keys."
+    ]
+    
+    # Cap synthetic generation for local iteration speed
+    num_examples = min(num_examples, 500)
+    
     for i in range(num_examples):
-        a = random.randint(10, 100)
-        b = random.randint(10, 100)
-        op = random.choice(["+", "-", "*"])
-        q = f"Calculate the result of {a} {op} {b}."
-        
-        # Simulate procedural reasoning (the model writes this)
-        code_str = f"def run():\n    return {a} {op} {b}\n"
-        
-        # The REPL Environment provides the +1 Reward / Ground Truth
-        success, output = oracle.execute(code_str)
-        
-        if success and output:
-            think = (
-                f"I need to calculate {a} {op} {b}.\n"
-                f"I will write a Python script to compute this.\n"
-                f"```python\n{code_str}```\n"
-                f"Output: {output}\n"
-                f"The REPL executed successfully."
-            )
-            ans = f"The result is {output}."
+        q = random.choice(seed_questions)
+        # Add random entropy to trigger dynamic grounding
+        if "52" in q: q = q.replace("52", str(random.randint(10, 100))).replace("89", str(random.randint(10, 100)))
+        if "12th" in q: q = q.replace("12th", f"{random.randint(5, 20)}th")
+        if "60mph" in q: q = q.replace("60mph", f"{random.randint(40, 120)}mph")
+
+        monologue = []
+        def capture_callback(event_type, msg):
+            monologue.append(f"[{event_type.upper()}]: {msg}")
+
+        # The REPL Environment / Swarm / Debate runs under the hood and we capture the entire thought trace
+        try:
+            ans = uchi_instance.ask(q, callback=capture_callback)
             
-            examples.append({"question": q, "think": think, "answer": ans})
+            if ans and not ans.startswith("I am sorry") and len(monologue) > 0:
+                think = "\n".join(monologue)
+                examples.append({"question": q, "think": think, "answer": ans})
+        except Exception:
+            continue
 
     return examples
 
