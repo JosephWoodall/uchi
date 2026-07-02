@@ -26,9 +26,37 @@ u.ask("What is the Eiffel Tower?")
 # FLUX proposes answer -> Uchi verifies -> Output: "The Eiffel Tower is a wrought-iron lattice tower in Paris, France."
 ```
 
-### Trustworthiness Meets Capability
+### The Architecture: Under the Hood
 
-Uchi verifies factual claims and chains of logic against its semantic memory. If FLUX proposes an answer that cannot be grounded, Uchi intercepts it and honestly abstains. We rely on FLUX to propose, and Uchi to prove.
+To understand Uchi, you must understand the fundamental flaw in modern AI: **LLMs are trapped in an imitation paradigm.** They are autocomplete engines that predict the most statistically likely next word without understanding reality. Uchi solves this by separating the "creative reasoning" from the "factual grounding," and forcing the AI to prove its claims against reality before it is allowed to speak.
+
+Here is the exhaustive breakdown of how the architecture achieves this:
+
+#### 1. The FLUX Proposer (The Creative Brain)
+* **What it is:** A custom-built, ultra-lightweight (116M parameter) neural network trained from scratch. 
+* **The Philosophy:** *Small, fast, and creative.* Modern LLMs are massive because they try to memorize the entire internet. FLUX doesn't memorize trivia; it is trained strictly on *how to reason*, *how to code*, and *how to generalize*. It provides the raw, creative horsepower to tackle novel problems.
+
+#### 2. The Semantic Index / `brain.uchi` (The Factual Anchor)
+* **What it is:** A local, persistent database that ingests your PDFs, CSVs, and codebases into an algorithmic search space. 
+* **The Philosophy:** *Separate reasoning from facts.* Because FLUX is tiny and has amnesia regarding world trivia, the `brain.uchi` file provides the cold, hard truths. When you ask a question, the facts are pulled from the index, and FLUX applies its reasoning directly to *your* data. No hallucinations based on outdated training data.
+
+#### 3. The REPL Sandbox (Empirical Discovery)
+* **What it is:** A live, isolated Python execution environment. If the answer to your question isn't explicitly written in your documents, FLUX writes a Python script, injects Test-Driven Development (TDD) assertions to check its own logic, and executes the code.
+* **The Philosophy:** *Don't guess, calculate.* If you ask a standard LLM, "What is the average of these 50 invoices?", it will guess and often fail. Uchi will write a script, run the math, prove it empirically, and return the absolute truth. Reality doesn't lie.
+
+#### 4. The Swarm Synthesizer (Map-Reduce Reasoning)
+* **What it is:** An orchestration layer that intercepts complex questions, shatters them into atomic sub-tasks, and spins up a parallel swarm of FLUX agents to solve them simultaneously before stitching the final answer together.
+* **The Philosophy:** *Divide and conquer.* LLMs degrade rapidly when trying to hold complex, multi-step logic in a single context window. By breaking the problem down into independent threads, Uchi can scale its intelligence dynamically based on how difficult the prompt is.
+
+#### 5. Multi-Agent Debate (The Devil's Advocate)
+* **What it is:** An adversarial loop that violently cross-examines generated answers. The **FactCheck Oracle** algorithmically rejects any claims not grounded in the source text. The **Devil's Advocate** agent attacks the logical soundness of the argument and forces FLUX to reflect and rewrite if a flaw is found.
+* **The Philosophy:** *Truth is forged in conflict.* LLMs are sycophants; they want to please the user, even if it means lying. By forcing the model to defend its logic against a hostile critic, we physically prevent hallucinations from reaching the user. 
+
+#### 6. Procedural Memory (The Compounding Flywheel)
+* **What it is:** Whenever Uchi successfully uses the REPL Sandbox to solve a novel problem, it permanently caches that verified Python script as an autonomous tool.
+* **The Philosophy:** *Never solve the same problem twice.* Standard LLMs start from zero every single time you open a chat. Uchi actually *compounds* its knowledge over time. The longer you use it, the larger its library of custom-built tools grows, making it exponentially faster and more capable.
+
+When you type `uchi tui` and ask a question, you aren't just talking to a chatbot. You are kicking off a microscopic software engineering team. The Swarm breaks your question down, the Index pulls the facts, FLUX writes the code, the REPL executes it, the Devil's Advocate audits the logic, and finally, Uchi translates the mathematically proven result back into warm, conversational English.
 
 > **On benchmarks, honestly:** FLUX is a small (~116M) from-scratch model. MMLU,
 > SWE-bench, and ARC-Challenge are tracked as a **dashboard** to watch the proposer
