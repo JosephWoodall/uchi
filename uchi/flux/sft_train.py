@@ -146,11 +146,17 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
             for idx, c in enumerate(choices):
                 question += f"{['A','B','C','D'][idx]}. {c}\n"
                 
-            answer = f"The correct answer is {['A','B','C','D'][ans_idx]}: {choices[ans_idx]}"
+            answer_text = choices[ans_idx]
+            answer = f"The correct answer is {['A','B','C','D'][ans_idx]}: {answer_text}"
+            
+            # FIX: The 30M model cannot memorize Wikipedia. 
+            # We inject the answer into the <|context|> block during SFT to train it 
+            # on Reading Comprehension (RAG) rather than rote memorization.
+            context = f"Relevant Fact: Regarding the question '{q}', research indicates that {answer_text}."
             
             examples.append({
                 "question": question[:800],
-                "context": "",
+                "context": context[:800],
                 "answer": answer[:800],
             })
             count += 1

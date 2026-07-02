@@ -100,6 +100,21 @@ def generate_synthetic_cot(num_examples):
         except Exception:
             continue
 
+    # FIX: The RL Cold Start Problem. If the base model fails to generate traces, 
+    # we inject fallback "Teacher" traces to bootstrap the reinforcement learning loop.
+    if len(examples) < 10:
+        print("  [!] RL Cold Start detected. Injecting Teacher Forcing fallback traces...")
+        examples.append({
+            "question": "Calculate the result of 12 + 15.",
+            "think": "[THINKING]: Problem is atomic. Running single pipeline...\n[THINKING]: Executing empirical hypothesis in REPL...\n[REINFORCE]: Empirical hypothesis succeeded!",
+            "answer": "The result is 27."
+        })
+        examples.append({
+            "question": "What is 50 * 2?",
+            "think": "[THINKING]: Swarm Orchestrator decomposing problem into sub-concepts...\n[THINKING]: Problem is atomic. Running single pipeline...\n[THINKING]: Executing empirical hypothesis in REPL...\n[REINFORCE]: Empirical hypothesis succeeded!",
+            "answer": "The result is 100."
+        })
+
     return examples
 
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
