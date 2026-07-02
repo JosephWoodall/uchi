@@ -1,0 +1,92 @@
+import concurrent.futures
+import json
+import re
+
+class SwarmSynthesizer:
+    """
+    Flywheel #4: The Swarm Synthesizer (Map-Reduce)
+    Decomposes complex questions into independent concepts,
+    spins up parallel FLUX flywheels to solve them, and aggregates
+    the empirically verified solutions into a single master answer.
+    """
+    def __init__(self, qa_pipeline):
+        self.qa = qa_pipeline
+        self.proposer = qa_pipeline.proposer
+
+    def _decompose(self, question: str) -> list[str]:
+        if not self.proposer: return [question]
+        
+        prompt = (
+            "Break the following complex question into a JSON list of 1 to 3 independent sub-questions "
+            "that must be solved to synthesize the final answer. Keep them simple.\n"
+            f"Question: {question}\n\n"
+            "Output ONLY a valid JSON array of strings, e.g. [\"sub q 1\", \"sub q 2\"]"
+        )
+        
+        try:
+            raw = self.proposer.propose(prompt, [])
+            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            if match:
+                sub_qs = json.loads(match.group(0))
+                if isinstance(sub_qs, list) and len(sub_qs) > 0:
+                    # Filter out the original question if it just echoed it
+                    sub_qs = [q for q in sub_qs if len(q) > 5 and q != question]
+                    if sub_qs:
+                        return sub_qs[:3]
+        except Exception:
+            pass
+            
+        return [question]
+
+    def answer(self, question: str, callback=None) -> str:
+        if callback: callback("thinking", "Swarm Orchestrator analyzing problem complexity...")
+        sub_questions = self._decompose(question)
+        
+        if len(sub_questions) <= 1:
+            if callback: callback("thinking", "Problem is atomic. Running single pipeline...")
+            return self.qa.answer(question, callback=callback)
+            
+        if callback: 
+            sub_list = "\n".join(f"  - {q}" for q in sub_questions)
+            callback("thinking", f"Swarm launched for {len(sub_questions)} independent concepts:\n{sub_list}")
+        
+        sub_answers = []
+        # Run sub-questions in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(sub_questions)) as executor:
+            def solve_sub(sq):
+                # Suppress deep callbacks to prevent interleaving TUI garbage
+                return sq, self.qa.answer(sq, callback=None)
+                
+            futures = [executor.submit(solve_sub, sq) for sq in sub_questions]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    sq, ans = future.result()
+                    if ans and "don't have grounded knowledge" not in ans:
+                        sub_answers.append(f"Verified Sub-Answer ({sq}): {ans}")
+                        if callback: callback("reinforce", f"Swarm Node solved concept: '{sq[:30]}...'")
+                    else:
+                        if callback: callback("prune", f"Swarm Node failed concept: '{sq[:30]}...'")
+                except Exception:
+                    pass
+                    
+        if not sub_answers:
+            if callback: callback("prune", "All swarm nodes failed. Falling back to single pipeline...")
+            return self.qa.answer(question, callback=callback)
+            
+        if callback: callback("thinking", "Swarm complete. Aggregating sub-answers into final synthesis...")
+        context_block = "\n".join(sub_answers)
+        
+        agg_prompt = (
+            f"Here are the independently verified solutions to the sub-components of the user's question:\n\n"
+            f"{context_block}\n\n"
+            f"Original Question: {question}\n\n"
+            f"Using ONLY the proven sub-answers above, synthesize a complete, human-readable final answer."
+        )
+        
+        try:
+            final_answer = self.proposer.propose(agg_prompt, [])
+            if final_answer: return final_answer
+        except Exception:
+            pass
+            
+        return "I am sorry, the swarm failed to aggregate a final answer."

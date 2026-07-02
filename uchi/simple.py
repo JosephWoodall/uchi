@@ -145,6 +145,10 @@ class Uchi:
         
         # Skill Registry (legacy adapter)
         self.skills = SkillRegistry(self)
+        
+        # New: Swarm Synthesizer (Default Map-Reduce behavior)
+        from .swarm import SwarmSynthesizer
+        self.swarm = SwarmSynthesizer(self.pipeline)
 
     # ── Legacy adapters for SkillRegistry ──────────────────────────────────────
     def chat(self, msg: str, callback=None) -> str:
@@ -195,7 +199,8 @@ class Uchi:
             context = self.episodic_memory.get_context_string(n_turns=3)
             augmented_question = f"{context}\n\nQuestion: {question}" if context else question
             
-            raw = self.pipeline.answer(augmented_question, callback=callback) or ""
+            # Route to Swarm by default
+            raw = self.swarm.answer(augmented_question, callback=callback) or ""
             
             # Save to episodic memory
             self.episodic_memory.add_interaction(question, raw)
