@@ -1,67 +1,84 @@
 #!/bin/bash
-# train_all.sh — Master offline script for full FLUX training run.
+# train_all.sh — Full FLUX pipeline, corrected & resumable.
 #
-# Runs:
-#   1. Pre-training (OpenWebText, 133M params, 10k steps)
-#   2. SFT (SQuAD + Dolly + OpenHermes)
-#   3. CoT Distillation
-#   4. Ternary QAT (1.58-bit)
+#   0. Pre-tokenize corpus  -> uchi/flux/data/{train,val}.bin   (GPU-bound fast path)
+#   1. Pre-training (116M)   -> checkpoints/ckpt_best.pt
+#   2. SFT (SQuAD+Dolly+Code)-> checkpoints/sft_best.pt
+#   3. CoT distill (GSM8K)   -> checkpoints/cot_best.pt
+#   4. Ternary QAT (1.58-bit)-> checkpoints/qat_best.pt -> flux_best.pt
 #
-# Gracefully stops if any phase fails.
+# Each phase is skipped if its output already exists, so a completed phase (e.g.
+# the live Phase-1 run) is not redone. Delete a checkpoint to force a rerun.
+# torch.compile is DISABLED everywhere: it cannot compile the custom SSM scan.
 
 set -e
-
-# Enable PyTorch memory expansion for large models to reduce fragmentation OOMs
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TOKENIZERS_PARALLELISM=false
+
+CKPT=uchi/flux/checkpoints
+DATA=uchi/flux/data
+COMMON="--no-compile"
+PY="${PY:-.venv/bin/python}"
 
 echo "============================================================"
-echo "    FLUX FULL PIPELINE — OFFLINE RUN"
+echo "    FLUX FULL PIPELINE (corrected)"
 echo "============================================================"
-echo "Step 1/4: Phase 1 Pre-training (133M params)"
-python -m uchi.flux.train_v2 --max_steps 10000 --micro-batch 2 --grad-accum 32 --d_model 768 --n_layers 12 --d_state 64
-echo "✔ Phase 1 Complete."
-echo ""
 
-# The best checkpoint from Phase 1 is pretrain_best.pt
-BASE_CKPT="uchi/flux/checkpoints/pretrain_best.pt"
-
-if [ ! -f "$BASE_CKPT" ]; then
-    echo "ERROR: Phase 1 did not produce $BASE_CKPT"
-    exit 1
+# ── Step 0: pre-tokenize (once) ──
+if [ ! -f "$DATA/train.bin" ] || [ ! -f "$DATA/val.bin" ]; then
+    echo "Step 0/4: Pre-tokenizing corpus -> $DATA/{train,val}.bin"
+    $PY scripts/pretokenize.py --train-tokens 80000000 --val-tokens 1000000
+else
+    echo "Step 0/4: corpus bins present — skipping tokenization."
 fi
 
-echo "Step 2/4: Phase 2 SFT (Instruction Following & Reasoning)"
-python -m uchi.flux.sft_train --base "$BASE_CKPT" --micro-batch 2 --grad-accum 32 --epochs 1
-echo "✔ Phase 2 Complete."
-echo ""
+# ── Step 1: pre-training ──
+if [ ! -f "$CKPT/ckpt_best.pt" ]; then
+    echo "Step 1/4: Phase 1 pre-training (116M)"
+    $PY -m uchi.flux.train_v2 $COMMON \
+        --max_steps 2000 --seq-len 512 --micro-batch 6 --grad-accum 11 \
+        --d_model 768 --n_layers 12 --d_state 64 \
+        --data-bin "$DATA/train.bin" --val-bin "$DATA/val.bin"
+else
+    echo "Step 1/4: ckpt_best.pt present — skipping pre-training."
+fi
+[ -f "$CKPT/ckpt_best.pt" ] || { echo "ERROR: Phase 1 produced no ckpt_best.pt"; exit 1; }
 
-# SFT produces sft_best.pt
-SFT_CKPT="uchi/flux/checkpoints/sft_best.pt"
+# ── Step 2: SFT ──
+if [ ! -f "$CKPT/sft_best.pt" ]; then
+    echo "Step 2/4: Phase 2 SFT (instruction following + grounded QA)"
+    $PY -m uchi.flux.sft_train $COMMON \
+        --base "$CKPT/ckpt_best.pt" --micro-batch 2 --grad-accum 32 --epochs 1
+else
+    echo "Step 2/4: sft_best.pt present — skipping SFT."
+fi
+[ -f "$CKPT/sft_best.pt" ] || { echo "ERROR: Phase 2 produced no sft_best.pt"; exit 1; }
 
-if [ ! -f "$SFT_CKPT" ]; then
-    echo "ERROR: Phase 2 did not produce $SFT_CKPT"
-    exit 1
+# ── Step 3: CoT distillation ──
+if [ ! -f "$CKPT/cot_best.pt" ]; then
+    echo "Step 3/4: Phase 3 CoT distillation (real GSM8K teacher traces)"
+    $PY -m uchi.flux.cot_distill $COMMON \
+        --base "$CKPT/sft_best.pt" --micro-batch 2 --grad-accum 32
+else
+    echo "Step 3/4: cot_best.pt present — skipping CoT."
+fi
+[ -f "$CKPT/cot_best.pt" ] || { echo "ERROR: Phase 3 produced no cot_best.pt"; exit 1; }
+
+# ── Step 4: ternary QAT ──
+if [ ! -f "$CKPT/qat_best.pt" ]; then
+    echo "Step 4/4: Phase 4 ternary QAT (1.58-bit)"
+    $PY -m uchi.flux.qat_train $COMMON \
+        --base "$CKPT/cot_best.pt" --steps 1500 --micro-batch 6 --grad-accum 11 --seq-len 256 \
+        --data-bin "$DATA/train.bin" --val-bin "$DATA/val.bin"
+else
+    echo "Step 4/4: qat_best.pt present — skipping QAT."
 fi
 
-echo "Step 3/4: Phase 3 Chain-of-Thought Distillation"
-python -m uchi.flux.cot_distill --base "$SFT_CKPT" --micro-batch 2 --grad-accum 32
-echo "✔ Phase 3 Complete."
-echo ""
-
-# CoT produces cot_best.pt
-COT_CKPT="uchi/flux/checkpoints/cot_best.pt"
-
-if [ ! -f "$COT_CKPT" ]; then
-    echo "ERROR: Phase 3 did not produce $COT_CKPT"
-    exit 1
-fi
-
-echo "Step 4/4: Phase 4 Ternary Quantization-Aware Training"
-python -m uchi.flux.qat_train --base "$COT_CKPT" --micro-batch 2 --grad-accum 32
-echo "✔ Phase 4 Complete."
-echo ""
+# ── Canonical final checkpoint the Proposer loads by default ──
+FINAL="$CKPT/qat_best.pt"
+[ -f "$FINAL" ] || FINAL="$CKPT/cot_best.pt"
+cp -f "$FINAL" "$CKPT/flux_best.pt"
 
 echo "============================================================"
-echo "    FLUX TRAINING PIPELINE FINISHED SUCCESSFULLY"
-echo "    Final model: uchi/flux/checkpoints/qat_best.pt"
+echo "    PIPELINE FINISHED — canonical model: $CKPT/flux_best.pt (from $FINAL)"
 echo "============================================================"

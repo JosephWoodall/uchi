@@ -18,10 +18,9 @@ nav:
   - Architecture: architecture.md
   - Generate-and-Ground: generate-and-ground.md
   - Reasoning: reasoning.md
+  - Training FLUX: training.md
   - Benchmarks: benchmarks.md
   - Skills:
-    - Multi-Modal Router: omni-router.md
-    - Core Engine (Trie): core-engine.md
     - Tabular Models: tabular.md
     - Time Series Models: timeseries.md
 

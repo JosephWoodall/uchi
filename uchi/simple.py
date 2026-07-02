@@ -118,16 +118,19 @@ class Uchi:
             
         self.oracle = FactCheckOracle()
         
-        # Load the best FLUX checkpoint from the pipeline we just ran
+        # Load the trained FLUX checkpoint (the Proposer). flux_best.pt is the
+        # canonical artifact produced by scripts/train_all.sh; the per-phase
+        # checkpoints are fallbacks in pipeline order. If none exist, the proposer
+        # degrades to None and the verifier falls back to grounded extraction /
+        # honest abstention — Uchi still works, just without FLUX's generation.
         checkpoint_dir = os.path.join(os.path.dirname(__file__), "flux", "checkpoints")
-        best_ckpt = os.path.join(checkpoint_dir, "qat_best.pt")
-        if not os.path.exists(best_ckpt):
-            best_ckpt = os.path.join(checkpoint_dir, "cot_best.pt")
-        if not os.path.exists(best_ckpt):
-            best_ckpt = os.path.join(checkpoint_dir, "sft_best.pt")
-            
-        print(f"[*] Booting FLUX Proposer with {best_ckpt}...")
-        self.proposer = FluxProposer.load(checkpoint=best_ckpt)
+        best_ckpt = next(
+            (p for p in (os.path.join(checkpoint_dir, n) for n in
+                         ("flux_best.pt", "qat_best.pt", "cot_best.pt", "sft_best.pt"))
+             if os.path.exists(p)),
+            None,
+        )
+        self.proposer = FluxProposer.load(checkpoint=best_ckpt) if best_ckpt else None
         
         self.pipeline = GenerateAndGround(
             index=self.index,
@@ -149,6 +152,21 @@ class Uchi:
         # New: Swarm Synthesizer (Default Map-Reduce behavior)
         from .swarm import SwarmSynthesizer
         self.swarm = SwarmSynthesizer(self.pipeline)
+
+        # Advanced SDK sequence predictor (trie), constructed lazily on first use.
+        self._predictor = None
+
+    @property
+    def predictor(self):
+        """Underlying sequence predictor (CTW-style trie) for power users.
+
+        Exposes ``fit`` / ``train`` / ``predict_next`` / ``generate`` for raw
+        sequence modelling. Built on first access so it costs nothing unless used.
+        """
+        if self._predictor is None:
+            from .predictor import UniversalPredictor
+            self._predictor = UniversalPredictor(context_length=8)
+        return self._predictor
 
     # ── Legacy adapters for SkillRegistry ──────────────────────────────────────
     def chat(self, msg: str, callback=None) -> str:

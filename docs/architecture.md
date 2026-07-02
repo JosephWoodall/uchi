@@ -9,8 +9,17 @@ Uchi is built on one core mathematical principle: **FLUX as the Proposer, Uchi a
 
 ## The Two-Engine System
 
-1. **The Proposer (FLUX):** Provides state-of-the-art Out-Of-Distribution (OOD) generalization, world knowledge, and generates complex, human-readable reasoning chains. 
+1. **The Proposer (FLUX):** A small (~116M) from-scratch SSM/attention model that
+   generates candidate answers and human-readable reasoning chains. It supplies
+   out-of-distribution *generalization attempts* — bounded by its scale — that a
+   pure retrieval system cannot. See [Training FLUX →](training.md).
 2. **The Verifier (Uchi):** A reality-anchored verifier that intercepts FLUX's output. It grounds the claims against Uchi's compounding brain, checks semantic validity, and abstains when FLUX hallucinates.
+
+The Proposer is deliberately **swappable** (`uchi/proposer.py`): a better model
+raises the ceiling on capability, while the verifier keeps output honest
+regardless of how good or bad the proposer is. When no trained FLUX checkpoint is
+present, the proposer degrades gracefully and the verifier falls back to grounded
+extraction / abstention.
 
 ## The Three Lanes behind `ask()`
 

@@ -29,7 +29,38 @@ u.ask("What is the Eiffel Tower?")
 
 ### Trustworthiness Meets Capability
 
-Uchi verifies factual claims and chains of logic against its semantic memory. If FLUX proposes an answer that cannot be grounded, Uchi intercepts it and honestly abstains. Because of this powerful pairing, **accuracy benchmarks (MMLU, SWE-bench, and ARC-Challenge) are back.** We rely on FLUX to propose the right answer, and Uchi to prove it.
+Uchi verifies factual claims and chains of logic against its semantic memory. If FLUX proposes an answer that cannot be grounded, Uchi intercepts it and honestly abstains. We rely on FLUX to propose, and Uchi to prove.
+
+> **On benchmarks, honestly:** FLUX is a small (~116M) from-scratch model. MMLU,
+> SWE-bench, and ARC-Challenge are tracked as a **dashboard** to watch the proposer
+> improve — at this scale they stay near baseline, and that is expected. The point
+> of the pairing is *trustworthiness* (grounded answers or honest abstention), not
+> a leaderboard score. See [`docs/training.md`](docs/training.md) for how FLUX is
+> trained and what the final `flux_best.pt` artifact is.
+
+## How It Connects
+
+Training produces **one artifact**, and every interface loads it through **one place** — `Uchi.__init__`. The SDK, TUI, and REST server all construct the same `Uchi` object, so training FLUX once makes it live everywhere automatically. If no checkpoint exists yet, the proposer degrades gracefully and the verifier falls back to grounded extraction / honest abstention — Uchi still runs.
+
+```
+scripts/train_all.sh ─► uchi/flux/checkpoints/flux_best.pt   ◄── the artifact
+                                     │
+        Uchi.__init__ picks first that exists:
+        flux_best → qat_best → cot_best → sft_best   (else None)
+                                     │
+        FluxProposer.load(ckpt) → build_generate_fn(ckpt)
+           loads the HybridTSSM model, returns generate_fn(prompt) -> str
+                                     │
+        self.proposer ──► GenerateAndGround(index, oracle, proposer)
+                                     │              (retrieve → propose → verify → emit/abstain)
+                               Uchi.ask(q)
+             ┌───────────────────────┼───────────────────────┐
+            SDK                      TUI                      REST
+   from uchi import Uchi     `uchi tui` → UchiApp     `uchi serve` → api_server
+   u = Uchi(); u.ask(q)      → router = Uchi()        → _router = Uchi(); POST /ask
+```
+
+See [`docs/training.md`](docs/training.md) for the training pipeline and the `flux_best.pt` artifact.
 
 ## Simplified Public API (SDK, TUI, & REST)
 

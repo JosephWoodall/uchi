@@ -164,18 +164,13 @@ class SkillRegistry:
     # ── internal ─────────────────────────────────────────────────────────────
 
     def _init_intent_encoder(self):
-        """Build (or rebuild) skill vectors in the LatentIntentEncoder."""
-        try:
-            from uchi.neuro_symbolic import get_ssm
-            from uchi.intent_encoder import LatentIntentEncoder
-            ssm = get_ssm()
-            enc = LatentIntentEncoder(ssm)
-            for skill in self._skills.values():
-                tokens = (skill.name + " " + skill.description).lower().split()
-                enc.register_skill(skill.name, tokens)
-            self._intent_encoder = enc
-        except Exception:
-            self._intent_encoder = None
+        """Semantic skill routing is disabled under FLUX + Uchi.
+
+        It depended on the SSM singleton from the removed ``neuro_symbolic``
+        module. Skill dispatch now uses prefix/slash-command matching, so the
+        intent encoder is simply absent (skills are still fully routable).
+        """
+        self._intent_encoder = None
 
     def _reload(self):
         self._skills.clear()
@@ -198,9 +193,10 @@ class SkillRegistry:
             return self.router.chat(message, callback=callback)
 
         elif skill.mode == "code":
-            tokens = message.split()
-            concepts = self.router.tokenizer.tokenize(tokens, is_inference=True)
-            return self.router._handle_code_intent(message, tokens, concepts, callback)
+            # FLUX + Uchi: code generation is handled inside ask() by the FLUX
+            # proposer + REPL empirical-synthesis loop (writes Python, executes,
+            # verifies). Abstains gracefully when no trained proposer is loaded.
+            return self.router.chat(message, callback=callback)
 
         elif skill.mode == "web_search":
             try:
@@ -620,75 +616,45 @@ def _skill_tsclassify(header, rows, label_col) -> str:
 
 
 def _knowledge_overview(router) -> str:
-    import re
+    """Summarize the live FLUX + Uchi knowledge state from its real components.
 
-    _STOP = {
-        "you", "i", "is", "a", "the", "to", "can", "that", "my", "am", "it",
-        "are", "we", "me", "in", "of", "and", "or", "not", "be", "do", "if",
-        "for", "at", "but", "this", "so", "with", "from", "there", "how",
-        "who", "what", "no", "yes", "have", "your", "their", "our", "by",
-        "an", "as", "on", "up", "will", "<|user|>", "<|assistant|>", "<|end|>",
-        "see.n.01", "later.s.01",
-    }
+    Rewritten for the FLUX + Uchi architecture: reports the compounding semantic
+    index, episodic memory, proposer status, and registered skills (the old
+    version read OmniRouter internals — predictor._pred / memory.co_occurrence —
+    which no longer exist). Every field degrades gracefully if a component is absent.
+    """
+    lines = ["Knowledge Overview", "=================="]
 
-    _CLUSTERS = [
-        ("python / code",   {"def", "return", "class", "function", "trie", "sequence",
-                              "predict", "python", "code", "import", "```python",
-                              "learn", "train", "parameter", "operation", "optimum"}),
-        ("conversational",  {"hello", "thank", "appreciate", "good", "goodbye", "today",
-                              "aid", "correct", "sorry", "bye", "farewell", "adieu",
-                              "morning", "problem", "joke", "cool"}),
-        ("self-knowledge",  {"deterministic", "concept", "uchi", "forecaster", "asset",
-                              "capability", "sequence", "predict"}),
-        ("math / numbers",  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-                              "square", "root", "sum", "mean"}),
-    ]
+    idx = getattr(router, "index", None)
+    if idx is not None:
+        n_pass = len(getattr(idx, "passages", []) or [])
+        n_vocab = len(getattr(idx, "w2i", {}) or {})
+        lines.append(f"  Semantic index : {n_pass:,} passages · {n_vocab:,} vocab terms")
 
-    def _clean(tok: str) -> str:
-        return re.sub(r"\.[a-z]+\.\d+$", "", tok)
+    epi = getattr(router, "episodic_memory", None)
+    if epi is not None:
+        lines.append(f"  Episodic memory: {len(getattr(epi, 'history', []) or []):,} recent turns")
 
-    inner   = router.predictor._pred
-    n_nodes = len(inner._nodes)
-    n_vocab = len(inner._vocab)
+    prop = getattr(router, "proposer", None)
+    lines.append(
+        f"  FLUX proposer  : {'loaded' if prop is not None else 'not loaded (extractive / abstain mode)'}"
+    )
 
-    co = router.memory.co_occurrence
-    totals = {
-        k: sum(v.values())
-        for k, v in co.items()
-        if k not in _STOP and not k.startswith("<|")
-    }
-    ranked = sorted(totals.items(), key=lambda x: -x[1])
+    skills = getattr(router, "skills", None)
+    if skills is not None:
+        try:
+            names = sorted(s.name for s in skills.list_skills())
+            lines.append(f"  Skills ({len(names):>2})     : {', '.join(names)}")
+        except Exception:
+            pass
 
-    placed: dict[str, list] = {name: [] for name, _ in _CLUSTERS}
-    placed["other"] = []
-    for tok, _ in ranked:
-        clean = _clean(tok)
-        matched = False
-        for name, keywords in _CLUSTERS:
-            if clean in keywords or tok in keywords:
-                placed[name].append(clean)
-                matched = True
-                break
-        if not matched:
-            placed["other"].append(clean)
-
-    n_episodic = len(router.memory.cpu_mem.records)
-    proc_keys  = list(getattr(router.procedural, "_store", {}).keys())
-
-    lines = [
-        "Knowledge Overview",
-        "==================",
-        f"  Trie          : {n_nodes:,} nodes · {n_vocab} concepts",
-        f"  Episodic mem  : {n_episodic:,} stored associations",
-        f"  Procedural    : {', '.join(proc_keys) if proc_keys else 'none'}",
-        "",
-        "Top concept clusters:",
-    ]
-    for name, _ in _CLUSTERS:
-        tokens = placed[name][:8]
-        if tokens:
-            lines.append(f"  {name:<20} {', '.join(tokens)}")
-    if placed["other"]:
-        lines.append(f"  {'other':<20} {', '.join(placed['other'][:8])}")
+    # Optional trie predictor (advanced SDK API): show stats only if attached.
+    pred = getattr(router, "predictor", None)
+    if pred is not None:
+        try:
+            inner = pred._pred
+            lines.append(f"  Trie predictor : {len(inner._nodes):,} nodes · {len(inner._vocab)} concepts")
+        except Exception:
+            pass
 
     return "\n".join(lines)

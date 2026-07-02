@@ -2,6 +2,38 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
+## [Unreleased] - FLUX + Uchi: a trained proposer behind the verifier
+
+Adds **FLUX**, a small (~116M) from-scratch SSM/attention model, as the swappable
+**Proposer** behind Uchi's Generate-and-Ground **Verifier**. FLUX proposes; Uchi
+grounds or abstains.
+
+### Added
+- **FLUX training pipeline** (`scripts/train_all.sh`): pre-tokenize → pre-train →
+  SFT → CoT distillation → ternary QAT, producing the canonical
+  `uchi/flux/checkpoints/flux_best.pt`. Documented in `docs/training.md`.
+- **`scripts/pretokenize.py`**: FineWeb-Edu → uint32 memmap `.bin`; makes training
+  GPU-bound (~10× faster than the streaming/tokenizing loop).
+- **`FluxProposer`** (`uchi/proposer.py`): loads `flux_best.pt` and drives the
+  proposer; degrades to `None` (extractive/abstain) when no checkpoint is present.
+- REST API `POST /ask` (`{"query": ...}` → `{"answer": ...}`) and `GET /health`,
+  mirroring the SDK. `uchi tui` / `uchi serve` subcommands.
+- `tests/test_flux_uchi.py`: architecture coverage (compounding, abstention,
+  proposer seam, skills, CLI helpers, REST API).
+
+### Fixed (finishing the overhaul's loose ends)
+- Restored `uchi/predictor.py` → `/classify`, `/regress`, `/anomaly`, `/forecast`,
+  `/tsclassify` work again; added the lazy `Uchi.predictor` SDK API.
+- Rewrote `uchi/cli.py` off the deleted `omni_router` (TUI + serve now run).
+- Rerouted the `code` and `overview` skills onto the FLUX + Uchi components.
+- Fixed the test suite (was fully broken on the deleted `omni_router`): removed
+  tests for deleted subsystems, repaired `conftest`.
+
+### Docs
+- New `docs/training.md`; corrected capability overclaims across the docs
+  (benchmarks/reasoning/architecture) to reflect a small proposer + honest
+  verifier; fixed the mkdocs nav.
+
 ## [0.4.0] - Generate-and-Ground: the trustworthy, no-LLM assistant
 
 A ground-up rearchitecture. Uchi's identity shifts from "universal sequence

@@ -38,6 +38,14 @@ class SkillResponse(BaseModel):
     skill: str
 
 
+class AskRequest(BaseModel):
+    query: str
+
+
+class AskResponse(BaseModel):
+    answer: str
+
+
 class BootstrapRequest(BaseModel):
     text: str | None = None
     url: str | None = None
@@ -77,6 +85,40 @@ async def chat_endpoint(request: ChatRequest):
         traceback.print_exc()
         logging.error(f"API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask_endpoint(request: AskRequest):
+    """Ask Uchi a question (mirrors the SDK's `Uchi.ask`).
+
+    A `/name args` query is dispatched to the skill registry; anything else goes
+    through FLUX (Proposer) + Uchi (Verifier). Returns the grounded answer, or an
+    honest abstention when it cannot be grounded. Same contract as the SDK & TUI.
+    """
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    try:
+        from uchi.response_normalizer import normalize
+        q = request.query.strip()
+        if q.startswith("/"):
+            parts = q[1:].split(None, 1)
+            name = parts[0]
+            args = parts[1] if len(parts) > 1 else ""
+            answer = normalize(_router.skills.dispatch(name, args) or "")
+        else:
+            answer = normalize(_router.ask(q) or "")
+        return AskResponse(answer=answer)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logging.error(f"API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health_endpoint():
+    """Liveness probe."""
+    return {"status": "ok", "ready": _router is not None}
 
 
 @app.post("/skill/{name}", response_model=SkillResponse)
