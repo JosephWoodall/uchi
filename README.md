@@ -16,16 +16,6 @@ LLMs are trapped in an imitation paradigm—they mimic patterns without understa
 4. **Human-Readable Interface:** Complex mathematical discovery is seamlessly translated back into warm, conversational English.
 5. **The Compounding Effect:** Every verified script is permanently saved as an autonomous tool. Uchi never has to solve the same problem twice.
 
-```python
-from uchi import Uchi
-
-u = Uchi()
-u.learn("The Eiffel Tower is a wrought-iron lattice tower in Paris, France.")
-
-u.ask("What is the Eiffel Tower?")
-# FLUX proposes answer -> Uchi verifies -> Output: "The Eiffel Tower is a wrought-iron lattice tower in Paris, France."
-```
-
 ### The Architecture: Under the Hood
 
 To understand Uchi, you must understand the fundamental flaw in modern AI: **LLMs are trapped in an imitation paradigm.** They are autocomplete engines that predict the most statistically likely next word without understanding reality. Uchi solves this by separating the "creative reasoning" from the "factual grounding," and forcing the AI to prove its claims against reality before it is allowed to speak.
@@ -94,32 +84,70 @@ See [`docs/training.md`](docs/training.md) for the training pipeline and the `fl
 Uchi v0.3.0 standardizes all interactions across three human-readable interfaces. Whether you are scripting, using the terminal, or building a web app, the commands are identical.
 
 ### 1. Python SDK
+
+The SDK is designed to be completely modular. Because all input and output is human-readable, multiple autonomous `Uchi` instances can be chained together. **The output of one instance becomes the factual grounding for the next.**
+
 ```python
 from uchi import Uchi
+
+# ── 1. Basic Ingestion & Question Answering ──
 u = Uchi()
+u.ingest("docs/").ingest("data.csv") # Recursively ingest entire directories
+answer = u.ask("What is the primary conclusion of the Q3 data?")
 
-# Ingest directories or files
-u.ingest("docs/").ingest("data.csv")
 
-# Analytical skills
+# ── 2. The Compounding Effect (Agent Chaining) ──
+# Instance 1: The Data Analyst
+analyst = Uchi()
+analyst.ingest("financials.csv")
+report = analyst.ask("Write a comprehensive financial report calculating YoY growth.")
+
+# Instance 2: The Executive Strategist
+executive = Uchi()
+executive.learn(report) # Ground the executive agent on the analyst's output
+strategy = executive.ask("Based on this report, should we cut marketing spend?")
+print(strategy)
+
+
+# ── 3. Analytical Tools via Slash Commands ──
+# You can bypass conversational text and run raw ML tasks through the exact same interface
 u.ask("/classify", X=X_train, y=y_train)
+u.ask("/forecast", X=time_series_data, steps=20)
 ```
 
 ### 2. Terminal UI (TUI)
-Run Uchi directly from your terminal with a beautiful interface:
+The TUI isn't just a chatbot; it is a live telemetry dashboard into the Empirical Synthesis Engine. When you ask a question, you will see the Swarm decomposing the task, the REPL executing code, and the FactCheck Oracle pruning hallucinations in real-time.
+
 ```bash
+# Launch the dashboard
 uchi tui
 
-# Inside the TUI, use the exact same commands:
+# You can also preload a knowledge base directly from the command line:
+uchi tui --preload ./my_project_folder
+```
+
+Inside the TUI, use the exact same commands as the SDK:
+```bash
+> What is the Eiffel Tower?
 > /classify data.csv --label target_col
 ```
 
 ### 3. REST API
-Host Uchi as a backend service:
+Uchi can be deployed as a headless reasoning microservice with a single command. 
+
 ```bash
+# Boot the Uchi Swarm on port 8000
 uchi serve --port 8000
 ```
+
+Because the API is universal, you send the exact same queries via HTTP:
 ```bash
+# Ask a reasoning question
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Calculate the factorial of 5 using Python."}'
+
+# Execute a specialized skill
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"query": "/classify data.csv"}'
