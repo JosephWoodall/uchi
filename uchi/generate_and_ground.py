@@ -126,8 +126,53 @@ class GenerateAndGround:
             from collections import Counter
             counts = Counter(valid_candidates)
             best_candidate = counts.most_common(1)[0][0]
-            if callback: callback("reinforce", f"Plural vote winner! Grounded claim accepted (votes: {counts[best_candidate]}).")
+            if callback: callback("reinforce", f"Plural vote winner! (votes: {counts[best_candidate]}/{len(valid_candidates)}).")
             return best_candidate
+            
+        # 3. Empirical Synthesis Loop (Fallback when text grounding fails)
+        if self.proposer is not None:
+            if callback: callback("thinking", "Text grounding failed. Initiating Empirical Synthesis Loop...")
+            empirical_prompt = (f"The answer to the following question cannot be found in the text. "
+                                f"Write a complete, standalone Python function named 'run' that takes no arguments and calculates or discovers the answer. "
+                                f"Question: {question}\n\nOnly output the Python code.")
+                                
+            from .procedural_memory import REPLOracle
+            repl = REPLOracle()
+            
+            for attempt in range(2 + 1):
+                try:
+                    code_cand = self.proposer.propose(empirical_prompt, [])
+                except Exception:
+                    break
+                    
+                if not code_cand: break
+                    
+                # Extract code block
+                code_clean = code_cand
+                if "```python" in code_clean: code_clean = code_clean.split("```python")[1].split("```")[0].strip()
+                elif "```" in code_clean: code_clean = code_clean.split("```")[1].strip()
+                
+                if callback: callback("thinking", f"Executing empirical hypothesis in REPL (Attempt {attempt+1})...")
+                passed, output = repl.execute(code_clean)
+                
+                if passed and output and not output.startswith("Error:"):
+                    if callback: callback("reinforce", "Empirical hypothesis succeeded! Translating to human-readable format...")
+                    translation_prompt = (f"You empirically proved the answer to the user's question via a Python script. "
+                                          f"The script successfully calculated the following raw data: {output}\n\n"
+                                          f"Question: {question}\n"
+                                          f"Write a warm, conversational, human-readable explanation of the answer based on the output. Do NOT show the code.")
+                    try:
+                        final_answer = self.proposer.propose(translation_prompt, [])
+                        if final_answer: return final_answer
+                    except Exception:
+                        pass
+                    break
+                else:
+                    err_msg = output if output else "No output returned."
+                    if callback: callback("prune", f"Empirical hypothesis failed: {err_msg[:40]}")
+                    if attempt < 2:
+                        if callback: callback("thinking", "Feeding traceback to FLUX for reflection...")
+                        empirical_prompt += f"\n\n[Feedback]: Your python code failed to execute properly. Error/Output: {err_msg}. Please fix the logic and try again. Output ONLY python code."
                 
         return _ABSTAIN
 
