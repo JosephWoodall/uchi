@@ -343,47 +343,10 @@ class UchiApp(App):
         lines = ["[bold #7dcfff]─ Stats ─[/bold #7dcfff]"]
         if self.router is not None:
             try:
-                mem = len(self.router.memory.cpu_mem.records) if hasattr(self.router.memory, "cpu_mem") else 0
-                lines.append(f"Mem   {mem}")
-                lines.append(f"μ     {self.router.baseline.mean:.3f}")
-                lines.append(f"σ     {self.router.baseline.std:.3f}")
                 n_skills = len(self.router.skills.list_skills()) if hasattr(self.router, "skills") else 0
                 lines.append(f"Skills {n_skills}")
-                pool = getattr(self.router, "specialist_pool", None)
-                if pool:
-                    experts = " ".join(
-                        e for e in ("code", "math", "convo")
-                        if pool.has_specialist(e)
-                    )
-                    lines.append(f"[dim]{experts or 'none'}[/dim]")
-                    
-                import uchi.telemetry as _tel
-                tel_data = _tel.dump_all()
-                lines.append("\n[bold #bb9af7]─ Telemetry ─[/bold #bb9af7]")
-                
-                # L2 Norm
-                l2 = tel_data.get("latent_space", {}).get("vector_l2_norm", "N/A")
-                lines.append(f"L2: [dim]{l2}[/dim]")
-                
-                # MoE Experts
-                # (Assuming Claude recorded MoE experts, if not, this will just gracefully fallback to N/A)
-                moe = tel_data.get("latent_space", {}).get("active_experts", "N/A")
-                lines.append(f"MoE: [dim]{moe}[/dim]")
-                
-                # FAISS Fallback
-                faiss = tel_data.get("tokenizer", {}).get("faiss_fallback_count", 0)
-                lines.append(f"FAISS: [dim]{faiss}[/dim]")
-                
-                # MCTS Batch Util
-                batch = tel_data.get("mcts", {}).get("gpu_batch_utilization", "N/A")
-                lines.append(f"Batch: [dim]{batch}[/dim]")
-                
-                # Repetition Penalty
-                rep = tel_data.get("mcts", {}).get("repetition_penalty_applied", 0)
-                lines.append(f"RepPen: [dim]{'Active' if rep > 0 else 'Inactive'}[/dim]")
-                
-            except Exception as e:
-                lines.append(f"[dim]tel_err: {e}[/dim]")
+            except Exception:
+                pass
         else:
             lines.append("[dim]loading...[/dim]")
         import os
@@ -400,34 +363,11 @@ class UchiApp(App):
     def initialize_brain(self) -> None:
         self.call_from_thread(self.write_log, f"[dim][*] Loading brain from [bold]{self.brain_path}[/bold]...[/dim]")
 
-        from uchi.cli import load_brain, preload_context
-        from uchi.omni_router import OmniRouter
-        from uchi.node_compressor import NodeCompressor
-
-        import builtins
-        _orig_print = builtins.print
-        def _ui_print(*args, **kwargs):
-            self.call_from_thread(self.write_log, "[dim]" + " ".join(str(a) for a in args) + "[/dim]")
-        builtins.print = _ui_print
-
+        from uchi.simple import Uchi
+        
         try:
-            router = load_brain(self.brain_path)
-            if router is None:
-                self.call_from_thread(self.write_log, "[yellow][-] No brain found — cold start.[/yellow]")
-
-                def _prog(cur, total):
-                    self.call_from_thread(self._update_progress, cur, total, "Bootstrapping persona")
-
-                router = OmniRouter(use_bpe=False, memory_window=5, progress_callback=_prog)
-                self.call_from_thread(self._hide_progress)
-
-                compressor = NodeCompressor()
-                self.call_from_thread(self.write_log, "[dim][*] Compressing persona memory...[/dim]")
-                pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
-                self.call_from_thread(self.write_log, f"[dim][+] Compressed {pruned} nodes.[/dim]")
-
-            if self.preload_path:
-                preload_context(router, self.preload_path)
+            self.call_from_thread(self.write_log, "[dim][*] Booting FLUX + Uchi architecture...[/dim]")
+            router = Uchi()
 
             self.router = router
             self.call_from_thread(self.on_brain_ready)
@@ -453,7 +393,7 @@ class UchiApp(App):
         ib.placeholder = "Chat with Uchi, or /skill args..."
         ib.focus()
         self._tick_stats()
-        self.router.start_background_jobs()
+        self._tick_stats()
 
     def _update_progress(self, current: int, total: int, label: str = "Working") -> None:
         section = self.query_one("#rl-bar-section")
@@ -642,7 +582,7 @@ class UchiApp(App):
         self.call_from_thread(self._begin_predict)
         self.call_from_thread(self._reset_think_log, cmd)
         try:
-            reply = self.router.chat(cmd, callback=self._make_callback())
+            reply = self.router.ask(cmd)
         except InterruptedError:
             self.call_from_thread(self.write_log, "[yellow]Generation cancelled.[/yellow]")
             self.call_from_thread(self._restore_input)
@@ -701,11 +641,7 @@ class UchiApp(App):
             self.call_from_thread(self._restore_input)
             return
 
-        tokens = self.router.tokenizer.tokenize(raw_text.split(), is_inference=False)
-        self.router.stream(tokens)
-
-        from uchi.cli import save_brain
-        save_brain(self.router, getattr(self, "brain_path", "brain.uchi"))
+        self.router.learn(raw_text)
 
         self.call_from_thread(
             self.write_log,
@@ -805,9 +741,7 @@ class UchiApp(App):
 
     def action_quit(self) -> None:
         if self.router:
-            from uchi.cli import save_brain
-            self.router.stop_background_jobs()
-            save_brain(self.router, self.brain_path)
+            pass
         self.exit()
 
     def action_reload_skills(self) -> None:

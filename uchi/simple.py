@@ -100,83 +100,91 @@ class Uchi:
         brain_path: Optional[str] = None,
         web_search: bool = False,
     ) -> None:
-        from .omni_router import OmniRouter
+        from .retrieval import SemanticIndex
+        from .oracle import FactCheckOracle
+        from .proposer import FluxProposer
+        from .generate_and_ground import GenerateAndGround
+        from .skill_registry import SkillRegistry
 
-        resolved = brain_path or self._DEFAULT_BRAIN
-        router: Optional[OmniRouter] = None
+        self.web_search_enabled = web_search
+        
+        # New Uchi Architecture Components
+        embed_path = os.path.join(os.path.dirname(__file__), "data", "embeddings.pt")
+        if os.path.exists(embed_path):
+            self.index = SemanticIndex.from_embeddings_file(embed_path)
+        else:
+            import numpy as np
+            self.index = SemanticIndex({}, np.zeros((1, 1), dtype=np.float32))
+            
+        self.oracle = FactCheckOracle()
+        
+        # Load the best FLUX checkpoint from the pipeline we just ran
+        checkpoint_dir = os.path.join(os.path.dirname(__file__), "flux", "checkpoints")
+        best_ckpt = os.path.join(checkpoint_dir, "qat_best.pt")
+        if not os.path.exists(best_ckpt):
+            best_ckpt = os.path.join(checkpoint_dir, "cot_best.pt")
+        if not os.path.exists(best_ckpt):
+            best_ckpt = os.path.join(checkpoint_dir, "sft_best.pt")
+            
+        print(f"[*] Booting FLUX Proposer with {best_ckpt}...")
+        self.proposer = FluxProposer.load(checkpoint=best_ckpt)
+        
+        self.pipeline = GenerateAndGround(
+            index=self.index,
+            oracle=self.oracle,
+            proposer=self.proposer
+        )
+        
+        # Skill Registry (legacy adapter)
+        self.skills = SkillRegistry(self)
 
-        if os.path.exists(resolved):
-            try:
-                with gzip.open(resolved, "rb") as f:
-                    router = pickle.load(f)
-            except Exception:
-                try:
-                    with open(resolved, "rb") as f:
-                        router = pickle.load(f)
-                except Exception:
-                    pass
-
-        if router is None:
-            OmniRouter._bootstrap_knowledge = lambda self, *a, **kw: None
-            OmniRouter._bootstrap_persona = lambda self, *a, **kw: None
-            router = OmniRouter(use_bpe=False)
-
-        router.web_search_enabled = web_search
-        self._router = router
+    # ── Legacy adapters for SkillRegistry ──────────────────────────────────────
+    def chat(self, msg: str, callback=None) -> str:
+        return self.ask(msg)
+        
+    def stream(self, tokens: list[str]) -> None:
+        self.learn(" ".join(tokens))
+        
+    def query(self, tokens: list[str]) -> str:
+        return self.ask(" ".join(tokens))
 
     # ── brain interface ───────────────────────────────────────────────────────
 
     def learn(self, text: str) -> None:
-        """Stream text into the brain's knowledge trie.
+        """Stream text into the brain's knowledge semantic index.
 
         Accepts any string — a sentence, a document, or the string output of
         a previous ``ask()`` call. That last case is the compounding mechanism:
         the analysis produced by one ``Uchi`` instance becomes learnable
         knowledge for another, with no serialisation or schema required.
         """
-        self._router.stream(text.split())
-        # Compounding: feed the same text into the retrieval index so
-        # Generate-and-Ground can ground future answers on it.
-        idx = getattr(self._router, "_semantic_index", None)
-        if idx is not None:
-            try:
-                idx.build_from_corpus(text)
-            except Exception:
-                pass
+        try:
+            self.index.build_from_corpus(text)
+        except Exception as e:
+            print(f"[-] Failed to learn: {e}")
 
     def ask(self, question: str, **data: Any) -> str:
         """Ask the brain a question or invoke a tool skill.
 
-        Natural-language questions route through the full convergent engine
-        (trie + MCTS + SSM + HRR fallback).
+        Natural-language questions route through the FLUX + Uchi verifier pipeline.
 
         Slash commands with ``**data`` keyword arguments invoke the
-        corresponding analytical skill directly, bypassing string parsing:
-
-            u.ask("/classify", X=X_train, y=y_train)
-            u.ask("/regress",  X=X_train, y=y_train)
-            u.ask("/anomaly",  X=X)
-            u.ask("/forecast", X=time_series, steps=20)
-            u.ask("/tsclassify", X=windows, y=labels)
-
-        All forms return a plain string normalised for human readability —
-        synset tokens, internal control markers, and tokeniser artefacts are
-        stripped before the result is returned.  This guarantees that
-        ``u2.learn(u1.ask(...))`` chains always feed clean English into the
-        trie rather than raw trie vocabulary, creating a self-reinforcing
-        quality loop.
+        corresponding analytical skill directly.
         """
         from .response_normalizer import normalize
         if question.startswith("/") and data:
             parts = question.lstrip("/").split(None, 1)
             cmd = parts[0].lower()
             extra_args = parts[1] if len(parts) > 1 else ""
-            raw = self._router.skills.dispatch(cmd, extra_args, data_kwargs=data) or ""
+            raw = self.skills.dispatch(cmd, extra_args, data_kwargs=data) or ""
+        elif question.startswith("/"):
+            parts = question.lstrip("/").split(None, 1)
+            cmd = parts[0].lower()
+            extra_args = parts[1] if len(parts) > 1 else ""
+            raw = self.skills.dispatch(cmd, extra_args) or ""
         else:
-            # Natural language flows through the 3-lane router: skill commands,
-            # free-generated social chit-chat, or grounded Generate-and-Ground for
-            # factual questions (grounded answer or honest abstention).
-            raw = self._router.chat(question) or ""
+            raw = self.pipeline.answer(question) or ""
+            
         return normalize(raw)
 
     def ingest(self, path: str, col: Optional[str] = None) -> "Uchi":

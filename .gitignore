@@ -26,3 +26,7 @@ site/
 *.tmp
 replay.db
 .uchi/
+
+# Vendored FLUX model weights (894M) — physically present on disk, not a git blob.
+# Ship via release assets or Git LFS, not the raw repo.
+uchi/flux/checkpoints/*.pt
