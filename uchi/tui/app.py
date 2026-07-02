@@ -373,8 +373,6 @@ class UchiApp(App):
             self.call_from_thread(self.on_brain_ready)
         except Exception as e:
             self.call_from_thread(self.write_log, f"[bold #f7768e]Init error:[/bold #f7768e] {e}")
-        finally:
-            builtins.print = _orig_print
 
     def write_log(self, msg: str) -> None:
         self.query_one("#chat-log", RichLog).write(msg)
