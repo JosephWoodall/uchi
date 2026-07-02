@@ -31,13 +31,40 @@ u.ask("What is the Eiffel Tower?")
 
 Uchi verifies factual claims and chains of logic against its semantic memory. If FLUX proposes an answer that cannot be grounded, Uchi intercepts it and honestly abstains. Because of this powerful pairing, **accuracy benchmarks (MMLU, SWE-bench, and ARC-Challenge) are back.** We rely on FLUX to propose the right answer, and Uchi to prove it.
 
-## Skills
+## Simplified Public API (SDK, TUI, & REST)
 
-Analytical capabilities and reasoning operators are exposed natively:
+Uchi v0.3.0 standardizes all interactions across three human-readable interfaces. Whether you are scripting, using the terminal, or building a web app, the commands are identical.
 
+### 1. Python SDK
 ```python
-u.ask("/classify",  X=X_train, y=y_train)
-u.ask("/regress",   X=X_train, y=y_train)
+from uchi import Uchi
+u = Uchi()
+
+# Ingest directories or files
+u.ingest("docs/").ingest("data.csv")
+
+# Analytical skills
+u.ask("/classify", X=X_train, y=y_train)
+```
+
+### 2. Terminal UI (TUI)
+Run Uchi directly from your terminal with a beautiful interface:
+```bash
+uchi tui
+
+# Inside the TUI, use the exact same commands:
+> /classify data.csv --label target_col
+```
+
+### 3. REST API
+Host Uchi as a backend service:
+```bash
+uchi serve --port 8000
+```
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "/classify data.csv"}'
 ```
 
 ## Install
