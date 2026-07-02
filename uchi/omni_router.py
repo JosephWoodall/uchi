@@ -137,6 +137,7 @@ class OmniRouter:
             "_background_started", "_daemon_procs",
             "specialist_pool", "skills", "code_engine",
             "_decoder", "_answerability", "_chat_decoder", "_conversation",
+            "_reasoner",
         }
         return {k: v for k, v in self.__dict__.items() if k not in skip}
 
@@ -482,6 +483,29 @@ class OmniRouter:
             self._conversation = ConversationEngine(dec)
         return self._conversation
 
+    def _get_reasoner(self):
+        """Lazy verifier-guided reasoner (decompose → verify each step → compose)."""
+        if getattr(self, "_reasoner", None) is None:
+            from uchi.reasoning import ReasoningEngine
+
+            def _code_fn(step: str):
+                seed = self.tokenizer.tokenize(
+                    ("<|user|> " + step + " <|assistant|>").split(), is_inference=True)
+                code, _reward, _ok = self.code_engine.generate_code(seed, max_tokens=80)
+                return code
+            try:
+                self.code_engine.generate_code  # probe availability
+            except Exception:
+                _code_fn = None
+            self._reasoner = ReasoningEngine(answer_fn=self.answer, code_fn=_code_fn)
+        return self._reasoner
+
+    def _looks_multistep(self, message: str) -> bool:
+        """Heuristic: does the message chain multiple steps? (';', 'then', numbered)."""
+        if re.search(r";|\bthen\b|\band then\b|\bafter that\b|→", message, re.I):
+            return True
+        return len(re.findall(r"\b\d+\.\s+\S", message)) >= 2
+
     def chat(self, message: str, callback=None) -> str:
         """Three-lane entry. SKILL → analytical/code skills; SOCIAL → free-generated
         chit-chat (no oracle — nothing to hallucinate); FACTUAL → Generate-and-Ground
@@ -511,6 +535,10 @@ class OmniRouter:
             if conv is not None:
                 return conv.reply(message)
 
+        # factual lane — multi-step questions go through the verified reasoner
+        # (decompose → verify each step → compose, or abstain naming the failure).
+        if self._looks_multistep(message):
+            return self._get_reasoner().reason(message)
         return self.answer(message, callback=callback)
 
     def _handle_code_intent(self, message: str, query_tokens: list, concepts: list, callback) -> str:

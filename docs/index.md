@@ -1,137 +1,57 @@
 # Uchi Documentation
 
-> **The API has been dramatically simplified.** One import. Everything discoverable. Analysis compounds across instances without glue code. Start here.
-
----
-
-## The New Way to Use Uchi
+> A from-scratch, **no-LLM** assistant that grounds factual answers, reasons in
+> verified steps, converses, and **abstains instead of confabulating**. One import.
+> Knowledge compounds across instances.
 
 ```python
 from uchi import Uchi
 
 u = Uchi()
-u.learn("Q3 revenue was $4.2M, up 23% YoY.")
-print(u.ask("What was Q3 revenue growth?"))
+u.learn("The Eiffel Tower is a wrought-iron lattice tower in Paris, France.")
+u.ask("What is the Eiffel Tower?")     # → grounded answer
+u.ask("Who was the 14th president of Mars?")   # → "I don't have grounded knowledge to answer that."
 ```
 
-`Uchi` is the single public entry point for the entire library. Every feature — the sequence predictor, every analytical tool, web search, persistence — is reachable through this one class.
+## Start here
 
-**[Full Python API reference →](python-api.md)**
+- **[Python API](python-api.md)** — the `Uchi` class: `learn()`, `ask()`, `ingest()`, `save()`.
+- **[Architecture](architecture.md)** — how `ask()` routes and how answers get grounded.
+- **[Generate-and-Ground](generate-and-ground.md)** — the factual answering pipeline.
+- **[Reasoning](reasoning.md)** — verified multi-step reasoning.
+- **[Benchmarks](benchmarks.md)** — trustworthiness KPIs (measured, not claimed).
 
----
+## What Uchi is
 
-## The Compounding Mechanism
+Every natural-language message routes into one of three lanes:
 
-`ask()` always returns a plain string. `learn()` always accepts a plain string. This means the output of any analysis is immediately learnable by any other `Uchi` instance — no serialisation, no schema, no glue code.
+| Lane | Behaviour |
+|------|-----------|
+| **factual** | retrieve evidence → generate → **fact-check** → answer or **abstain** |
+| **social** | free-generated chit-chat (asserts no facts → nothing to verify) |
+| **skill** | analytical commands (`/classify`, `/forecast`, …) and code |
+
+The single design principle: **a fallible proposer plus a reality-anchored
+verifier.** Uchi generalises by generating over retrieved knowledge, and stays
+honest by verifying before it speaks — on factual answers and on each reasoning
+step alike.
+
+## The compounding contract
+
+`ask()` always returns a string; `learn()` always accepts one. The output of one
+instance is directly learnable by another — no schema, no glue:
 
 ```python
-# Instance 1: domain analysis
-u_data = Uchi()
-u_data.learn(open("sales_data.txt").read())
-report = u_data.ask("/classify", X=X_train, y=churn_labels)
-
-# Instance 2: learns from the analysis
-u_strategy = Uchi()
-u_strategy.learn(report)
-u_strategy.ask("What does this churn pattern imply for Q4 headcount?")
-
-# Instance 3: compounds further
-u_exec = Uchi()
-u_exec.learn(u_strategy.ask("Summarise the top three risks."))
-u_exec.ask("What should the board prioritise this quarter?")
+report = u.ask("/classify", X=X_train, y=labels)   # analytical skill → string
+u2 = Uchi(); u2.learn(report)                       # analysis becomes knowledge
+u2.ask("What accuracy did we get?")                 # grounded in that report
 ```
 
-Every `ask()` result is a first-class learnable artifact. Pipelines of `Uchi` instances build compounding analytical context without any external orchestration layer.
+## Honest status
 
----
-
-## What Uchi Does
-
-Uchi is an **online, instance-based sequence predictor** that learns to predict what comes next across any symbol type and domain — without neural weights, without pre-training, and without catastrophic forgetting.
-
-Its clearest domain is **discrete event streams where the underlying pattern shifts over time**. It beats count-based methods (N-gram, PPM, CTW) and online neural methods specifically in non-stationary settings — with no retraining, no drift detector, and no forgetting window to tune.
-
-The `Uchi` class exposes all of this through a single API: natural-language Q&A, tabular ML, time series forecasting, anomaly detection, and sequence generation.
-
----
-
-## Quickstart
-
-### Knowledge & Q&A
-
-```python
-u = Uchi()
-u.learn("The boiling point of water is 100°C at sea level.")
-u.ask("At what temperature does water boil?")   # → "100°C"
-```
-
-### Analytical tools
-
-```python
-result = u.ask("/classify",  X=X_train, y=y_train)    # classification report
-result = u.ask("/regress",   X=X_train, y=y_train)    # regression report
-result = u.ask("/anomaly",   X=sensor_matrix)          # anomaly detection report
-result = u.ask("/forecast",  X=time_series, steps=20)  # forecast report
-result = u.ask("/tsclassify",X=windows,    y=labels)   # time series classification
-```
-
-### Sequence prediction
-
-```python
-u.predictor.fit([["a", "b", "c", "d"]])
-u.predictor.predict_next(["b", "c"])          # → "d"
-u.predictor.train(["x", "y", "z"])            # online single-sequence update
-u.predictor.generate(n=10, seed=["a"])        # sample continuations
-```
-
-### File and directory ingestion
-
-```python
-u.ingest("knowledge_base/")            # walk directory — txt/md/py/json/csv
-u.ingest("report.pdf")                 # PDF (pip install pdfminer.six)
-u.ingest("events.csv", col="notes")    # specific CSV column
-u = Uchi().ingest("docs/").ingest("data.csv")  # chainable, returns self
-```
-
-### Persistence and configuration
-
-```python
-u.web_search = True          # enable live web sourcing on knowledge gaps
-u.save("my_brain.uchi")
-u2 = Uchi(brain_path="my_brain.uchi")
-```
-
----
-
-## Natural Fits
-
-- **System observability** — log event codes, API call chains, process state transitions
-- **User behavior** — clickstreams, navigation paths, in-app action sequences
-- **Industrial / IoT** — machine state sequences, energy consumption, production line events
-- **Financial regimes** — discretized price movements, order flow states, market microstructure
-- **Anomaly detection** — confidence collapse before a human notices; no separate anomaly model
-- **Game AI / opponent modeling** — predict next move, adapts to strategy shifts in real time
-
-## Where It Is Not Competitive
-
-- **Large stationary tabular data (>10K rows, no drift)** — gradient boosting wins by 5–10pp
-- **Long-range dependencies** — context window is fixed at k; needs a transformer for longer memory
-- **Smooth continuous regression** — binned output bounds precision below random forests
-
----
-
-## Documentation
-
-| Section | Contents |
-|---|---|
-| **[Python API](python-api.md)** | Full `Uchi` class reference — `learn`, `ask`, `stream`, `predictor`, `web_search`, `save` |
-| **[Architecture](architecture.md)** | Trie algorithm, credibility update, routing layer design |
-| **[Core Engine](core-engine.md)** | `UniversalPredictor`, `PredictorForest` — low-level sequence predictor API |
-| **[OmniRouter](omni-router.md)** | Multi-modal routing, `ProceduralMemory`, SSM GRPO value head |
-| **[Generative Models](generative.md)** | `SequenceGenerator`, `TabularGenerator`, `TimeSeriesGenerator` |
-| **[Tabular ML](tabular.md)** | `TabularPredictor`, `TabularRegressor` — sklearn-compatible classifiers |
-| **[Time Series](timeseries.md)** | `MultivariateTSPredictor`, `TimeSeriesClassifier`, `AnomalyDetector` |
-| **[Convergent Engine](convergent-engine.md)** | MCTS, Oracles, vector ranking |
-| **[Benchmarks](benchmarks.md)** | Standard and concept-drift benchmark results |
-| **[Algorithmic Walkthrough](algorithmic-walkthrough.md)** | Step-by-step derivation of the core algorithm |
-| **[Simulation Engine](simulation-engine.md)** | `SimulationEngine` for scenario modeling |
+Uchi is reliably honest on clearly-unknown queries (it abstains) and on social
+turns. It is **not yet trustworthy on hard open-domain QA** — retrieval and
+generation precision (~57%) is the current ceiling and the primary roadmap item.
+It is smaller, deterministic where possible, auditable, and needs no GPU — its bet
+is **trustworthiness over raw capability**. See [Benchmarks](benchmarks.md) for the
+real numbers.

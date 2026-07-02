@@ -106,10 +106,14 @@ Unreadable files are silently skipped so that an entire project directory can be
 
 Ask the brain a question or invoke an analytical tool.
 
-**Natural-language questions** route through the full convergent engine (trie → MCTS → SSM → HRR fallback):
+**Natural-language questions** route through the three-lane router — factual
+questions go to Generate-and-Ground (retrieve → generate → fact-check → answer or
+abstain), social turns to the conversation engine, and skill commands to the
+`SkillRegistry`. Multi-step factual questions go through the verified reasoner.
+Uchi answers when it can ground the answer, and abstains otherwise:
 
 ```python
-u.ask("What is the capital of France?")
+u.ask("What is the capital of France?")     # grounded answer, or "I don't have grounded knowledge…"
 u.ask("Explain the water cycle.")
 u.ask("Summarise the risk factors in one paragraph.")
 ```

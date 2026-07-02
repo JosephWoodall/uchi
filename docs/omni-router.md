@@ -1,62 +1,58 @@
 # OmniRouter
 
-> **Python users:** `OmniRouter` is the internal engine. The recommended interface is `Uchi` — it wraps `OmniRouter` and exposes everything through a single clean API. See [Python API →](python-api.md)
+> **Python users:** `OmniRouter` is the internal engine. The recommended interface
+> is `Uchi`, which wraps it. See [Python API →](python-api.md).
 >
 > ```python
 > from uchi import Uchi
 > u = Uchi()
-> u.learn("text")           # streams into OmniRouter trie
-> u.ask("question")         # routes through OmniRouter chat()
-> u.router                  # escape hatch: direct OmniRouter access
+> u.learn("text")     # streams into the trie + retrieval index
+> u.ask("question")   # routes through OmniRouter.chat()
+> u.router            # escape hatch: direct OmniRouter access
 > ```
 
 ---
 
-# OmniRouter: The Multi-Modal Deterministic LLM
+`OmniRouter` is the front controller. It classifies each message and dispatches it
+to one of three lanes, then owns persistence and the compounding `learn()` path.
 
-The `OmniRouter` is the master controller of the Uchi sequence predictor. Rather than treating Text, Math Telemetry, and Python Agent objects as isolated pipelines, the `OmniRouter` acts as a "Prefrontal Cortex" to ingest, compress, and predict across all modalities simultaneously. 
+## `chat(message)` — the three-lane router
 
-By wrapping the `OmniTokenizer`, `OnlineTokenizer`, `AssociativeMemory`, and `SequenceGenerator` into a single API, Uchi achieves true multi-modal synesthesia without a single neural weight.
+```
+message ─► intent_router.classify_intent ─► skill  | social | factual
+```
 
-## How It Works
-1. **The OmniTokenizer:** Intercepts raw inputs (Text strings, `.wav` audio paths, `.jpg` image paths, Math metrics, and `OntologicalState` objects) and hashes them into universal geometric `[CONCEPT_ID]` tokens.
-2. **Infinite Compression:** Automatically feeds the concept stream into the Phase 4 `OnlineTokenizer` to compress sequences via BPE, preventing $O(N^2)$ RAM explosion.
-3. **Deterministic Prediction:** Trains the core prediction engine (Phase 1/3) on the exact probability of those concepts.
-4. **Zero-Shot QA:** Feeds the stream into the `AssociativeMemory` buffer, allowing ad-hoc textual queries to retrieve math/image/code metrics.
+- **skill** → `SkillRegistry.dispatch` (analytical commands, code).
+- **social** → `ConversationEngine.reply` — free-generated chit-chat; no oracle,
+  because social replies assert no facts.
+- **factual** → `answer()` (Generate-and-Ground). Multi-step factual questions
+  (`;`, `then`, numbered) route to `ReasoningEngine.reason` first.
 
-### Realistic Use Cases
+## `answer(question)` — Generate-and-Ground
 
-1. **Enterprise Autonomous Security Drones:** 
-   A drone continuously streams visual `.jpg` paths, acoustic `.wav` siren features, and internal `BATTERY=10` telemetry into the `OmniRouter`. When a human operator types "Why did you stop flying?", the `OmniRouter` effortlessly retrieves `BATTERY=10` because the engine natively understands text and math in the exact same mathematical space.
-2. **Financial Trading Bots with News Senti-Metrics:** 
-   A quantitative trading algorithm feeds raw text news headlines ("Federal Reserve cuts rates") alongside strict math telemetry (`AAPL_PRICE=150`) into the engine. The `OmniRouter` geometrically binds the semantic sentiment to the mathematical price action and perfectly predicts the parallel future of the market ticker.
-3. **Lifelong Video Game NPCs:** 
-   An NPC agent in an RPG ingests player chat strings, internal `OntologicalState(name="ANGRY")` variables, and environmental sound `.wav` tags. Because the `OmniRouter` infinitely compresses the stream, the NPC lives for years, dynamically recalling past visual/audio memories when queried by the player in plain text.
+Retrieve evidence from the semantic index → answerability gate → generate a
+candidate (neural decoder, or extractive) → fact-check → emit or abstain. Never
+confabulates. See [Generate-and-Ground →](generate-and-ground.md).
 
-### The Ultimate Benefit
-The `OmniRouter` fundamentally transforms Uchi from a statistical math tool into a **Deterministic LLM**. It grants enterprises the ability to achieve LLM-level creative generalization, Multi-Modal ad-hoc question answering, and infinite lifelong context—all running in $O(1)$ RAM on an edge device with absolutely zero risk of neural hallucination.
+## `stream(tokens)` / `learn(text)`
 
-## Routing Layer (v0.2.0)
+Ingests knowledge into **both** the recall trie (`predictor`) and the retrieval
+index, so learned text is immediately groundable.
 
-v0.2.0 adds a structured routing layer that sits in front of the trie and the SSM, improving intent handling, retrieval quality, and cold-start knowledge.
+## What it holds
 
-### ProceduralMemory
+| Attribute | Role |
+|-----------|------|
+| `predictor` | credibility-weighted trie — recall + grounding (append-only, never forgets) |
+| `_semantic_index` | `SemanticIndex` retrieval over ingested knowledge |
+| `skills` | `SkillRegistry` — analytical/code skills |
+| `tokenizer`, `memory` | tokenisation + associative memory |
 
-`ProceduralMemory` is a keyword/synonym-based intent classifier that runs before the trie sees a query. When a user sends a message, `chat()` calls `procedural.retrieve(message)` first. If a known intent is detected (e.g., `code`, `math`), the intent label is prepended to the token stream as a routing hint, directing the trie toward the correct prediction path. Unknown intents (conversational greetings, etc.) return `None` and bypass the classifier entirely.
+Model artifacts (answer decoder, answerability classifier, chat decoder) are
+lazy-loaded from `uchi/data/*.pt` and are not pickled with the brain.
 
-### CPUVectorMemory
+## Retired
 
-`CPUVectorMemory` is a persistent numpy/JSON vector store that replaces the in-memory `AssociativeMemory` buffer for SSM state vectors. Each SSM hidden state vector is stored on disk and survives process restarts. Retrieval uses cosine similarity over all stored vectors, returning the top-k most semantically similar past states. This makes the system's long-term memory durable without requiring a database.
-
-### GRPO Value Head
-
-The SSM carries a value head that is trained online via Group Relative Policy Optimization (the method introduced in DeepSeek-R1). After each chat turn, user sentiment (positive/negative keywords) and code evaluation signals (syntax check via `py_compile`) are converted to scalar rewards. The `AgenticBaseline` tracks a running mean and standard deviation so the advantage signal is normalized before each value head update. This replaces the random-initialized value head that previously acted as a hallucination gate with random noise.
-
-### Execution Order in `chat()`
-
-1. `ProceduralMemory.retrieve(message)` — intent routing
-2. Sentiment scoring against previous turn — GRPO value update
-3. `query(concepts)` — CPUVectorMemory cosine retrieval
-4. `predict_future(tokens)` — trie generation
-5. SSM value head confidence check — hallucination gate
-6. `stream(last_sequence)` — trie training on the complete `<|user|> X <|assistant|> Y` sequence (after generation, not before)
+The SSM value-head QA path, GRPO training loop, `AgenticBaseline`, the convergent
+MCTS engine, and trie-based text generation were removed. Generation is now the
+neural decoder gated by the fact-check oracle; the trie is kept for recall/grounding.
