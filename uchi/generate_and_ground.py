@@ -87,11 +87,13 @@ class GenerateAndGround:
         return best
 
     # ── the loop ───────────────────────────────────────────────────────────────
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, callback=None) -> str:
         # honesty gate 1: do we even know the question's concepts? (nonsense/OOV)
+        if callback: callback("thinking", "Checking semantic vocabulary...")
         if self._known_fraction(question) < self.min_known:
             return _ABSTAIN
 
+        if callback: callback("thinking", f"Retrieving top {self.retrieve_k} memories...")
         evidence = self.index.retrieve(question, self.retrieve_k)
         if not evidence or evidence[0][1] < self.min_sim:
             return _ABSTAIN
@@ -100,6 +102,7 @@ class GenerateAndGround:
         # honesty gate 2: does the evidence actually ANSWER the question? (SQuAD-2.0
         # style unanswerability — topically relevant but no answer present)
         if self.answerability is not None:
+            if callback: callback("thinking", "Evaluating answerability of evidence...")
             try:
                 if self.answerability.prob(question, ev_texts[0]) < self.min_answerable:
                     return _ABSTAIN
@@ -110,24 +113,34 @@ class GenerateAndGround:
         # extractive answer. Emit the first candidate the oracle finds grounded;
         # abstain only if neither is supported. Synthesis when it works,
         # grounded extraction otherwise — never confabulate.
-        for candidate in self._candidates(question, evidence, ev_texts):
-            if candidate and candidate.strip() and self.oracle.is_grounded(candidate, ev_texts):
+        for candidate in self._candidates(question, evidence, ev_texts, callback=callback):
+            if not candidate or not candidate.strip():
+                continue
+            if callback: callback("thinking", f"Oracle verifying candidate: '{candidate[:40]}...'")
+            if self.oracle.is_grounded(candidate, ev_texts):
+                if callback: callback("reinforce", "Verified! Grounded claim accepted.")
                 return candidate
+            else:
+                if callback: callback("prune", "Ungrounded claim pruned by Oracle.")
+                
         return _ABSTAIN
 
-    def _candidates(self, question, evidence, ev_texts):
+    def _candidates(self, question, evidence, ev_texts, callback=None):
         # 1. the pluggable proposer (FLUX / LLM / decoder) — the strong generator
         if self.proposer is not None:
+            if callback: callback("thinking", "FLUX Proposer generating candidate...")
             try:
                 yield self.proposer.propose(question, ev_texts)
             except Exception:
                 pass
         elif self.decoder is not None:                # backward-compat path
+            if callback: callback("thinking", "Decoder generating candidate...")
             try:
                 yield self.decoder.generate(question, ev_texts)
             except Exception:
                 pass
         # 2. always keep the grounded extractive answer as a verified fallback
+        if callback: callback("thinking", "Extracting verified fallback...")
         yield self._extractive(question, evidence)
 
     def answer_verbose(self, question: str) -> dict:

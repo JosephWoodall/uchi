@@ -163,7 +163,7 @@ class Uchi:
         except Exception as e:
             print(f"[-] Failed to learn: {e}")
 
-    def ask(self, question: str, **data: Any) -> str:
+    def ask(self, question: str, callback=None, **data: Any) -> str:
         """Ask the brain a question or invoke a tool skill.
 
         Natural-language questions route through the FLUX + Uchi verifier pipeline.
@@ -176,14 +176,14 @@ class Uchi:
             parts = question.lstrip("/").split(None, 1)
             cmd = parts[0].lower()
             extra_args = parts[1] if len(parts) > 1 else ""
-            raw = self.skills.dispatch(cmd, extra_args, data_kwargs=data) or ""
+            raw = self.skills.dispatch(cmd, extra_args, data_kwargs=data, callback=callback) or ""
         elif question.startswith("/"):
             parts = question.lstrip("/").split(None, 1)
             cmd = parts[0].lower()
             extra_args = parts[1] if len(parts) > 1 else ""
-            raw = self.skills.dispatch(cmd, extra_args) or ""
+            raw = self.skills.dispatch(cmd, extra_args, callback=callback) or ""
         else:
-            raw = self.pipeline.answer(question) or ""
+            raw = self.pipeline.answer(question, callback=callback) or ""
             
         return normalize(raw)
 

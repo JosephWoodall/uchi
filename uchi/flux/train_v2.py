@@ -83,7 +83,7 @@ def make_data_iter(tokenizer, split, micro_batch_size, max_seq_len, seed=42):
     """
     from datasets import load_dataset
 
-    dataset = load_dataset("roneneldan/TinyStories", split=split, streaming=True)
+    dataset = load_dataset("Skylion007/openwebtext", split=split, streaming=True)
     # Shuffle buffer gives pseudo-random order on each pass
     dataset = dataset.shuffle(seed=seed, buffer_size=10_000)
     pad_id = tokenizer.pad_token_id
@@ -214,14 +214,14 @@ def evaluate(model, val_iter, eval_steps, device, dtype, amp_ctx_fn, tokenizer_p
 def main():
     parser = argparse.ArgumentParser(description="FLUX Phase 1 — TinyStories pre-training")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    parser.add_argument("--max-steps", type=int, default=DEFAULTS["max_steps"])
+    parser.add_argument("--max_steps", type=int, default=10000, help="Total training steps")
     parser.add_argument("--seq-len", type=int, default=DEFAULTS["max_seq_len"])
     parser.add_argument("--micro-batch", type=int, default=DEFAULTS["micro_batch_size"])
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--lr", type=float, default=DEFAULTS["learning_rate"])
-    parser.add_argument("--d-model", type=int, default=DEFAULTS["d_model"])
-    parser.add_argument("--n-layers", type=int, default=DEFAULTS["n_layers"])
-    parser.add_argument("--d-state", type=int, default=DEFAULTS["d_state"])
+    parser.add_argument("--d_model", type=int, default=768, help="Model dimension")
+    parser.add_argument("--n_layers", type=int, default=12, help="Number of layers")
+    parser.add_argument("--d_state", type=int, default=64, help="SSM state dimension")
     parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile")
     args = parser.parse_args()
 
@@ -312,7 +312,7 @@ def main():
         model = torch.compile(model)
 
     # ── Data ──
-    print("  Loading TinyStories (streaming) ...")
+    print("  Loading OpenWebText (streaming) ...")
     train_iter = make_data_iter(tokenizer, "train", micro_bs, seq_len, seed=42)
     val_iter = make_data_iter(tokenizer, "validation", micro_bs, seq_len, seed=0)
 

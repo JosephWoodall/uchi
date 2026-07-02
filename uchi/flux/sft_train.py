@@ -43,7 +43,7 @@ DEFAULTS = dict(
     micro_batch_size=4,
     grad_accum_steps=16,       # effective batch = 64
     max_seq_len=512,
-    epochs=3,
+    epochs=1,
     learning_rate=3e-5,        # much lower than pretraining — we're fine-tuning
     min_lr_frac=0.1,
     warmup_frac=0.05,          # 5% of total steps for warmup
@@ -113,6 +113,34 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
                 break
     except Exception as e:
         print(f"    [!] Dolly load failed: {e}")
+
+    # ── OpenHermes 2.5 (instruct/reasoning) ──
+    print("  Loading OpenHermes 2.5 ...")
+    try:
+        ds = load_dataset("teknium/OpenHermes-2.5", split="train", streaming=True)
+        for row in ds:
+            # OpenHermes has 'conversations' which is a list of {'from': '...', 'value': '...'}
+            conversations = row.get("conversations", [])
+            # We want to extract a simple instruction and a response
+            instruction = ""
+            response = ""
+            for turn in conversations:
+                if turn.get("from") == "human" and not instruction:
+                    instruction = turn.get("value", "").strip()
+                elif turn.get("from") == "gpt" and instruction and not response:
+                    response = turn.get("value", "").strip()
+            
+            if instruction and response:
+                examples.append({
+                    "question": instruction[:800],
+                    "context": "",
+                    "answer": response[:800],
+                })
+            
+            if len(examples) >= max_examples:
+                break
+    except Exception as e:
+        print(f"    [!] OpenHermes load failed: {e}")
 
     random.shuffle(examples)
     examples = examples[:max_examples]

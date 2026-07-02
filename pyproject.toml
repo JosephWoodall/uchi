@@ -40,6 +40,7 @@ dependencies = [
     "hnswlib>=0.7.0",
     "sympy>=1.12",
     "tiktoken>=0.5.0",
+    "transformers>=4.0.0",
 ]
 
 [project.urls]

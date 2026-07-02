@@ -580,7 +580,7 @@ class UchiApp(App):
         self.call_from_thread(self._begin_predict)
         self.call_from_thread(self._reset_think_log, cmd)
         try:
-            reply = self.router.ask(cmd)
+            reply = self.router.ask(cmd, callback=self._make_callback())
         except InterruptedError:
             self.call_from_thread(self.write_log, "[yellow]Generation cancelled.[/yellow]")
             self.call_from_thread(self._restore_input)
