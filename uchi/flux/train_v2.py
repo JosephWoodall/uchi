@@ -29,6 +29,7 @@ import sys
 import time
 import math
 import argparse
+import numpy as np
 import torch
 import torch.nn as nn
 from contextlib import nullcontext
@@ -76,6 +77,25 @@ def get_lr(step, max_steps, warmup_steps, lr_max, lr_min):
 # ==============================================================================
 # Data pipeline
 # ==============================================================================
+def make_bin_iter(bin_path, micro_batch_size, max_seq_len, seed=1234):
+    """Yield (input, target) batches from a pre-tokenized uint32 memmap .bin.
+
+    This is the GPU-bound fast path: no tokenization or HF streaming in the hot
+    loop. Sampling is random contiguous windows (nanoGPT-style), so the model
+    still sees the corpus in varied order. Produced by scripts/pretokenize.py.
+    """
+    data = np.memmap(bin_path, dtype=np.uint32, mode="r")
+    n = len(data)
+    if n <= max_seq_len + 1:
+        raise ValueError(f"{bin_path} has only {n} tokens; need > {max_seq_len + 1}")
+    rng = np.random.default_rng(seed)
+    while True:
+        ix = rng.integers(0, n - max_seq_len - 1, size=micro_batch_size)
+        x = np.stack([np.asarray(data[i:i + max_seq_len], dtype=np.int64) for i in ix])
+        y = np.stack([np.asarray(data[i + 1:i + 1 + max_seq_len], dtype=np.int64) for i in ix])
+        yield torch.from_numpy(x), torch.from_numpy(y)
+
+
 def make_data_iter(tokenizer, split, micro_batch_size, max_seq_len, seed=42):
     """Stream a mixture of OpenWebText, Wikipedia, and Code, encode on the fly, yield (input, target) batches.
 
@@ -83,25 +103,46 @@ def make_data_iter(tokenizer, split, micro_batch_size, max_seq_len, seed=42):
     """
     from datasets import load_dataset, interleave_datasets
 
-    # Load OpenWebText
-    ds_owt = load_dataset("Skylion007/openwebtext", split=split, streaming=True)
-    
-    # Load Wikipedia (general knowledge for MMLU)
-    # Note: Wikipedia only has a 'train' split by default, so if split is 'validation', fallback to openwebtext for it.
+    # OpenWebText only ships a 'train' split — always load train, then carve a
+    # held-out validation stream from it via skip + a distinct shuffle seed.
+    # (Passing split="validation" here raises: OpenWebText has no such split,
+    #  which previously crashed every run at the first eval interval.)
+    ds_owt = load_dataset("Skylion007/openwebtext", split="train", streaming=True)
+
     if split == "train":
-        ds_wiki = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-        # Load The Stack Smol (Python for SWE-bench)
-        ds_code = load_dataset("bigcode/the-stack-smol", data_dir="data/python", split="train", streaming=True)
-        
-        # We need to map all to a common 'text' field. OpenWebText and Wikipedia already have 'text'.
-        # The Stack has 'content'.
-        def map_code(x): return {"text": x["content"]}
-        ds_code = ds_code.map(map_code)
-        
-        # Interleave: 50% OpenWebText, 25% Wikipedia, 25% Code
-        dataset = interleave_datasets([ds_owt, ds_wiki, ds_code], probabilities=[0.5, 0.25, 0.25], seed=seed)
+        # Skip the first slice so train never overlaps the held-out val slice.
+        ds_owt = ds_owt.skip(20_000)
+
+        # Build the corpus mix defensively: OpenWebText is the always-on base;
+        # Wikipedia (general knowledge) and code (SWE) are added when reachable.
+        # Gated/unavailable sources (e.g. the-stack-smol needs an HF token) are
+        # skipped with a warning and the mixture weights are renormalized, so a
+        # missing token degrades the mix instead of crashing the whole run.
+        parts, weights = [ds_owt], [0.5]
+
+        try:
+            ds_wiki = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+            parts.append(ds_wiki); weights.append(0.25)
+        except Exception as e:
+            print(f"  [!] Wikipedia unavailable ({type(e).__name__}); skipping. {e}")
+
+        try:
+            # The Stack has 'content'; remap to the common 'text' field.
+            ds_code = load_dataset("bigcode/the-stack-smol", data_dir="data/python", split="train", streaming=True)
+            ds_code = ds_code.map(lambda x: {"text": x["content"]})
+            parts.append(ds_code); weights.append(0.25)
+        except Exception as e:
+            print(f"  [!] Code corpus unavailable ({type(e).__name__}); skipping. "
+                  f"Set HF_TOKEN + accept the license to include it. {e}")
+
+        if len(parts) == 1:
+            dataset = ds_owt
+        else:
+            total = sum(weights)
+            dataset = interleave_datasets(parts, probabilities=[w / total for w in weights], seed=seed)
     else:
-        dataset = ds_owt
+        # Held-out validation: first 20k OpenWebText docs, disjoint from train's skip.
+        dataset = ds_owt.take(20_000)
 
     # Shuffle buffer gives pseudo-random order on each pass
     dataset = dataset.shuffle(seed=seed, buffer_size=10_000)
@@ -242,6 +283,10 @@ def main():
     parser.add_argument("--n_layers", type=int, default=12, help="Number of layers")
     parser.add_argument("--d_state", type=int, default=64, help="SSM state dimension")
     parser.add_argument("--no-compile", action="store_true", help="Disable torch.compile")
+    parser.add_argument("--data-bin", type=str, default=None,
+                        help="Pre-tokenized train .bin (GPU-bound fast path; skips streaming)")
+    parser.add_argument("--val-bin", type=str, default=None,
+                        help="Pre-tokenized val .bin (defaults to --data-bin if omitted)")
     args = parser.parse_args()
 
     # Derived config
@@ -252,7 +297,9 @@ def main():
     eff_batch = micro_bs * grad_accum
     lr_max = args.lr
     lr_min = lr_max * DEFAULTS["min_lr_frac"]
-    warmup = DEFAULTS["warmup_steps"]
+    # Warmup must scale with the horizon: a fixed 2000-step warmup on a 4000-step
+    # run spends half of training warming up. Cap at 10% of max_steps.
+    warmup = min(DEFAULTS["warmup_steps"], max(50, max_steps // 10))
     ckpt_dir = DEFAULTS["checkpoint_dir"]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -331,9 +378,14 @@ def main():
         model = torch.compile(model)
 
     # ── Data ──
-    print("  Loading OpenWebText (streaming) ...")
-    train_iter = make_data_iter(tokenizer, "train", micro_bs, seq_len, seed=42)
-    val_iter = make_data_iter(tokenizer, "validation", micro_bs, seq_len, seed=0)
+    if args.data_bin:
+        print(f"  Using pre-tokenized bin (GPU-bound): {args.data_bin}")
+        train_iter = make_bin_iter(args.data_bin, micro_bs, seq_len, seed=42)
+        val_iter = make_bin_iter(args.val_bin or args.data_bin, micro_bs, seq_len, seed=0)
+    else:
+        print("  Loading OpenWebText (streaming) ...")
+        train_iter = make_data_iter(tokenizer, "train", micro_bs, seq_len, seed=42)
+        val_iter = make_data_iter(tokenizer, "validation", micro_bs, seq_len, seed=0)
 
     # ── Training loop ──
     os.makedirs(ckpt_dir, exist_ok=True)
