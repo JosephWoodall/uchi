@@ -52,49 +52,43 @@ DEFAULTS = dict(
 
 
 # ==============================================================================
-# Synthetic CoT Data Generator (for proof of concept)
+# RLEF Data Generator (Reinforcement Learning from Environment Feedback)
 # ==============================================================================
 def generate_synthetic_cot(num_examples):
-    """Generates reasoning traces using Uchi's simulation engine and memory modules."""
-    from uchi.simulation_engine import LifelongSimulationEngine
+    """Generates reasoning traces by proposing Python code and verifying via REPL.
+    This simulates Rejection Sampling / RLEF, where only empirically proven paths
+    are distilled into the model's weights."""
     from uchi.procedural_memory import REPLOracle
-    from uchi.episodic_memory import EpisodicMemory
     
     examples = []
     oracle = REPLOracle()
-    engine = LifelongSimulationEngine(n_instances=3, context_length=2)
-    episodic = EpisodicMemory(max_history=5)
     
-    # Generate reasoning traces for code execution and logic
+    print("  Generating RLEF verified traces via REPL...")
     for i in range(num_examples):
-        a = random.randint(2, 50)
-        b = random.randint(2, 50)
-        q = f"Calculate the sum of {a} and {b} and return the result."
+        a = random.randint(10, 100)
+        b = random.randint(10, 100)
+        op = random.choice(["+", "-", "*"])
+        q = f"Calculate the result of {a} {op} {b}."
         
-        # Simulate procedural reasoning
-        code_str = f"def solve():\n    return {a} + {b}\nresult = solve()"
-        success, conf = oracle.verify(code_str)
+        # Simulate procedural reasoning (the model writes this)
+        code_str = f"def run():\n    return {a} {op} {b}\n"
         
-        if success:
+        # The REPL Environment provides the +1 Reward / Ground Truth
+        success, output = oracle.execute(code_str)
+        
+        if success and output:
             think = (
-                f"1. To solve this, I need to add {a} and {b}.\n"
-                f"2. I will write a Python function: {code_str.replace(chr(10), ' ')}\n"
-                f"3. Verifying with REPL Oracle... Success.\n"
-                f"4. The result of {a} + {b} is {a + b}."
+                f"I need to calculate {a} {op} {b}.\n"
+                f"I will write a Python script to compute this.\n"
+                f"```python\n{code_str}```\n"
+                f"Output: {output}\n"
+                f"The REPL executed successfully."
             )
-            ans = f"The result is {a + b}."
-            
-            # Vote on sequence logic (simulating engine voting)
-            engine.stream_parallel([[q, think], [q, "failed path"]])
-            pred, vote_conf = engine.vote_plural()
-            
-            # Log in episodic memory
-            episodic.add_interaction(q, ans)
+            ans = f"The result is {output}."
             
             examples.append({"question": q, "think": think, "answer": ans})
 
     return examples
-
 
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
     random.seed(seed)
