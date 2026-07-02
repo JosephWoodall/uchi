@@ -26,14 +26,6 @@ def ingest_file(u, filepath, quiet=False):
         if not quiet:
             print(f"[-] Failed to ingest {filepath}: {e}")
 
-ASCII_LOGO = r"""
-       _  _
-      (o)(o)
-     /  __  \
-    |  \__/  |
-     \______/
-ODUSP Daemon v0.2.0
-"""
 
 def save_brain(u, path: str = "brain.uchi"):
     """Persist a Uchi instance's compounding semantic index to disk.
@@ -121,22 +113,21 @@ RESET = '\033[0m'
 BOLD = '\033[1m'
 
 def print_ai_msg(prefix, msg):
-    print(f"\n{CYAN}{BOLD}ODUSP ({prefix}):{RESET} {msg}\n")
+    print(f"\n{CYAN}{BOLD}Uchi ({prefix}):{RESET} {msg}\n")
 
 def print_help():
     print(f"\n{YELLOW}{BOLD}Available Commands:{RESET}")
     print(f"  {GREEN}/help{RESET}             Show this help menu")
-    print(f"  {GREEN}/load <file>{RESET}      Dynamically stream a new file into the Geometric Trie")
+    print(f"  {GREEN}/load <file>{RESET}      Ingest a file or directory into the Semantic Index")
     print(f"  {GREEN}/query <text>{RESET}     Execute Zero-Shot Q&A against the Associative Memory")
-    print(f"  {GREEN}/predict <steps>{RESET}  Force the engine to hallucinate forward <steps> tokens")
     print(f"  {GREEN}/save{RESET}             Force serialize the current brain state to disk")
     print(f"  {GREEN}/quit{RESET}             Exit the session and save\n")
 
 def main():
     parser = argparse.ArgumentParser(
         prog="uchi",
-        description="Uchi — FLUX (Proposer) + Uchi (Verifier). "
-                    "Run the terminal UI or the REST API server.",
+        description="Uchi v0.3.0 — The Empirical Synthesis Engine. "
+                    "Run the interactive dashboard or the REST API server.",
     )
     parser.add_argument("command", nargs="?", default="tui", choices=["tui", "serve"],
                         help="tui: interactive terminal UI (default). serve: REST API server.")
