@@ -5,17 +5,16 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Uchi — The Reality-Anchored Verifier (v0.3.0)
+## Uchi v0.3.0: The Empirical Synthesis Engine
 
-Uchi introduces a breakthrough architecture: **FLUX as the Proposer, Uchi as the Verifier.** 
-By pairing the Out-Of-Distribution (OOD) generalization and reasoning chains of FLUX with the strict mathematical grounding of Uchi, we achieve the ultimate balance of capability and trustworthiness.
+LLMs are trapped in an imitation paradigm—they mimic patterns without understanding reality. Uchi breaks this cycle. By fusing a high-speed generative engine (FLUX) with a live mathematical sandbox (REPLOracle), Uchi doesn't just predict the next word; it writes code, tests its own assumptions, and **discovers** the truth from first principles.
 
-### 5 Non-Negotiables for v0.3.0
-1. **Compounding Effect:** Knowledge is persistently stored and compounding across instances.
-2. **Simplified Public API:** Accessible universally via our SDK, TUI, and REST API.
-3. **General Reasoning & Reasoning Chains:** FLUX proposes complex chains of thought; Uchi verifies every link.
-4. **Human-Readable I/O:** Clear, transparent, and interpretable input and output.
-5. **OOD Generalization:** FLUX provides the raw LLM capability to tackle Out-Of-Distribution tasks.
+### The 5 Axioms of v0.3.0
+1. **Empirical Grounding:** Text fails; reality doesn't. Uchi uses Test-Driven Development (TDD) to prove its logic in a live Python sandbox before speaking.
+2. **The Swarm Synthesizer:** Complex problems are autonomously shattered into atomic concepts, solved in parallel by independent agents, and stitched back together.
+3. **Multi-Agent Debate:** Subjective claims are violently cross-examined by a "Devil's Advocate" instance to prune hallucinations.
+4. **Human-Readable Interface:** Complex mathematical discovery is seamlessly translated back into warm, conversational English.
+5. **The Compounding Effect:** Every verified script is permanently saved as an autonomous tool. Uchi never has to solve the same problem twice.
 
 ```python
 from uchi import Uchi
