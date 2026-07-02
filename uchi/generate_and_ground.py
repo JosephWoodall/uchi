@@ -131,15 +131,38 @@ class GenerateAndGround:
                 
         return _ABSTAIN
 
-    def _candidates(self, question, evidence, ev_texts, callback=None, n_votes=3):
+    def _candidates(self, question, evidence, ev_texts, callback=None, n_votes=3, max_reflections=2):
         # 1. the pluggable proposer (FLUX / LLM / decoder) — the strong generator
         if self.proposer is not None:
-            if callback: callback("thinking", f"FLUX Proposer generating {n_votes} plural candidates...")
-            try:
-                for _ in range(n_votes):
-                    yield self.proposer.propose(question, ev_texts)
-            except Exception:
-                pass
+            for i in range(n_votes):
+                if callback: callback("thinking", f"FLUX Proposer generating candidate {i+1}/{n_votes}...")
+                current_prompt = question
+                
+                for attempt in range(max_reflections + 1):
+                    try:
+                        candidate = self.proposer.propose(current_prompt, ev_texts)
+                    except Exception:
+                        candidate = ""
+                        
+                    if not candidate or not candidate.strip():
+                        break
+                        
+                    # Actor-Critic Reflection: Verify immediately to provide feedback
+                    if self.oracle.is_grounded(candidate, ev_texts):
+                        yield candidate
+                        break  # Passed! Move to next plural vote
+                    else:
+                        if callback: callback("prune", f"Candidate {i+1} ungrounded (Attempt {attempt+1}).")
+                        if attempt < max_reflections:
+                            if callback: callback("thinking", "Providing feedback to FLUX for self-reflection...")
+                            critique = (f"\n\n[Feedback]: Your previous answer '{candidate}' was rejected by the FactCheckOracle "
+                                        f"because it hallucinates information not present in the context. "
+                                        f"Please reflect on your mistake and generate a new, concise answer using ONLY the provided context.")
+                            current_prompt += critique
+                        else:
+                            # Out of retries, yield the failed candidate so it can be formally pruned by the outer loop
+                            yield candidate
+
         elif self.decoder is not None:                # backward-compat path
             if callback: callback("thinking", "Decoder generating candidate...")
             try:

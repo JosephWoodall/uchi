@@ -55,51 +55,44 @@ DEFAULTS = dict(
 # Synthetic CoT Data Generator (for proof of concept)
 # ==============================================================================
 def generate_synthetic_cot(num_examples):
-    """Generates simple math/logic problems with step-by-step reasoning."""
-    examples = []
+    """Generates reasoning traces using Uchi's simulation engine and memory modules."""
+    from uchi.simulation_engine import LifelongSimulationEngine
+    from uchi.procedural_memory import REPLOracle
+    from uchi.episodic_memory import EpisodicMemory
     
-    # 1. Simple algebra
-    for _ in range(num_examples // 2):
-        a = random.randint(2, 10)
-        b = random.randint(1, 20)
-        c = random.randint(10, 100)
-        # ax + b = c  => ax = c - b => x = (c - b) / a
-        # Let's make it yield integer x
-        x = random.randint(1, 15)
-        c = a * x + b
+    examples = []
+    oracle = REPLOracle()
+    engine = LifelongSimulationEngine(n_instances=3, context_length=2)
+    episodic = EpisodicMemory(max_history=5)
+    
+    # Generate reasoning traces for code execution and logic
+    for i in range(num_examples):
+        a = random.randint(2, 50)
+        b = random.randint(2, 50)
+        q = f"Calculate the sum of {a} and {b} and return the result."
         
-        q = f"Solve for x: {a}x + {b} = {c}"
-        think = (
-            f"1. The equation is {a}x + {b} = {c}.\n"
-            f"2. First, subtract {b} from both sides: {a}x = {c} - {b}.\n"
-            f"3. Calculate the right side: {c} - {b} = {c - b}.\n"
-            f"4. Now we have {a}x = {c - b}.\n"
-            f"5. Divide both sides by {a}: x = {c - b} / {a}.\n"
-            f"6. Calculate the final value: x = {x}."
-        )
-        ans = f"x = {x}"
-        examples.append({"question": q, "think": think, "answer": ans})
-
-    # 2. Word problems
-    for _ in range(num_examples // 2):
-        items = ["apples", "books", "coins", "marbles"]
-        item = random.choice(items)
-        start = random.randint(10, 50)
-        give = random.randint(2, 8)
-        buy = random.randint(5, 15)
+        # Simulate procedural reasoning
+        code_str = f"def solve():\n    return {a} + {b}\nresult = solve()"
+        success, conf = oracle.verify(code_str)
         
-        q = f"John has {start} {item}. He gives {give} to his friend, and then buys {buy} more. How many {item} does John have now?"
-        think = (
-            f"1. John starts with {start} {item}.\n"
-            f"2. He gives away {give}, so we subtract {give}: {start} - {give} = {start - give}.\n"
-            f"3. John now has {start - give} {item}.\n"
-            f"4. He buys {buy} more, so we add {buy}: {start - give} + {buy} = {start - give + buy}.\n"
-            f"5. John has a total of {start - give + buy} {item}."
-        )
-        ans = f"John has {start - give + buy} {item}."
-        examples.append({"question": q, "think": think, "answer": ans})
+        if success:
+            think = (
+                f"1. To solve this, I need to add {a} and {b}.\n"
+                f"2. I will write a Python function: {code_str.replace(chr(10), ' ')}\n"
+                f"3. Verifying with REPL Oracle... Success.\n"
+                f"4. The result of {a} + {b} is {a + b}."
+            )
+            ans = f"The result is {a + b}."
+            
+            # Vote on sequence logic (simulating engine voting)
+            engine.stream_parallel([[q, think], [q, "failed path"]])
+            pred, vote_conf = engine.vote_plural()
+            
+            # Log in episodic memory
+            episodic.add_interaction(q, ans)
+            
+            examples.append({"question": q, "think": think, "answer": ans})
 
-    random.shuffle(examples)
     return examples
 
 

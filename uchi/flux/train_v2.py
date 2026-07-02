@@ -77,13 +77,32 @@ def get_lr(step, max_steps, warmup_steps, lr_max, lr_min):
 # Data pipeline
 # ==============================================================================
 def make_data_iter(tokenizer, split, micro_batch_size, max_seq_len, seed=42):
-    """Stream TinyStories, encode on the fly, yield (input, target) batches.
+    """Stream a mixture of OpenWebText, Wikipedia, and Code, encode on the fly, yield (input, target) batches.
 
     Uses a shuffle buffer so re-iterations don't replay in the same order.
     """
-    from datasets import load_dataset
+    from datasets import load_dataset, interleave_datasets
 
-    dataset = load_dataset("Skylion007/openwebtext", split=split, streaming=True)
+    # Load OpenWebText
+    ds_owt = load_dataset("Skylion007/openwebtext", split=split, streaming=True)
+    
+    # Load Wikipedia (general knowledge for MMLU)
+    # Note: Wikipedia only has a 'train' split by default, so if split is 'validation', fallback to openwebtext for it.
+    if split == "train":
+        ds_wiki = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+        # Load The Stack Smol (Python for SWE-bench)
+        ds_code = load_dataset("bigcode/the-stack-smol", data_dir="data/python", split="train", streaming=True)
+        
+        # We need to map all to a common 'text' field. OpenWebText and Wikipedia already have 'text'.
+        # The Stack has 'content'.
+        def map_code(x): return {"text": x["content"]}
+        ds_code = ds_code.map(map_code)
+        
+        # Interleave: 50% OpenWebText, 25% Wikipedia, 25% Code
+        dataset = interleave_datasets([ds_owt, ds_wiki, ds_code], probabilities=[0.5, 0.25, 0.25], seed=seed)
+    else:
+        dataset = ds_owt
+
     # Shuffle buffer gives pseudo-random order on each pass
     dataset = dataset.shuffle(seed=seed, buffer_size=10_000)
     pad_id = tokenizer.pad_token_id
