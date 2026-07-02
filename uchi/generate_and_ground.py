@@ -110,27 +110,34 @@ class GenerateAndGround:
                 pass
 
         # Try synthesis (neural decoder) first, then fall back to the grounded
-        # extractive answer. Emit the first candidate the oracle finds grounded;
-        # abstain only if neither is supported. Synthesis when it works,
-        # grounded extraction otherwise — never confabulate.
+        # extractive answer. We evaluate ALL candidates to perform Plural Voting (Simulation Engine).
+        valid_candidates = []
         for candidate in self._candidates(question, evidence, ev_texts, callback=callback):
             if not candidate or not candidate.strip():
                 continue
             if callback: callback("thinking", f"Oracle verifying candidate: '{candidate[:40]}...'")
             if self.oracle.is_grounded(candidate, ev_texts):
-                if callback: callback("reinforce", "Verified! Grounded claim accepted.")
-                return candidate
+                valid_candidates.append(candidate)
             else:
                 if callback: callback("prune", "Ungrounded claim pruned by Oracle.")
                 
+        if valid_candidates:
+            # Plural vote: pick the most frequent verified candidate (Self-Consistency)
+            from collections import Counter
+            counts = Counter(valid_candidates)
+            best_candidate = counts.most_common(1)[0][0]
+            if callback: callback("reinforce", f"Plural vote winner! Grounded claim accepted (votes: {counts[best_candidate]}).")
+            return best_candidate
+                
         return _ABSTAIN
 
-    def _candidates(self, question, evidence, ev_texts, callback=None):
+    def _candidates(self, question, evidence, ev_texts, callback=None, n_votes=3):
         # 1. the pluggable proposer (FLUX / LLM / decoder) — the strong generator
         if self.proposer is not None:
-            if callback: callback("thinking", "FLUX Proposer generating candidate...")
+            if callback: callback("thinking", f"FLUX Proposer generating {n_votes} plural candidates...")
             try:
-                yield self.proposer.propose(question, ev_texts)
+                for _ in range(n_votes):
+                    yield self.proposer.propose(question, ev_texts)
             except Exception:
                 pass
         elif self.decoder is not None:                # backward-compat path

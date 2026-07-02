@@ -135,6 +135,14 @@ class Uchi:
             proposer=self.proposer
         )
         
+        # New: Episodic Memory
+        from .episodic_memory import EpisodicMemory
+        self.episodic_memory = EpisodicMemory()
+        
+        # New: Procedural Memory (Autonomous Tool Creation)
+        from .procedural_memory import ProceduralMemory
+        self.procedural_memory = ProceduralMemory(proposer=self.proposer)
+        
         # Skill Registry (legacy adapter)
         self.skills = SkillRegistry(self)
 
@@ -183,7 +191,14 @@ class Uchi:
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, callback=callback) or ""
         else:
-            raw = self.pipeline.answer(question, callback=callback) or ""
+            # Inject episodic memory context
+            context = self.episodic_memory.get_context_string(n_turns=3)
+            augmented_question = f"{context}\n\nQuestion: {question}" if context else question
+            
+            raw = self.pipeline.answer(augmented_question, callback=callback) or ""
+            
+            # Save to episodic memory
+            self.episodic_memory.add_interaction(question, raw)
             
         return normalize(raw)
 
@@ -290,49 +305,10 @@ class Uchi:
                 stacklevel=4,
             )
 
-    def stream(self, tokens: list) -> None:
-        """Feed a raw token sequence directly into the trie (low-level path)."""
-        self._router.stream(tokens)
-
-    # ── sequence predictor ────────────────────────────────────────────────────
-
-    @property
-    def predictor(self):
-        """The SequenceGenerator powering the brain's trie.
-
-        Full sklearn-compatible sequence API:
-
-            u.predictor.fit(sequences)              # train on list of sequences
-            u.predictor.partial_fit(sequences)      # online update
-            u.predictor.generate(n=10, seed=["x"]) # sample n tokens
-            u.predictor.train(sequence)             # single online sequence
-            u.predictor.predict_next(context)       # argmax next token
-            u.predictor.score(sequence)             # bits-per-token
-        """
-        return self._router.predictor
-
-    # ── config ────────────────────────────────────────────────────────────────
-
-    @property
-    def web_search(self) -> bool:
-        """Whether autonomous web sourcing is enabled on knowledge gaps."""
-        return getattr(self._router, "web_search_enabled", False)
-
-    @web_search.setter
-    def web_search(self, value: bool) -> None:
-        self._router.web_search_enabled = bool(value)
-
     # ── persistence ───────────────────────────────────────────────────────────
 
     def save(self, path: str) -> None:
-        """Persist the current brain state to *path*."""
+        """Persist the current semantic index state to *path*."""
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with gzip.open(path, "wb") as f:
-            pickle.dump(self._router, f)
-
-    # ── escape hatch ─────────────────────────────────────────────────────────
-
-    @property
-    def router(self):
-        """Direct access to the underlying OmniRouter for advanced use."""
-        return self._router
+            pickle.dump(self.index, f)
