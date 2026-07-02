@@ -114,33 +114,50 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
     except Exception as e:
         print(f"    [!] Dolly load failed: {e}")
 
-    # ── OpenHermes 2.5 (instruct/reasoning) ──
-    print("  Loading OpenHermes 2.5 ...")
+    # ── CodeAlpaca (Code Instruction Following) ──
+    print("  Loading CodeAlpaca_20K ...")
     try:
-        ds = load_dataset("teknium/OpenHermes-2.5", split="train", streaming=True)
+        ds = load_dataset("HuggingFaceH4/CodeAlpaca_20K", split="train")
         for row in ds:
-            # OpenHermes has 'conversations' which is a list of {'from': '...', 'value': '...'}
-            conversations = row.get("conversations", [])
-            # We want to extract a simple instruction and a response
-            instruction = ""
-            response = ""
-            for turn in conversations:
-                if turn.get("from") == "human" and not instruction:
-                    instruction = turn.get("value", "").strip()
-                elif turn.get("from") == "gpt" and instruction and not response:
-                    response = turn.get("value", "").strip()
-            
+            instruction = row.get("prompt", "").strip()
+            response = row.get("completion", "").strip()
             if instruction and response:
                 examples.append({
                     "question": instruction[:800],
                     "context": "",
                     "answer": response[:800],
                 })
-            
-            if len(examples) >= max_examples:
+            if len(examples) >= max_examples * 1.5:  # Over-sample to balance
                 break
     except Exception as e:
-        print(f"    [!] OpenHermes load failed: {e}")
+        print(f"    [!] CodeAlpaca load failed: {e}")
+
+    # ── MMLU (Academic Factual QA) ──
+    print("  Loading MMLU ...")
+    try:
+        ds = load_dataset("cais/mmlu", "all", split="test", streaming=True) # Use test split for quick access
+        count = 0
+        for row in ds:
+            q = row["question"]
+            choices = row["choices"]
+            ans_idx = row["answer"]
+            
+            question = f"{q}\nOptions:\n"
+            for idx, c in enumerate(choices):
+                question += f"{['A','B','C','D'][idx]}. {c}\n"
+                
+            answer = f"The correct answer is {['A','B','C','D'][ans_idx]}: {choices[ans_idx]}"
+            
+            examples.append({
+                "question": question[:800],
+                "context": "",
+                "answer": answer[:800],
+            })
+            count += 1
+            if count >= 5000:  # Take a slice of MMLU
+                break
+    except Exception as e:
+        print(f"    [!] MMLU load failed: {e}")
 
     random.shuffle(examples)
     examples = examples[:max_examples]
