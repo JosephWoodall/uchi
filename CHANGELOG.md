@@ -2,6 +2,41 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
+## [0.4.0] - Generate-and-Ground: the trustworthy, no-LLM assistant
+
+A ground-up rearchitecture. Uchi's identity shifts from "universal sequence
+predictor" to **a grounded assistant that verifies factual answers and abstains
+rather than confabulate**.
+
+### New architecture
+- **Generate-and-Ground** (`uchi/generate_and_ground.py`): the primary `ask()`
+  path — retrieve evidence → generate a candidate → fact-check → emit or abstain.
+- **Semantic retrieval index** (`uchi/retrieval.py`): skip-gram-embedding passage
+  index over the brain; hybrid lexical+semantic ranking. Built into the brain by
+  `incremental_builder`; fed live by `learn()`.
+- **Fact-check oracle** (`uchi/oracle.py`) + **answerability gate**
+  (`uchi/answerability.py`, a from-scratch classifier trained on SQuAD 2.0): the
+  honesty gates. The system abstains when the evidence doesn't answer the question.
+- **Neural answer decoder** (`uchi/decoder.py`): small from-scratch BiGRU seq2seq,
+  retrieval-conditioned. Rough but grounded; the oracle catches its fabrications.
+- **Three-lane router** (`uchi/intent_router.py`): `ask()` routes to skills,
+  free-generated social chit-chat (`uchi/conversation.py` — no oracle, no facts to
+  verify), or grounded factual answering.
+- **Trustworthiness benchmark** (`benchmarks/trustworthiness.py`): SQuAD 2.0
+  coverage / precision@answered / honest-abstention / hallucination-rate. Replaces
+  MMLU/ARC/SWE accuracy as the primary scorecard.
+
+### Removed (superseded "Family C" machinery, ~9k lines)
+- `convergent_engine`, `tree_search_engine`, `grpo`, `grpo_offline_trainer`,
+  `calibration`, `grammar_mask`, `omni_evaluator`, and the SSM QA-discrimination /
+  GRPO training path from `omni_router`. Trie-based text generation (garbled) is
+  retired in favour of the neural decoder. The trie is kept as recall + grounding.
+
+### Honest status
+- Trustworthy on clearly-unknown queries (abstains) and social turns. **Not yet
+  trustworthy on hard open-domain QA** — retrieval+generation precision (~57%) is
+  the current ceiling and the primary roadmap item.
+
 ## [0.2.0] - The Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
 
 ### Routing & Pipeline

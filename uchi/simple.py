@@ -173,9 +173,10 @@ class Uchi:
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self._router.skills.dispatch(cmd, extra_args, data_kwargs=data) or ""
         else:
-            # Natural-language questions route through Generate-and-Ground
-            # (retrieve → generate → fact-check → emit/abstain). Never confabulates.
-            raw = self._router.answer(question) or ""
+            # Natural language flows through the 3-lane router: skill commands,
+            # free-generated social chit-chat, or grounded Generate-and-Ground for
+            # factual questions (grounded answer or honest abstention).
+            raw = self._router.chat(question) or ""
         return normalize(raw)
 
     def ingest(self, path: str, col: Optional[str] = None) -> "Uchi":

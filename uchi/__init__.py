@@ -27,7 +27,7 @@ TabularPredictor / TabularRegressor / TimeSeriesClassifier all support
 partial_fit() for online / incremental learning.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .predictor  import UniversalPredictor
 from .forest     import PredictorForest

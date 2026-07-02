@@ -5,424 +5,145 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP). One Import. Everything Compounds.
+## Uchi — a grounded assistant that would rather say "I don't know" than make something up
 
-Uchi v0.3.0 dramatically simplifies the public API and introduces a compounding mechanism that makes every analysis result immediately learnable by every other instance.
+Uchi is a from-scratch, **no-LLM** assistant built around a single principle:
+**generate an answer, then verify it against what the brain actually knows — and
+abstain when it can't.** It answers factual questions from grounded evidence,
+talks to you conversationally, runs analytical skills on your data, and — by
+design — never *tries* to confabulate.
 
 ```python
 from uchi import Uchi
 
 u = Uchi()
-u.learn("Q3 revenue was $4.2M, up 23% YoY.")
-report = u.ask("/classify", X=X_train, y=churn_labels)
+u.learn("The Eiffel Tower is a wrought-iron lattice tower in Paris, France.")
 
-u2 = Uchi()
-u2.learn(report)                          # analysis becomes knowledge
-u2.ask("What does this imply for Q4?")   # knowledge compounds
+u.ask("What is the Eiffel Tower?")
+# → "The Eiffel Tower is a wrought-iron lattice tower in Paris, France."
+
+u.ask("Who was the 14th president of Mars?")
+# → "I don't have grounded knowledge to answer that."   (it abstains — it doesn't know)
+
+u.ask("hi there!")
+# → a conversational reply (no facts asserted, so nothing to verify)
 ```
 
-`ask()` always returns a string. `learn()` always accepts a string. This is the compounding guarantee — outputs of one instance are directly learnable by another, with no serialisation, schema, or orchestration layer required.
+`ask()` always returns a string; `learn()` always accepts one. That's the
+**compounding contract** — the output of one instance is directly learnable by
+another, no schema or glue:
 
-Under the hood, Uchi is an **Omni-modal Deterministic Universal Sequence Predictor (ODUSP)** — it ingests text, tabular data, time series, and code simultaneously without any neural weights or pre-training. A trainable SSM confidence signal (GRPO), persistent vector memory, intent-based routing, and a full analytical skill layer are all accessible through the single `Uchi` entry point. No LLM dependency at any layer.
-
-
-> [!NOTE]
-> Please see `docs/` for the complete Algorithmic Walkthrough, ODUSP vs LLM Benchmarks, and full API references.
-
----
-
-> [!NOTE]
-> **Comprehensive Documentation & API Reference**
->
-> For interactive examples, API documentation, and to see the newest capabilities (including online Math Learning, Vector Retrievals, and the Simulation Engine), please see our full documentation website.
->
-> **[Read the Full Documentation →](https://github.com/JosephWoodall/uchi/tree/main/docs)**
+```python
+report = u.ask("/classify", X=X_train, y=churn_labels)   # analytical skill → string
+u2 = Uchi(); u2.learn(report)                             # analysis becomes knowledge
+u2.ask("What accuracy did we get?")                       # grounded in that report
+```
 
 ---
 
-## Installation
+## How it works — three lanes behind `ask()`
+
+Every natural-language message is routed into one of three lanes:
+
+| Lane | Handler | Behaviour |
+|------|---------|-----------|
+| **factual** | **Generate-and-Ground** | retrieve evidence → generate a candidate → **fact-check it** → emit if grounded, else **abstain** |
+| **social** | conversation engine | free-generated chit-chat — asserts no facts, so it needs no verification |
+| **skill** | `SkillRegistry` | `/classify`, `/regress`, `/forecast`, `/anomaly`, code, … |
+
+The key design decision: **only the factual lane is verified.** Social replies
+have no ground truth to violate, so a small dialogue model generates them freely —
+that's how Uchi has a personality without weakening its honesty on facts.
+
+### The factual lane in detail
+
+```
+question → retrieve relevant knowledge (semantic index over the brain)
+         → generate a candidate answer (small from-scratch decoder, or extractive)
+         → FACT-CHECK: is the answer supported by the evidence, and does the
+           evidence actually answer the question? (answerability gate)
+         → emit if grounded, otherwise ABSTAIN — never confabulate
+```
+
+Generalisation comes from generating over retrieved knowledge; honesty comes from
+verifying before speaking.
+
+---
+
+## Trustworthiness — measured, not claimed
+
+Uchi is evaluated on **what it is for** — being trustworthy — not on LLM-style raw
+reasoning. The headline benchmark is **SQuAD 2.0** (answerable + *unanswerable*
+questions), measured with `benchmarks/trustworthiness.py`:
+
+- **coverage** — % of answerable questions it chooses to answer
+- **precision @ answered** — when it speaks, is it right
+- **honest-abstention** — % of unanswerable questions it correctly declines
+- **hallucination-rate** — % of emitted answers that are wrong (the number that matters)
+
+The abstention threshold trades coverage for caution:
+
+| answerability threshold | coverage | precision@answered | honest-abstention | hallucination |
+|---|---|---|---|---|
+| 0.0 (grounding only) | 99% | 56% | 2% | 73% |
+| 0.6 (default) | ~85% | 58% | ~35% | ~69% |
+| 0.95 (cautious) | 57% | 57% | 53% | 69% |
+
+**Honest limitations (read these):**
+- The current **retrieval + generation precision is ~57%** — even on a genuinely
+  answerable question, the system finds the right *topic* but not always the exact
+  answer-bearing passage, and the from-scratch decoder is weak. This is the real
+  ceiling, and it means **Uchi is not yet trustworthy on hard open-domain QA** — it
+  hallucinates on a meaningful fraction of what it answers.
+- It **is** reliably honest on *clearly-unknown* queries (it abstains) and on
+  *social* turns (nothing to verify).
+- The conversational and answer decoders are small and trained from scratch (no
+  LLM) — grammatical but rough, not fluent.
+
+Improving retrieval (a trained dense retriever) and the generator is the primary
+roadmap item; the architecture is built so those upgrades slot in behind a stable
+interface.
+
+---
+
+## Skills
+
+Analytical capabilities are exposed as skills, invokable directly:
+
+```python
+u.ask("/classify",  X=X_train, y=y_train)
+u.ask("/regress",   X=X_train, y=y_train)
+u.ask("/anomaly",   X=sensor_matrix)
+u.ask("/forecast",  X=time_series, steps=20)
+```
+
+A separate, self-verifying **program-synthesis reasoner** (grid-transformation
+tasks, ARC-AGI style) demonstrates provable multi-step reasoning: it searches for a
+program that reproduces the demonstration examples, applies it, and abstains if
+none is found.
+
+## Install
 
 ```bash
-pip install -e ".[all]"
+pip install uchi_python
 ```
 
-On first launch, Uchi runs a one-time bootstrap (Python stdlib patterns + Wikipedia facts) and saves the result to `brain.uchi`. Subsequent launches are instant.
-
-## Quickstart
-
-Uchi has two entry points that share the same `brain.uchi` — every interaction in either one improves the other.
-
-### 1. Terminal UI (TUI)
-
-```bash
-uchi                        # launch interactive chat
-uchi --preload data.txt     # pre-train with a file before chatting
-uchi --brain /path/to/brain.uchi   # use a specific brain file
-```
-
-Inside the TUI:
-
-| Command | Description |
-|---|---|
-| Just type | Chat with Uchi — it learns from every turn |
-| `/load <file>` | Stream any file into the knowledge base |
-| `/save` | Force-save the current brain state to disk |
-| `Ctrl+S` | Save brain |
-| `Ctrl+C` | Save and quit |
-
-Uchi gives positive/negative feedback signals to improve itself — type "good", "correct", "yes" to reinforce a response, or "wrong", "bad", "no" to prune it.
-
-### 2. REST API
-
-```bash
-uvicorn uchi.api_server:app --host 0.0.0.0 --port 8000
-```
-
-**POST /chat**
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "what is the capital of France?"}'
-# {"reply": "paris", "entropy": 3.2}
-```
-
-**GET /metrics**
-```bash
-curl http://localhost:8000/metrics
-# {"status": "online", "memory_records": 1024, "mode": "deterministic"}
-```
-
-**GET /debug/walk**
-```bash
-curl http://localhost:8000/debug/walk
-# Returns trie walk data from the last prediction (depth, contributions, similarity)
-```
-
-### 3. Python API
-
-`Uchi` is the single entry point for the entire library. One import, everything discoverable.
+## Ingesting knowledge
 
 ```python
-from uchi import Uchi
+u = Uchi().ingest("docs/").ingest("data.csv").ingest("report.pdf")
 ```
 
-#### Knowledge & Q&A
-
-```python
-u = Uchi()                                          # loads pre-packaged brain
-u.learn("The boiling point of water is 100°C.")    # stream text into the trie
-u.ask("At what temperature does water boil?")      # → "100°C"
-```
-
-#### File and directory ingestion
-
-```python
-u.ingest("knowledge_base/")           # walk directory — all .txt .md .py .json .csv
-u.ingest("report.pdf")                # PDF extraction (pip install pdfminer.six)
-u.ingest("events.csv", col="notes")   # specific CSV column
-
-# chainable — returns self
-u = Uchi().ingest("docs/").ingest("data.csv").ingest("handbook.md")
-u.save("expanded_brain.uchi")
-```
-
-#### Analytical tools via slash commands
-
-Every tool returns a plain string you can immediately feed into another instance.
-
-```python
-result = u.ask("/classify", X=X_train, y=y_train)  # classification report
-result = u.ask("/regress",  X=X_train, y=y_train)  # regression report
-result = u.ask("/anomaly",  X=sensor_matrix)        # anomaly detection report
-result = u.ask("/forecast", X=time_series, steps=20)# forecast report
-result = u.ask("/tsclassify", X=windows, y=labels) # time series classification
-```
-
-The same commands accept a CSV path when called from the TUI:
-
-```
-/classify data.csv --label target_col
-/anomaly  sensors.csv
-```
-
-#### Compounding analysis — the core value
-
-`ask()` always returns a string. `learn()` always accepts a string.
-This means any analysis result is directly learnable by any other `Uchi` instance —
-no serialisation, no schema, no glue code required.
-
-```python
-# Step 1: domain-specific analysis
-u_sales = Uchi()
-u_sales.learn(open("quarterly_report.txt").read())
-classification_report = u_sales.ask("/classify", X=X_sales, y=churn_labels)
-forecast_report       = u_sales.ask("/forecast", X=revenue_series, steps=4)
-
-# Step 2: a strategy instance learns from the analysis
-u_strategy = Uchi()
-u_strategy.learn(classification_report)    # churn analysis becomes knowledge
-u_strategy.learn(forecast_report)          # forecast becomes knowledge
-u_strategy.ask("What do these results imply for Q4 headcount planning?")
-
-# Step 3: chain as many instances as you like
-u_exec = Uchi()
-u_exec.learn(u_strategy.ask("Summarise the risk factors in one paragraph."))
-u_exec.ask("What should the board prioritise this quarter?")
-```
-
-Every `ask()` result is a first-class learnable artifact. Pipelines of `Uchi`
-instances compound knowledge without any external orchestration layer.
-
-#### Sequence generation
-
-```python
-u.predictor.fit([["the", "cat", "sat"], ["the", "dog", "ran"]])
-u.predictor.generate(n=5, seed=["the"])     # → ["the", "cat", "sat", ...]
-u.predictor.train(["a", "b", "c", "d"])    # online single-sequence update
-u.predictor.predict_next(["b", "c"])       # → "d"
-```
-
-#### Configuration & persistence
-
-```python
-u.web_search = True    # enable live web sourcing on knowledge gaps
-u.web_search = False   # back to fully offline (default)
-u.save("my_brain.uchi")
-
-u2 = Uchi(brain_path="my_brain.uchi")     # load a saved brain
-u2.ask("What did we discuss earlier?")
-```
-
-#### Escape hatch for power users
-
-```python
-u.router      # direct access to OmniRouter
-u.router.predictor   # the SequenceGenerator (trie + sampling controls)
-```
-
-#### Complete public API reference
-
-```python
-from uchi import Uchi
-import numpy as np
-
-# ── Construction ──────────────────────────────────────────────────────────────
-u = Uchi()                              # pre-packaged brain, fully offline
-u = Uchi(brain_path="my_brain.uchi")   # load a custom brain
-u = Uchi(web_search=True)              # enable live web sourcing at startup
-
-# ── Knowledge ingestion ───────────────────────────────────────────────────────
-u.learn("Paris is the capital of France.")          # any string
-u.learn(open("company_handbook.md").read())         # large documents
-
-u.ingest("knowledge_base/")                        # walk directory (txt/md/py/json/csv)
-u.ingest("quarterly_report.pdf")                   # PDF (pip install pdfminer.six)
-u.ingest("events.csv", col="description")          # specific CSV column
-u = Uchi().ingest("docs/").ingest("data.csv")      # chainable — returns self
-
-# ── Natural-language Q&A ──────────────────────────────────────────────────────
-answer = u.ask("What is the capital of France?")   # → "paris"
-summary = u.ask("Summarise the risk factors in one paragraph.")
-
-# ── Analytical tools (slash commands) ────────────────────────────────────────
-X = np.random.randn(200, 4)
-y = (X[:, 0] > 0).astype(str)
-
-clf_report  = u.ask("/classify",  X=X, y=y)           # classification report  ─┐
-reg_report  = u.ask("/regress",   X=X, y=X[:, 0])     # regression report       │
-anml_report = u.ask("/anomaly",   X=X)                 # anomaly detection        │ all return str
-fore_report = u.ask("/forecast",  X=X, steps=10)       # multi-step forecast      │
-ts_report   = u.ask("/tsclassify",X=X, y=y)            # time-series classify    ─┘
-
-# ── Compounding — the core value ──────────────────────────────────────────────
-# ask() always returns str. learn() always accepts str.
-# Analysis from one instance becomes knowledge for another.
-u2 = Uchi()
-u2.learn(clf_report)          # classification report → knowledge
-u2.learn(fore_report)         # forecast → knowledge
-insight = u2.ask("What do these patterns imply for next quarter?")
-
-u3 = Uchi()
-u3.learn(insight)
-u3.ask("Write a two-sentence board summary.")
-
-# ── Sequence predictor ────────────────────────────────────────────────────────
-u.predictor.fit([["a", "b", "c"], ["b", "c", "d"]])   # batch train
-u.predictor.train(["x", "y", "z"])                     # single sequence update
-u.predictor.partial_fit([["p", "q", "r"]])             # incremental update
-u.predictor.predict_next(["a", "b"])                   # → "c"
-u.predictor.generate(n=10, seed=["a"])                 # sample continuations
-u.predictor.generate_text(n=50, sep=" ")               # generate joined string
-u.predictor.score(["a", "b", "c"])                     # bits/token
-
-# ── Raw token stream (low-level) ──────────────────────────────────────────────
-u.stream(["<|user|>", "hello", "<|assistant|>", "world"])
-
-# ── Configuration ────────────────────────────────────────────────────────────
-u.web_search          # → False  (check current state)
-u.web_search = True   # enable live web sourcing
-u.web_search = False  # back to offline
-
-# ── Persistence ──────────────────────────────────────────────────────────────
-u.save("my_brain.uchi")
-u2 = Uchi(brain_path="my_brain.uchi")
-
-# ── Escape hatch for advanced use ────────────────────────────────────────────
-u.router               # underlying OmniRouter
-u.router.predictor     # SequenceGenerator
-u.router.skills        # SkillRegistry
-```
-
-### 4. Growing the Brain
-
-Uchi ships with a pre-packaged general knowledge brain. To expand it with your own data, use `ingest()` from the Python API or `/bootstrap` from the REST API — then save the result.
-
-```python
-from uchi import Uchi
-
-# Load the packaged brain and expand it with your own knowledge
-u = Uchi()
-u.ingest("knowledge_base/")              # walk a directory (txt/md/py/json/csv)
-u.ingest("quarterly_report.pdf")         # PDF (pip install pdfminer.six)
-u.ingest("events.csv", col="notes")      # specific CSV column
-u.save("expanded_brain.uchi")
-
-# Or chain it all in one line
-Uchi().ingest("docs/").ingest("data.csv").save("my_brain.uchi")
-```
-
-From the REST API:
-```bash
-# Ingest raw text
-curl -X POST http://localhost:8000/bootstrap \
-  -H "Content-Type: application/json" \
-  -d '{"text": "The boiling point of water is 100°C at sea level."}'
-
-# Ingest a URL
-curl -X POST http://localhost:8000/bootstrap \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://en.wikipedia.org/wiki/Python_(programming_language)"}'
-```
-
-From the TUI, use `/load <file>` or `/learn <url|text>` to ingest content mid-session. The brain auto-saves on exit.
-
-## Benchmarks
-
-Uchi is a **deterministic sequence predictor**, not a language model. Its benchmarks measure properties that LLMs cannot demonstrate — not perplexity or few-shot accuracy, but whether a system that has *seen* a fact will *deterministically recall* it, resist overwriting it under noise, and stay fast as its knowledge base scales.
-
-Run yourself with:
-```bash
-python benchmarks/run_benchmarks.py
-python benchmarks/run_benchmarks.py --mini       # fast CI pass (10 facts)
-python benchmarks/run_benchmarks.py --wipe       # clean rebuild before benchmarking
-```
-
-Results are written to `eval_metrics.json` and this table is updated automatically.
-
----
-
-### Pre-load Recall — **80.0%** (40 / 50)
-
-50 factual Q&A pairs (geography, science, history, Python/CS) are streamed directly into the trie as `<|user|> question <|assistant|> answer` sequences. Web search is then disabled and the system is asked each question cold. A pass requires the expected answer to appear in the reply.
-
-This is Uchi's core capability claim: *if you teach it something, it recalls it exactly*. The 80% figure reflects the current pipeline correctness across a diverse fact set including multi-word answers, numeric values, and chemical symbols. Failures are vocabulary edge cases (the tokenizer normalises "au" → `gold.n.03`, which is semantically correct but fails substring match).
-
----
-
-### Zero Catastrophic Forgetting — **100.0%** (10 / 10, after 1 000 noise facts)
-
-10 anchor facts are streamed first. Then 1 000 unrelated noise facts are streamed on top. The 10 anchors are then re-tested. 100% means not a single anchor fact was displaced.
-
-LLMs trained on a new document lose previously learned facts proportional to the dataset shift (catastrophic interference). Uchi uses a prefix trie: new paths are inserted without touching existing ones. Recall of any fact streamed in the past is bounded only by trie depth, not by how much has been streamed since.
-
----
-
-### Latency vs. Brain Size — flat O(depth)
-
-| Brain size | Latency |
-|---|---|
-| 10 facts | 10 666 ms |
-| 100 facts | 2 568 ms |
-| 500 facts | 2 282 ms |
-| 1 000 facts | 2 597 ms |
-
-Latency is measured as wall-clock time for a single chat() turn on a pre-loaded fact, with web search disabled.
-
-The pattern is deliberate: latency at 1 000 facts is the same as at 100 facts because trie lookup is O(depth), not O(vocabulary size). The 10-fact spike reflects cold-start overhead (first MCTS warmup before the loop has converged). At scale this overhead amortises to near-zero.
-
----
-
-### Code Completion — **5.0%** (1 / 20 HumanEval)
-
-20 HumanEval function stubs (`def factorial(n):` etc.) are streamed as training pairs, then recalled. Scored by `TieredCodeOracle`: the generated body must parse as valid Python (`ast.parse`) and contain expected keywords.
-
-5% on HumanEval after single-pass training is the *floor*, not the ceiling. Uchi is not pre-trained on code corpora. The 1/20 passing case demonstrates that the code recall pipeline is functional end-to-end. Higher scores require either multiple training passes or the `brain_code.uchi` specialist loaded alongside the base brain.
-
----
-
-### Inference Latency — **2 333 ms** per turn
-
-Single chat turn on a pre-loaded fact, web search off. This exercises the full pipeline: tokenise → trie peek → pre-flight classify → greedy bypass → CoherenceOracle → detokenise. Down from 17 762 ms in the pre-optimization baseline (7.6× faster) after dynamic MCTS budget scaling: factual queries now exit via O(1) greedy bypass instead of running the full 20-rollout MCTS loop.
-
----
-
-### RAM Footprint — **1 374 MB** resident
-
-Measured after loading `brain.uchi` and running the recall stream. Dominated by the trie node store (~1.1 GB for the pre-built brain) plus the SSM embedding table (~180 MB at d_model=256). The trie is the canonical in-memory database; no separate vector store is required for retrieval.
-
----
-
-### Hallucination Rate — **0%**
-
-Uchi cannot fabricate tokens that are not in its trie. Every generated token is drawn from the empirical distribution at a trie node that was built from real streamed data. The CoherenceOracle enforces a secondary check (overlap, trigram repetition, SSM gate) and returns `[Uncertain]` rather than confabulate when no valid candidate passes. Zero hallucination is a structural guarantee, not a tuned behaviour.
-
----
-
-### MMLU — **27.0%** accuracy (200 questions, 57 subjects)
-
-Standard academic language-understanding benchmark across 57 domains. Uchi beat the random baseline (25%) for the first time in v0.3.0 — a genuine above-chance signal from a deterministic system with no neural pre-training. No-parse rate dropped from 79% (baseline) to 12%, meaning 88% of responses are now well-formed A/B/C/D answers.
-
-| Metric | Baseline (pre-v0.3.0) | v0.3.0 | Delta |
-|---|---|---|---|
-| Accuracy | 6.0% (12/200) | **27.0% (54/200)** | +21.0 pp |
-| No-parse rate | 79.0% | **12.0% (24/200)** | −67.0 pp |
-| Random baseline | 25.0% | 25.0% | — |
-
-Best subjects: `formal_logic` 100%, `high_school_statistics` 100%, `electrical_engineering` 100%, `college_medicine` 75%
-
-Run: `python benchmarks/mmlu_benchmark.py --sample 200`
-
----
-
-### SWE-bench (proxy) — **62%** code generation rate
-
-Uchi's response to real GitHub issue→patch prompts across 10 popular Python repositories. Code generation rate (producing *any* code block) went from 0% to 62%. Syntax correctness is still 0% — the trie has code path knowledge but not yet enough density to complete valid function bodies end-to-end.
-
-| Metric | Baseline (pre-v0.3.0) | v0.3.0 | Delta |
-|---|---|---|---|
-| Code generation rate | 0.0% | **62.0% (31/50)** | +62.0 pp |
-| Composite proxy score | 0.000 | **0.156** | +0.156 |
-| Syntax valid rate | 0.0% | 0.0% | — |
-
-Best repos: `astropy` 0.250, `pytest` 0.190, `sympy` 0.168, `matplotlib` 0.168
-
-Run: `python benchmarks/swebench_benchmark.py --sample 50`
-
----
-
-<!-- BENCHMARK_TABLE_START -->
-| Metric | Score | Notes |
-|---|---|---|
-| **MMLU Accuracy** | **27.0%** (n=200, 57 subjects) | Beats 25% random baseline; no-parse rate 12% (was 79%) |
-| **SWE-bench Code Generation** | **62.0%** (31/50 instances) | Composite proxy 0.156; syntax validity still 0% |
-| **Pre-load Recall** | **80.0%** (n=50) | Stream N facts → immediately test recall; measures deterministic memory |
-| **Zero Catastrophic Forgetting** | **100.0%** after 1000 noise facts | Anchor facts recalled correctly after 1000 distractors streamed on top |
-| **Latency vs. Brain Size** | 10facts→10666ms  100facts→2568ms  500facts→2282ms  1000facts→2597ms | Proves O(depth) trie lookup: latency stays flat as brain grows |
-| **Code Completion** | **5.0%** (n=20 HumanEval) | Python function stub → body; scored by syntax + keyword validity |
-| **Inference Latency** | **2333.1 ms** | Single turn on a pre-loaded fact, web search disabled |
-| **RAM Footprint** | **1374.2 MB** | Resident set after brain load + recall stream |
-| **Hallucination Rate** | **0%** | Strict trie boundary enforcement |
-<!-- BENCHMARK_TABLE_END -->
-
-
-
+Growing the brain expands what Uchi can *answer* (more retrievable knowledge → less
+abstention). It does not, by itself, improve reasoning — that is a separate axis.
+
+## What Uchi is (and isn't)
+
+- **Is:** a no-LLM, from-scratch assistant that grounds factual answers, abstains
+  honestly, converses, runs analytical skills, and compounds knowledge across
+  instances.
+- **Isn't:** an LLM. It is smaller, deterministic where possible, auditable, and
+  needs no GPU at inference — and, today, is materially less capable than a large
+  model on open-domain QA. Its bet is **trustworthiness over raw capability**.
+
+See `docs/` for architecture details and the full API reference.

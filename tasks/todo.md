@@ -76,9 +76,29 @@ test suite before Phase B deletions.
 - [ ] Add TriviaQA/SimpleQA + TruthfulQA + retrieval recall@k. ARC-AGI separate.
 - [ ] Update skills/benchmark scripts. Retire MMLU/ARC-Challenge/SWE as primary.
 
-## Phase D — Docs/API/SDK/TUI overhaul (on the real integrated system)
-- [ ] README, docs/, public `Uchi` API, SDK, TUI, CHANGELOG, version bump.
-- [ ] Honest scope: trustworthy factual answering + abstention; skills; reasoning skill.
+## Phase B2/conversationalist — DONE
+- [x] 3-lane router (`uchi/intent_router.py`): skill / social / factual.
+- [x] `uchi/conversation.py` ConversationEngine + `data/chat_decoder.pt` (trained on
+      empathetic_dialogues — DailyDialog gone from HF; decoder is ROUGH + emotion-biased,
+      the honest from-scratch ceiling). Social = free-gen, NO oracle (no facts to lie about).
+- [x] Wired: Uchi.ask() → router.chat() 3-lane. Factual→Generate-and-Ground, social→chat,
+      skill→SkillRegistry. 150 tests green.
+- Family B (tabular/timeseries/forest/…) remain callable via SkillRegistry slash-commands;
+  deeper plugin refactor (frontmatter→callable) is a noted future improvement.
+
+## Phase D — Docs — DONE (core)
+- [x] README rewritten HONESTLY: Generate-and-Ground + 3-lane routing, real
+      trustworthiness KPI table, retrieval/generation ~57% limitation stated
+      plainly, no false "0% hallucination" claim.
+- [x] version → 0.4.0 (pyproject + __init__); CHANGELOG 0.4.0 entry (new
+      architecture + removed Family C + honest status).
+- [ ] FOLLOW-UP (larger, not blocking): full docs/ rewrite, TUI copy, SDK API-ref,
+      skill plugin refactor (frontmatter→callable), and the #1 roadmap item —
+      RETRIEVAL + GENERATION precision (dense retriever + stronger decoder).
+
+## OVERHAUL COMPLETE (A–D). 150 tests green. Uchi 0.4.0 = grounded, no-LLM,
+## abstains-not-confabulates on facts, converses socially, runs skills. Honest
+## ceiling: retrieval/generation precision (~57%) → next roadmap item.
 
 ## Guardrails
 - audit-and-confirm before deleting (granted). Verify after each phase. Keep tests green.

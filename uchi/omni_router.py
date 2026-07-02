@@ -136,7 +136,7 @@ class OmniRouter:
         skip = {
             "_background_started", "_daemon_procs",
             "specialist_pool", "skills", "code_engine",
-            "_decoder", "_answerability",   # torch model caches; lazy-reloaded
+            "_decoder", "_answerability", "_chat_decoder", "_conversation",
         }
         return {k: v for k, v in self.__dict__.items() if k not in skip}
 
@@ -458,25 +458,59 @@ class OmniRouter:
         
         return predicted
 
+    def _load_chat_decoder(self):
+        """Lazy-load the dialogue decoder from data/chat_decoder.pt (or None)."""
+        import os
+        if getattr(self, "_chat_decoder", "unset") == "unset":
+            self._chat_decoder = None
+            path = os.path.join(os.path.dirname(__file__), "data", "chat_decoder.pt")
+            try:
+                from uchi.decoder import NeuralDecoder
+                if NeuralDecoder.exists(path):
+                    self._chat_decoder = NeuralDecoder.load(path)
+            except Exception:
+                self._chat_decoder = None
+        return self._chat_decoder
+
+    def _get_conversation(self):
+        """Lazy conversation engine (chit-chat), or None if no chat decoder."""
+        if getattr(self, "_conversation", None) is None:
+            dec = self._load_chat_decoder()
+            if dec is None:
+                return None
+            from uchi.conversation import ConversationEngine
+            self._conversation = ConversationEngine(dec)
+        return self._conversation
+
     def chat(self, message: str, callback=None) -> str:
-        """Conversational entry. Analytical/code intents route to skills; every
-        other natural-language question goes through Generate-and-Ground
-        (retrieve → generate → fact-check → emit/abstain)."""
-        intent_key = self.procedural.get_intent_key(message)
-        _ANALYTICAL = {"classify", "regress", "anomaly", "forecast", "tsclassify"}
-        if intent_key in _ANALYTICAL:
-            import os as _os
-            from uchi.data_loader import find_path as _fp
-            data_path = _fp(message)
-            if data_path and _os.path.exists(data_path):
-                return self.skills.dispatch(intent_key, message, callback)
-            if data_path:
-                return f"File not found: {data_path}"
-            return (f"I can run {intent_key} analysis. Please provide a data file "
-                    f"path, e.g.:\n  /{intent_key} yourdata.csv")
-        if intent_key == "code":
-            concepts = self.tokenizer.tokenize(message.split(), is_inference=True)
-            return self._handle_code_intent(message, message.split(), concepts, callback)
+        """Three-lane entry. SKILL → analytical/code skills; SOCIAL → free-generated
+        chit-chat (no oracle — nothing to hallucinate); FACTUAL → Generate-and-Ground
+        (retrieve → verify → answer/abstain). Only the factual lane must be grounded."""
+        from uchi.intent_router import classify_intent
+        lane = classify_intent(message, self.procedural)
+
+        if lane == "skill":
+            intent_key = self.procedural.get_intent_key(message)
+            _ANALYTICAL = {"classify", "regress", "anomaly", "forecast", "tsclassify"}
+            if intent_key in _ANALYTICAL:
+                import os as _os
+                from uchi.data_loader import find_path as _fp
+                data_path = _fp(message)
+                if data_path and _os.path.exists(data_path):
+                    return self.skills.dispatch(intent_key, message, callback)
+                if data_path:
+                    return f"File not found: {data_path}"
+                return (f"I can run {intent_key} analysis. Please provide a data file "
+                        f"path, e.g.:\n  /{intent_key} yourdata.csv")
+            if intent_key == "code":
+                concepts = self.tokenizer.tokenize(message.split(), is_inference=True)
+                return self._handle_code_intent(message, message.split(), concepts, callback)
+
+        if lane == "social":
+            conv = self._get_conversation()
+            if conv is not None:
+                return conv.reply(message)
+
         return self.answer(message, callback=callback)
 
     def _handle_code_intent(self, message: str, query_tokens: list, concepts: list, callback) -> str:
