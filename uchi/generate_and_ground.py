@@ -47,11 +47,14 @@ class GenerateAndGround:
     """
 
     def __init__(self, index: SemanticIndex, oracle: Optional[FactCheckOracle] = None,
-                 decoder=None, predictor=None, answerability=None,
+                 decoder=None, proposer=None, predictor=None, answerability=None,
                  retrieve_k: int = 10, min_sim: float = 0.5,
                  min_known: float = 0.5, min_answerable: float = 0.5) -> None:
         self.index = index
         self.oracle = oracle or FactCheckOracle()
+        # `proposer` is the pluggable generator (decoder / FLUX / LLM); `decoder`
+        # is kept for backward compatibility and wrapped if no proposer is given.
+        self.proposer = proposer
         self.decoder = decoder
         self.predictor = predictor
         self.answerability = answerability     # AnswerabilityChecker or None
@@ -113,11 +116,18 @@ class GenerateAndGround:
         return _ABSTAIN
 
     def _candidates(self, question, evidence, ev_texts):
-        if self.decoder is not None:
+        # 1. the pluggable proposer (FLUX / LLM / decoder) — the strong generator
+        if self.proposer is not None:
+            try:
+                yield self.proposer.propose(question, ev_texts)
+            except Exception:
+                pass
+        elif self.decoder is not None:                # backward-compat path
             try:
                 yield self.decoder.generate(question, ev_texts)
             except Exception:
                 pass
+        # 2. always keep the grounded extractive answer as a verified fallback
         yield self._extractive(question, evidence)
 
     def answer_verbose(self, question: str) -> dict:

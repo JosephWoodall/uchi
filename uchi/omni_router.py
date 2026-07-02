@@ -137,7 +137,7 @@ class OmniRouter:
             "_background_started", "_daemon_procs",
             "specialist_pool", "skills", "code_engine",
             "_decoder", "_answerability", "_chat_decoder", "_conversation",
-            "_reasoner",
+            "_reasoner", "_proposer",
         }
         return {k: v for k, v in self.__dict__.items() if k not in skip}
 
@@ -185,17 +185,33 @@ class OmniRouter:
                 self._answerability = None
         return self._answerability
 
+    def _load_proposer(self):
+        """The pluggable generator gated by Uchi's verifier: FLUX if available,
+        else the from-scratch decoder, else None (extractive fallback)."""
+        import os
+        if getattr(self, "_proposer", "unset") == "unset":
+            self._proposer = None
+            try:
+                from uchi.proposer import load_proposer
+                path = os.path.join(os.path.dirname(__file__), "data", "decoder.pt")
+                self._proposer = load_proposer(prefer="flux", decoder_path=path)
+            except Exception:
+                self._proposer = None
+        return self._proposer
+
     def answer(self, question: str, callback=None) -> str:
-        """Primary endpoint: retrieve → answerability-gate → generate →
+        """Primary endpoint: retrieve → answerability-gate → PROPOSE →
         fact-check → emit / abstain.
 
-        Never confabulates: with no grounded knowledge (empty/absent index) or
-        when the evidence does not actually answer the question, it abstains.
+        The proposer (FLUX / LLM / decoder) generates; Uchi's oracle + answerability
+        gate verify. Never confabulates: with no grounded knowledge, or when the
+        evidence does not answer the question, or when the proposal isn't supported,
+        it abstains.
         """
         idx = getattr(self, "_semantic_index", None)
         if idx is not None and len(idx) > 0:
             from uchi.generate_and_ground import GenerateAndGround
-            gg = GenerateAndGround(idx, decoder=self._load_decoder(),
+            gg = GenerateAndGround(idx, proposer=self._load_proposer(),
                                    answerability=self._load_answerability(),
                                    predictor=self.predictor, min_answerable=0.6)
             return gg.answer(question)
@@ -497,7 +513,10 @@ class OmniRouter:
                 self.code_engine.generate_code  # probe availability
             except Exception:
                 _code_fn = None
-            self._reasoner = ReasoningEngine(answer_fn=self.answer, code_fn=_code_fn)
+            prop = self._load_proposer()
+            planner = prop.plan if prop is not None else None
+            self._reasoner = ReasoningEngine(answer_fn=self.answer, code_fn=_code_fn,
+                                             planner=planner)
         return self._reasoner
 
     def _looks_multistep(self, message: str) -> bool:

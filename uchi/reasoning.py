@@ -100,9 +100,13 @@ class ReasoningEngine:
 
     def __init__(self, answer_fn: Callable[[str], str],
                  code_fn: Optional[Callable[[str], str]] = None,
+                 planner: Optional[Callable[[str], Optional[list]]] = None,
                  max_steps: int = 6) -> None:
         self.answer_fn = answer_fn
         self.code_fn = code_fn
+        # A smart proposer (FLUX / LLM) can decompose far better than the
+        # heuristic — pass `proposer.plan` here; None → heuristic decomposer.
+        self.planner = planner
         self.max_steps = max_steps
 
     # ── the loop ────────────────────────────────────────────────────────────────
@@ -124,6 +128,15 @@ class ReasoningEngine:
 
     # ── planner (heuristic; the hard open problem) ─────────────────────────────
     def _decompose(self, question: str) -> list[str]:
+        # Prefer a learned planner (the proposer) — the honest fix for the hard
+        # part; fall back to the heuristic split.
+        if self.planner is not None:
+            try:
+                plan = self.planner(question)
+                if plan and len(plan) > 1:
+                    return plan[: self.max_steps]
+            except Exception:
+                pass
         parts = [p.strip(" .") for p in _SPLIT.split(question) if p.strip(" .")]
         # numbered plans: "1. do X 2. do Y"
         if len(parts) == 1:
