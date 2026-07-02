@@ -134,6 +134,8 @@ class GenerateAndGround:
             if callback: callback("thinking", "Text grounding failed. Initiating Empirical Synthesis Loop...")
             empirical_prompt = (f"The answer to the following question cannot be found in the text. "
                                 f"Write a complete, standalone Python function named 'run' that takes no arguments and calculates or discovers the answer. "
+                                f"CRITICAL: You MUST include at least 3 `assert` statements at the bottom of your script to test "
+                                f"the logic and constraints of the problem before returning the final result.\n"
                                 f"Question: {question}\n\nOnly output the Python code.")
                                 
             from .procedural_memory import REPLOracle
@@ -202,8 +204,30 @@ class GenerateAndGround:
                         
                     # Actor-Critic Reflection: Verify immediately to provide feedback
                     if self.oracle.is_grounded(candidate, ev_texts):
-                        yield candidate
-                        break  # Passed! Move to next plural vote
+                        # Cross-Examination Flywheel (Multi-Agent Debate)
+                        if callback: callback("thinking", "Candidate passed Oracle. Initiating Cross-Examination (Devil's Advocate)...")
+                        advocate_prompt = (
+                            f"Review the following question and proposed answer. Act as a ruthless Devil's Advocate. "
+                            f"Identify any logical flaws, assumptions, or gaps in reasoning. "
+                            f"If the answer is perfectly logical and sound, output EXACTLY 'PASS'. "
+                            f"Otherwise, output your critique.\n\n"
+                            f"Question: {current_prompt}\nAnswer: {candidate}"
+                        )
+                        try:
+                            critique = self.proposer.propose(advocate_prompt, [])
+                        except Exception:
+                            critique = "PASS"
+                            
+                        if "PASS" in critique or not critique.strip():
+                            yield candidate
+                            break  # Passed debate!
+                        else:
+                            if callback: callback("prune", "Devil's Advocate found a logical flaw. Forcing reflection...")
+                            if attempt < max_reflections:
+                                if callback: callback("thinking", "Feeding Devil's Advocate critique back to FLUX...")
+                                current_prompt += f"\n\n[Devil's Advocate Critique]: {critique}\nReflect on this critique and generate a logically flawless answer."
+                            else:
+                                yield candidate
                     else:
                         if callback: callback("prune", f"Candidate {i+1} ungrounded (Attempt {attempt+1}).")
                         if attempt < max_reflections:
