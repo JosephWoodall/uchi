@@ -36,14 +36,9 @@ class Proposer(Protocol):
         """Generate a candidate answer conditioned on the retrieved evidence."""
         ...
 
-    def plan(self, question: str) -> Optional[list[str]]:
-        """Decompose a complex question into verifiable sub-steps, or None."""
+    def plan(self, question: str) -> Optional[str]:
+        """Decompose a complex question into a structural DSL Grid, or None."""
         ...
-
-
-def _parse_numbered(text: str) -> list[str]:
-    steps = re.split(r"(?:^|\n)\s*\d+[.)]\s+", text)
-    return [s.strip() for s in steps if s.strip()][:8]
 
 
 # ── adapter 1: the from-scratch decoder (baseline, ships today) ────────────────
@@ -57,7 +52,7 @@ class DecoderProposer:
     def propose(self, question: str, evidence: list[str]) -> str:
         return self._d.generate(question, evidence)
 
-    def plan(self, question: str) -> Optional[list[str]]:
+    def plan(self, question: str) -> Optional[str]:
         return None                      # the small decoder can't decompose
 
     @classmethod
@@ -87,8 +82,9 @@ class FluxProposer:
     _ANSWER = ("Context:\n{ctx}\n\nUsing ONLY the context above, answer the question "
                "concisely. If the context does not answer it, say you don't know.\n"
                "Q: {q}\nA:")
-    _PLAN = ("Break the question into a short numbered list of simple, checkable "
-             "sub-steps (each a lookup or a calculation).\nQuestion: {q}\nSteps:\n1. ")
+    _PLAN = ("Before answering the question, map out the variables, entities, and logical constraints "
+             "into a structured DSL Grid (e.g., State(A)=1, Relation(A,B)=True). Use this grid as a scratchpad.\n\n"
+             "Question: {q}\nDSL Grid:\n")
 
     def __init__(self, generate_fn, max_answer_tokens: int = 64, max_plan_tokens: int = 128) -> None:
         self._gen = generate_fn
@@ -103,11 +99,9 @@ class FluxProposer:
         except Exception:
             return ""
 
-    def plan(self, question: str) -> Optional[list[str]]:
+    def plan(self, question: str) -> Optional[str]:
         try:
-            raw = "1. " + (self._gen(self._PLAN.format(q=question), self.max_plan_tokens) or "")
-            steps = _parse_numbered(raw)
-            return steps if len(steps) > 1 else None
+            return (self._gen(self._PLAN.format(q=question), self.max_plan_tokens) or "").strip()
         except Exception:
             return None
 

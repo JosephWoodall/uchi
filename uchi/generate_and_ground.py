@@ -134,9 +134,17 @@ class GenerateAndGround:
     def _candidates(self, question, evidence, ev_texts, callback=None, n_votes=3, max_reflections=2):
         # 1. the pluggable proposer (FLUX / LLM / decoder) — the strong generator
         if self.proposer is not None:
+            # DSL Grid Planning Phase
+            if callback: callback("thinking", "FLUX Proposer building DSL Grid (Scratchpad)...")
+            dsl_grid = self.proposer.plan(question)
+            base_prompt = question
+            if dsl_grid:
+                if callback: callback("thinking", f"DSL Grid established:\n{dsl_grid[:60]}...")
+                base_prompt = f"Problem context (DSL Grid):\n{dsl_grid}\n\nQuestion: {question}"
+
             for i in range(n_votes):
-                if callback: callback("thinking", f"FLUX Proposer generating candidate {i+1}/{n_votes}...")
-                current_prompt = question
+                if callback: callback("thinking", f"FLUX Proposer generating candidate {i+1}/{n_votes} using DSL Grid...")
+                current_prompt = base_prompt
                 
                 for attempt in range(max_reflections + 1):
                     try:
