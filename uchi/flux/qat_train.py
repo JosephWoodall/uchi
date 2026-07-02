@@ -25,7 +25,7 @@ import re
 import torch
 import torch.nn as nn
 from contextlib import nullcontext
-from .train_v2 import make_data_iter, chunked_cross_entropy, save_checkpoint, evaluate
+from .train_v2 import make_data_iter, make_bin_iter, chunked_cross_entropy, save_checkpoint, evaluate
 
 # ==============================================================================
 # Defaults
@@ -59,6 +59,9 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--seq-len", type=int, default=DEFAULTS["max_seq_len"])
     parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument("--data-bin", type=str, default=None,
+                        help="Pre-tokenized train .bin (GPU-bound fast path)")
+    parser.add_argument("--val-bin", type=str, default=None)
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -106,9 +109,14 @@ def main():
     model.to(device)
 
     # ── Load data ──
-    print("  Loading TinyStories data for QAT recovery...")
-    train_iter = make_data_iter(tokenizer, "train", args.micro_batch, args.seq_len)
-    val_iter = make_data_iter(tokenizer, "validation", args.micro_batch, args.seq_len, seed=42)
+    if args.data_bin:
+        print(f"  Using pre-tokenized bin (GPU-bound): {args.data_bin}")
+        train_iter = make_bin_iter(args.data_bin, args.micro_batch, args.seq_len, seed=42)
+        val_iter = make_bin_iter(args.val_bin or args.data_bin, args.micro_batch, args.seq_len, seed=0)
+    else:
+        print("  Loading streaming data for QAT recovery...")
+        train_iter = make_data_iter(tokenizer, "train", args.micro_batch, args.seq_len)
+        val_iter = make_data_iter(tokenizer, "validation", args.micro_batch, args.seq_len, seed=42)
 
     # ── Training setup ──
     eff_batch = args.micro_batch * args.grad_accum

@@ -442,7 +442,9 @@ def main():
             t1 = time.time()
             dt = t1 - t0
             t0 = t1
-            tok_per_sec = (eff_batch * seq_len) / max(dt, 1e-6)
+            # dt spans log_interval optimizer steps, so count all their tokens
+            # (prior code divided ONE step's tokens by ten steps' time → 10× low).
+            tok_per_sec = (eff_batch * seq_len * DEFAULTS["log_interval"]) / max(dt, 1e-6)
             ppl = math.exp(min(ema_loss, 20.0))
             print(
                 f"  Step {step:05d}/{max_steps} │ "

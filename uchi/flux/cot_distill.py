@@ -52,98 +52,48 @@ DEFAULTS = dict(
 
 
 # ==============================================================================
-# RLEF Data Generator (Reinforcement Learning from Environment Feedback)
+# Real chain-of-thought teacher traces (static distillation)
 # ==============================================================================
 def generate_synthetic_cot(num_examples):
-    """Generates reasoning traces by capturing the full Uchi.ask() internal monologue.
-    This simulates Rejection Sampling / RLEF by capturing the Swarm, TDD, and Debate flywheels."""
-    from uchi import Uchi
-    
+    """Load REAL worked-solution CoT traces from GSM8K (static teacher distillation).
+
+    A ~116M model cannot bootstrap reasoning by self-play / rejection-sampling its
+    own outputs — that is the cold start. The reliable fix is to imitate real
+    teacher traces. So the <|think|> content here is the ACTUAL GSM8K reasoning
+    steps (calculator annotations like <<48/2=24>> stripped for human-readable
+    I/O), and the answer is the final result. No self-generation from an untrained
+    model, and no fabricated 'flywheel monologue' — training on invented
+    [THINKING]: Swarm... text would teach FLUX to narrate a process it never runs.
+    """
+    from datasets import load_dataset
+
     examples = []
-    
-    print("  Booting Uchi to generate RLEF traces from full flywheels...")
     try:
-        uchi_instance = Uchi()
+        gsm8k = load_dataset("openai/gsm8k", "main", split="train", streaming=True)
     except Exception as e:
-        print(f"  [!] Failed to boot Uchi for synthetic generation: {e}")
+        print(f"  [!] Failed to load GSM8K teacher traces: {e}")
         return []
 
-    # A seed of highly complex questions designed to trigger Swarms, REPLs, and Debates
-    seed_questions = [
-        "What is the sum of 52 and 89, and what is that number multiplied by 2? Break this down into concepts.",
-        "Calculate the 12th number in the Fibonacci sequence. Write a script.",
-        "If a train travels 60mph for 2.5 hours, how far does it go? Use the swarm to verify.",
-        "Design a JSON schema for a user profile, verify it is valid json, and count the keys."
-    ]
-    
-    # Cap synthetic generation for local iteration speed
-    num_examples = min(num_examples, 500)
-    
-    for i in range(num_examples):
-        q = random.choice(seed_questions)
-        # Add random entropy to trigger dynamic grounding
-        if "52" in q: q = q.replace("52", str(random.randint(10, 100))).replace("89", str(random.randint(10, 100)))
-        if "12th" in q: q = q.replace("12th", f"{random.randint(5, 20)}th")
-        if "60mph" in q: q = q.replace("60mph", f"{random.randint(40, 120)}mph")
-
-        monologue = []
-        def capture_callback(event_type, msg):
-            monologue.append(f"[{event_type.upper()}]: {msg}")
-
-        # The REPL Environment / Swarm / Debate runs under the hood and we capture the entire thought trace
-        try:
-            ans = uchi_instance.ask(q, callback=capture_callback)
-            
-            if ans and not ans.startswith("I am sorry") and len(monologue) > 0:
-                think = "\n".join(monologue)
-                examples.append({"question": q, "think": think, "answer": ans})
-        except Exception:
+    for row in gsm8k:
+        q = row["question"].strip()
+        raw = row["answer"]
+        if "####" not in raw:
             continue
+        steps, final = raw.split("####")
+        # Strip GSM8K's <<...>> calculator markup so the reasoning reads cleanly.
+        think = re.sub(r"<<[^>]*>>", "", steps).strip()
+        final = final.strip()
+        if not think or not final:
+            continue
+        examples.append({
+            "question": q,
+            "think": think,
+            "answer": f"The answer is {final}.",
+        })
+        if len(examples) >= num_examples:
+            break
 
-    # FIX: The RL Cold Start Problem. If the base model fails to generate traces, 
-    # we inject massive amounts of Teacher Forcing fallback traces to bootstrap the learning loop.
-    if len(examples) < 100:
-        print("  [!] RL Cold Start detected. Downloading GSM8K for massive Teacher Forcing injection...")
-        try:
-            from datasets import load_dataset
-            gsm8k = load_dataset("openai/gsm8k", "main", split="train", streaming=True)
-            count = 0
-            for row in gsm8k:
-                q = row["question"]
-                raw_ans = row["answer"]
-                
-                # GSM8K format: reasoning steps... #### final_answer
-                if "####" in raw_ans:
-                    steps, final = raw_ans.split("####")
-                    steps = steps.strip()
-                    final = final.strip()
-                    
-                    # Synthesize our proprietary flywheel monologue
-                    think = (
-                        "[THINKING]: Swarm Orchestrator decomposing problem into sub-concepts...\n"
-                        "[THINKING]: Executing empirical hypothesis in REPL...\n"
-                    )
-                    
-                    for step in steps.split(". "):
-                        if step.strip():
-                            think += f"[THINKING]: {step.strip()}.\n"
-                            
-                    think += (
-                        "[THINKING]: Candidate passed Oracle. Initiating Cross-Examination (Devil's Advocate)...\n"
-                        "[REINFORCE]: Empirical hypothesis succeeded! Translating to human-readable format..."
-                    )
-                    
-                    ans = f"The result is {final}."
-                    
-                    examples.append({"question": q, "think": think, "answer": ans})
-                    count += 1
-                    
-                if count >= 2000:  # 2,000 massive traces to kickstart the flywheel!
-                    break
-            print(f"  [+] Injected {count} massive Teacher reasoning traces.")
-        except Exception as e:
-            print(f"  [!] Failed to load GSM8K: {e}")
-
+    print(f"  [+] Loaded {len(examples)} real GSM8K teacher CoT traces.")
     return examples
 
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
@@ -345,46 +295,48 @@ def main():
     for epoch in range(args.epochs):
         batch_iter = make_batches(train_data, args.micro_batch, shuffle=True)
         epoch_loss = 0.0
-        n_epoch_batches = 0
+        n_micro = 0
+        accum = 0
+        optimizer.zero_grad(set_to_none=True)   # zero ONCE before accumulating
 
         for X, Y, mask in batch_iter:
-            lr = get_lr(global_step)
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr
-
             X, Y, mask = X.to(device), Y.to(device), mask.to(device)
-            optimizer.zero_grad(set_to_none=True)
-            loss_accum = 0.0
 
-            # Here we actually don't loop microbatches explicitly in the code structure
-            # but we can simulate grad accum by stepping optimizer every grad_accum steps.
-            # For simplicity, we just do it per batch if eff_batch isn't perfectly structured
-            # But let's fix the grad accum loop:
-            
             with amp_ctx():
                 logits, _ = model(X)
+                # scale by grad_accum so summed grads average across micro-batches
                 loss = masked_chunked_ce_loss(logits, Y, mask) / args.grad_accum
 
-            scaler.scale(loss).backward()
-            loss_accum = loss.item() * args.grad_accum
+            scaler.scale(loss).backward()          # accumulate (no zero here)
+            epoch_loss += loss.item() * args.grad_accum
+            n_micro += 1
+            accum += 1
 
-            # We need to accumulate gradients over grad_accum_steps.
-            # To fix the loop structure properly:
-            # We will just step every grad_accum_steps.
-            
-            if (n_epoch_batches + 1) % args.grad_accum == 0 or (n_epoch_batches + 1) == len(train_data) // args.micro_batch:
+            # Step only after grad_accum micro-batches have accumulated.
+            if accum == args.grad_accum:
+                lr = get_lr(global_step)
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), DEFAULTS["grad_clip"])
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
+                accum = 0
                 global_step += 1
+                if global_step % 10 == 0:
+                    print(f"  Step {global_step:05d} │ Loss: {epoch_loss / n_micro:.4f} │ LR: {lr:.2e}")
 
-            epoch_loss += loss_accum
-            n_epoch_batches += 1
+        # Flush any partial accumulation at epoch end so no gradients are wasted.
+        if accum > 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), DEFAULTS["grad_clip"])
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            global_step += 1
 
-            if global_step % 10 == 0 and n_epoch_batches % args.grad_accum == 0:
-                print(f"  Step {global_step:05d} │ Loss: {loss_accum:.4f} │ LR: {lr:.2e}")
+        n_epoch_batches = n_micro
 
         val_loss = validate()
         ppl = math.exp(min(val_loss, 20.0))

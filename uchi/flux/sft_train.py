@@ -132,38 +132,12 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
     except Exception as e:
         print(f"    [!] CodeAlpaca load failed: {e}")
 
-    # ── MMLU (Academic Factual QA) ──
-    print("  Loading MMLU ...")
-    try:
-        ds = load_dataset("cais/mmlu", "all", split="test", streaming=True) # Use test split for quick access
-        count = 0
-        for row in ds:
-            q = row["question"]
-            choices = row["choices"]
-            ans_idx = row["answer"]
-            
-            question = f"{q}\nOptions:\n"
-            for idx, c in enumerate(choices):
-                question += f"{['A','B','C','D'][idx]}. {c}\n"
-                
-            answer_text = choices[ans_idx]
-            answer = f"The correct answer is {['A','B','C','D'][ans_idx]}: {answer_text}"
-            
-            # FIX: The 30M model cannot memorize Wikipedia. 
-            # We inject the answer into the <|context|> block during SFT to train it 
-            # on Reading Comprehension (RAG) rather than rote memorization.
-            context = f"Relevant Fact: Regarding the question '{q}', research indicates that {answer_text}."
-            
-            examples.append({
-                "question": question[:800],
-                "context": context[:800],
-                "answer": answer[:800],
-            })
-            count += 1
-            if count >= 5000:  # Take a slice of MMLU
-                break
-    except Exception as e:
-        print(f"    [!] MMLU load failed: {e}")
+    # NOTE: A prior MMLU block was removed here. It injected the gold answer into
+    # the <|context|> ("research indicates that {answer_text}") and trained the
+    # model to copy it — a shortcut that does not exist at eval time, so it taught
+    # nothing transferable. It also loaded cais/mmlu's TEST split, contaminating a
+    # benchmark we report. SFT teaches grounded answering-from-context (SQuAD),
+    # instruction-following (Dolly), and code (CodeAlpaca) — no benchmark leakage.
 
     random.shuffle(examples)
     examples = examples[:max_examples]
@@ -283,6 +257,7 @@ def main():
         raise RuntimeError("Could not match architecture to checkpoint")
 
     model.set_quantization(False)
+    model._gradient_checkpointing = True   # seq_len 512 on 12GB VRAM needs this
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  Base:         {args.base}")
     print(f"  Architecture: d_model={d_model}, n_layers={n_layers}, d_state={d_state}")
