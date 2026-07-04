@@ -20,7 +20,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Fetch premade-brain weights via Git LFS
         # Only uchi/data/*.pt goes into the wheel (package-data) —
