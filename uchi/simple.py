@@ -109,8 +109,9 @@ class Uchi:
         self.web_search_enabled = web_search
         
         # New Uchi Architecture Components
-        embed_path = os.path.join(os.path.dirname(__file__), "data", "embeddings.pt")
-        if os.path.exists(embed_path):
+        from .brain_fetch import get_embeddings_path
+        embed_path = get_embeddings_path()   # bundled -> cached -> download -> None
+        if embed_path is not None:
             self.index = SemanticIndex.from_embeddings_file(embed_path)
         else:
             import numpy as np

@@ -66,7 +66,11 @@ where   = ["."]
 include = ["uchi*"]
 
 [tool.setuptools.package-data]
-uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/*.pt", "data/.gitkeep"]
+# NOT data/*.pt: embeddings.pt alone is 221MB, over PyPI's hard 100MB-per-file
+# upload cap (confirmed: publish failed with "File too large"). The premade
+# brain is fetched on first Uchi() construction instead — see
+# uchi/brain_fetch.py — and cached locally, so `pip install` stays small.
+uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/.gitkeep"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

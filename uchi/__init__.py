@@ -12,7 +12,7 @@ Quick start
     print(u.ask("What was Q3 revenue growth?"))
 """
 
-__version__ = "0.4.0"
+__version__ = "0.3.0"
 
 from .simple import Uchi
 

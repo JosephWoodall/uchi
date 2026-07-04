@@ -183,23 +183,36 @@ See `docs/` for architecture details and the full API reference.
 
 ## Training FLUX Yourself
 
-`pip install` (and a `git clone`) already ships a trained FLUX checkpoint —
-you don't need to train anything to use Uchi. This section is for anyone who
-wants to retrain FLUX, fine-tune it further, or reproduce the results.
+A trained FLUX checkpoint and the premade general-knowledge brain already
+exist — you don't need to train anything to use Uchi. This section is for
+anyone who wants to retrain FLUX, fine-tune it further, or reproduce the
+results.
 
 ### Use the shipped weights (default, no training)
+
+**`pip install uchi_python`** gets you the code plus the premade
+general-knowledge brain (`uchi/data/embeddings.pt`, ~221MB) — it's fetched
+automatically and cached (`~/.uchi/data/`) the first time you construct
+`Uchi()`, so the wheel itself stays small (PyPI hard-caps uploads at 100MB per
+file, well under the brain's size). After the first run it's local, no
+further network needed. The FLUX proposer isn't bundled with `pip install`
+(same size constraint) — without it, `Uchi()` still works, just with the
+proposer degraded to grounded extraction / honest abstention only.
+
+**`git clone` + Git LFS** gets you everything as real files, no download step
+at construction time:
 
 ```bash
 git clone https://github.com/JosephWoodall/uchi.git
 cd uchi
 git lfs install        # once per machine — see below if you don't have Git LFS
 git lfs pull           # fetches uchi/flux/checkpoints/flux_best.pt (~450MB)
-                        # and uchi/data/embeddings.pt (~230MB, the premade brain)
+                        # and uchi/data/embeddings.pt (~221MB, the premade brain)
 ```
 
 ```python
 from uchi import Uchi
-u = Uchi()   # loads uchi/flux/checkpoints/flux_best.pt automatically
+u = Uchi()   # loads uchi/flux/checkpoints/flux_best.pt + the premade brain automatically
 ```
 
 If you don't have Git LFS: `sudo apt install git-lfs` (Debian/Ubuntu),
