@@ -60,7 +60,13 @@ class SemanticIndex:
         also a valid file: the index is then ready for `learn()` to populate.
         """
         import torch
-        d = torch.load(path, map_location="cpu")
+        # weights_only=False: our own shipped, trusted package data (not an
+        # externally-sourced file). PyTorch 2.6+ defaults torch.load to the
+        # restricted unpickler, which — depending on the numpy/pickle version
+        # that wrote the file versus the one loading it — can reject this dict
+        # of plain Python + tensor data even though nothing unsafe is in it
+        # (confirmed in CI on a different environment than this was built in).
+        d = torch.load(path, map_location="cpu", weights_only=False)
         E = torch.nn.functional.normalize(d["E"], p=2, dim=-1).cpu().numpy()
         idx = cls(d["w2i"], E)
         passages = d.get("passages")

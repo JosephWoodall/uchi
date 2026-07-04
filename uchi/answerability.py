@@ -67,7 +67,13 @@ class AnswerabilityChecker:
         import torch
         import torch.nn as nn
         import torch.nn.functional as F
-        ck = torch.load(path, map_location=device)
+        # weights_only=False: this is our own shipped, trusted package data (not
+        # an externally-sourced file) — PyTorch 2.6+ defaults torch.load to the
+        # restricted unpickler, which can reject plain dict/list contents
+        # depending on the numpy/pickle version that wrote them (seen in CI on
+        # a different environment than this was authored in, even though the
+        # file only contains plain Python + tensor data).
+        ck = torch.load(path, map_location=device, weights_only=False)
         stoi, cfg = ck["stoi"], ck["config"]
         model = build_classifier(cfg, len(ck["vocab"]), stoi[PAD], torch, nn, F).to(device)
         model.load_state_dict(ck["state_dict"])

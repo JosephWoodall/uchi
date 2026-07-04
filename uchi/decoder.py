@@ -88,7 +88,9 @@ class NeuralDecoder:
         import torch
         import torch.nn as nn
         import torch.nn.functional as F
-        ck = torch.load(path, map_location=device)
+        # weights_only=False: our own shipped, trusted package data — see the
+        # same fix + rationale in answerability.py/retrieval.py.
+        ck = torch.load(path, map_location=device, weights_only=False)
         vocab, stoi, cfg = ck["vocab"], ck["stoi"], ck["config"]
         model = _build_model(cfg, len(vocab), stoi[PAD], torch, nn, F).to(device)
         model.load_state_dict(ck["state_dict"])
