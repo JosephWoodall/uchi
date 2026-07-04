@@ -2,172 +2,108 @@ import argparse
 import os
 import pickle
 import concurrent.futures
-from .omni_router import OmniRouter
 
 from tqdm import tqdm
 
-def ingest_file(router, filepath, quiet=False):
-    """Injects massive context from a file into the OmniRouter with structural bounds."""
+def ingest_file(u, filepath, quiet=False):
+    """Ingest a single file into a Uchi instance (FLUX + Uchi architecture).
+
+    `u` is a `uchi.Uchi` (the TUI/skills pass their live instance). We delegate
+    to `Uchi.ingest`, which reads the file and feeds it into the compounding
+    semantic index via `learn()`.
+    """
     if not os.path.exists(filepath):
         if not quiet:
             print(f"Error: File '{filepath}' not found.")
         return
-        
     if not quiet:
-        print(f"[*] Ingesting massive context from {filepath}...")
+        print(f"[*] Ingesting {filepath} into the brain...")
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            text = f.read().split()
-            
-        filename = os.path.basename(filepath)
-        bounded_text = [f"<|file:{filename}|>"] + text + ["<|/file|>"]
-        router.stream(bounded_text)
+        u.ingest(filepath)
         if not quiet:
-            print(f"[+] Successfully injected {len(bounded_text)} bounded tokens into the Deterministic LLM.")
+            print(f"[+] Ingested {os.path.basename(filepath)}.")
     except Exception as e:
         if not quiet:
             print(f"[-] Failed to ingest {filepath}: {e}")
 
-def debate_loop(topic: str, rounds: int = 10):
-    """
-    Spawns two OmniRouter agents and forces them to predict/debate 
-    continuously over the same topic.
-    """
-    print("===============================================================")
-    print(" Uchi v0.2.0 - Multi-Agent Deterministic Debate")
-    print(f" Topic: {topic}")
-    print(" Engine: OmniRouter (BPE Stream Compression ENABLED)")
-    print("===============================================================")
-    
-    # Initialize two separate deterministic brains
-    # They both use BPE compression to prevent infinite RAM explosion
-    agent_alpha = OmniRouter(use_bpe=True, memory_window=5)
-    agent_beta  = OmniRouter(use_bpe=True, memory_window=5)
-    
-    # Seed their initial context
-    seed_tokens = topic.split()
-    agent_alpha.stream(seed_tokens)
-    agent_beta.stream(seed_tokens)
-    
-    current_context = seed_tokens
-    
-    for i in range(rounds):
-        import time
-        time.sleep(1) # Slow down for readability
-        
-        print(f"\n--- Round {i+1} ---")
-        
-        # Alpha speaks
-        alpha_reply = agent_alpha.predict_future(current_context, steps=5)
-        print(f"Agent Alpha: {' '.join(alpha_reply)}")
-        
-        # Stream Alpha's reply into Beta's brain so Beta hears it
-        agent_beta.stream(alpha_reply)
-        
-        # Beta speaks
-        beta_reply = agent_beta.predict_future(alpha_reply, steps=5)
-        print(f"Agent Beta:  {' '.join(beta_reply)}")
-        
-        # Stream Beta's reply back into Alpha's brain
-        agent_alpha.stream(beta_reply)
-        
-        current_context = beta_reply
-        
-    print("\n[+] Debate concluded. Both agents successfully compressed the entire context history via BPE.")
 
-ASCII_LOGO = r"""
-       _  _
-      (o)(o)
-     /  __  \
-    |  \__/  |
-     \______/
-ODUSP Daemon v0.2.0
-"""
+def save_brain(u, path: str = "brain.uchi"):
+    """Persist a Uchi instance's compounding semantic index to disk.
 
-def save_brain(router, path: str = "brain.uchi"):
-    """Serializes the entire Deterministic Cognitive Engine to disk (gzip-compressed).
-
-    Writes to a temp file and atomically renames so a crash or concurrent
-    write never leaves a partial/corrupt brain.uchi.
+    Delegates to `Uchi.save` (gzip-compressed pickle of the index). `u` is a
+    `uchi.Uchi` instance passed by the TUI.
     """
-    import gzip
-    import tempfile
-    print(f"\n[+] Saving neural state to {path}...")
-    tmp_path = None
     try:
-        dir_name = os.path.dirname(os.path.abspath(path)) or "."
-        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
-        os.close(fd)
-        with gzip.open(tmp_path, "wb", compresslevel=6) as f:
-            pickle.dump(router, f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.chmod(tmp_path, 0o644)
-        os.replace(tmp_path, path)
-        print(f"[+] Brain successfully persisted. ({os.path.getsize(path) / 1024 / 1024:.1f} MB)")
+        u.save(path)
+        print(f"[+] Brain persisted to {path}.")
     except Exception as e:
         print(f"[-] Failed to save brain: {e}")
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
 
-def load_brain(path: str = "brain.uchi") -> OmniRouter:
-    """Deserializes the Cognitive Engine from disk. Handles both gzip and plain pickle.
-    Automatically rebuilds the brain from scratch if missing or corrupted.
+def get_bundled_brain_path() -> str:
+    """Return the path to the brain bundled with the uchi package, or '' if absent."""
+    try:
+        import importlib.resources as _ir
+        # Python 3.9+ path
+        pkg_data = _ir.files("uchi") / "data" / "brain.uchi"
+        candidate = str(pkg_data)
+        if os.path.exists(candidate):
+            return candidate
+    except Exception:
+        pass
+    # Fallback: resolve relative to this file
+    fallback = os.path.join(os.path.dirname(__file__), "data", "brain.uchi")
+    return fallback if os.path.exists(fallback) else ""
+
+
+def load_brain(path: str = "brain.uchi"):
+    """Deserialize the brain from disk (gzip or plain pickle).
+
+    Returns the OmniRouter, or ``None`` if no loadable brain exists. Callers
+    create a fresh cold router on ``None`` — load failures no longer trigger a
+    heavy auto-rebuild (that was the retired Family C pipeline).
     """
     import gzip
     print(f"[*] Loading persistent brain state from {path}...")
-    
+
     if not os.path.exists(path):
-        print(f"[-] Brain file not found: {path}")
-        print("[*] Automatically triggering the Universal Builder Pipeline...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
-        
-    # Try gzip first; only fall through if the file genuinely isn't gzip-compressed
+        bundled = get_bundled_brain_path()
+        if bundled and bundled != path:
+            path = bundled
+        else:
+            print(f"[-] Brain file not found: {path}")
+            return None
+
     try:
         with gzip.open(path, "rb") as f:
             return pickle.load(f)
     except gzip.BadGzipFile:
-        pass  # not a gzip file — try plain pickle
+        pass  # not gzip — try plain pickle
     except Exception as e:
-        print(f"[-] Failed to load brain (gzip/pickle error): {e}")
-        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
-        
+        print(f"[-] Failed to load brain (gzip/pickle): {e}")
+        return None
+
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
     except Exception as e:
         print(f"[-] Failed to load brain: {e}")
-        print("[*] Automatically triggering the Universal Builder Pipeline due to corruption...")
-        from uchi.builder import build_full_brain
-        return build_full_brain(path)
+        return None
 
-def preload_context(router, path: str):
-    """
-    Recursively preloads a file or directory into the router using parallel processing.
+def preload_context(u, path: str):
+    """Recursively preload a file or directory into a Uchi instance.
+
+    `Uchi.ingest` already walks directories (txt/md/py/json/csv/pdf) and feeds
+    each file into the compounding index, so we delegate to it.
     """
     if not os.path.exists(path):
         print(f"Error: Preload path '{path}' not found.")
         return
-        
-    if os.path.isfile(path):
-        ingest_file(router, path)
-    else:
-        filepaths = []
-        for root, dirs, files in os.walk(path):
-            # Skip virtual environments, hidden folders, and cache directories
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules', 'venv', 'env', 'uchi.egg-info']]
-            for file in files:
-                filepath = os.path.join(root, file)
-                if file.endswith((".txt", ".md", ".py", ".cpp", ".js", ".json")):
-                    filepaths.append(filepath)
-        
-        print(f"[*] Pre-training ODUSP from {path} in parallel...")
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            list(tqdm(executor.map(lambda f: ingest_file(router, f, quiet=True), filepaths), total=len(filepaths), desc="Ingesting files"))
+    print(f"[*] Preloading context from {path}...")
+    try:
+        u.ingest(path)
+        print(f"[+] Preloaded {path}.")
+    except Exception as e:
+        print(f"[-] Failed to preload {path}: {e}")
 
 # ANSI Color Codes
 CYAN = '\033[96m'
@@ -177,24 +113,38 @@ RESET = '\033[0m'
 BOLD = '\033[1m'
 
 def print_ai_msg(prefix, msg):
-    print(f"\n{CYAN}{BOLD}ODUSP ({prefix}):{RESET} {msg}\n")
+    print(f"\n{CYAN}{BOLD}Uchi ({prefix}):{RESET} {msg}\n")
 
 def print_help():
     print(f"\n{YELLOW}{BOLD}Available Commands:{RESET}")
     print(f"  {GREEN}/help{RESET}             Show this help menu")
-    print(f"  {GREEN}/load <file>{RESET}      Dynamically stream a new file into the Geometric Trie")
+    print(f"  {GREEN}/load <file>{RESET}      Ingest a file or directory into the Semantic Index")
     print(f"  {GREEN}/query <text>{RESET}     Execute Zero-Shot Q&A against the Associative Memory")
-    print(f"  {GREEN}/predict <steps>{RESET}  Force the engine to hallucinate forward <steps> tokens")
     print(f"  {GREEN}/save{RESET}             Force serialize the current brain state to disk")
     print(f"  {GREEN}/quit{RESET}             Exit the session and save\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Uchi Omni-modal Deterministic Universal Sequence Predictor (ODUSP) CLI")
-    parser.add_argument("--preload", type=str, default=None, help="Directory or file to preload context from")
-    parser.add_argument("--brain", type=str, default="brain.uchi", help="Path to the persistent brain file")
-    
+    parser = argparse.ArgumentParser(
+        prog="uchi",
+        description="Uchi v0.3.0 — The Empirical Synthesis Engine. "
+                    "Run the interactive dashboard or the REST API server.",
+    )
+    parser.add_argument("command", nargs="?", default="tui", choices=["tui", "serve"],
+                        help="tui: interactive terminal UI (default). serve: REST API server.")
+    parser.add_argument("--preload", type=str, default=None,
+                        help="[tui] File or directory to preload context from")
+    parser.add_argument("--brain", type=str, default="brain.uchi",
+                        help="[tui] Path to the persistent brain file")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="[serve] Bind host")
+    parser.add_argument("--port", type=int, default=8000, help="[serve] Bind port")
     args = parser.parse_args()
-    
+
+    if args.command == "serve":
+        import uvicorn
+        print(f"[*] Serving Uchi REST API on http://{args.host}:{args.port} ...")
+        uvicorn.run("uchi.api_server:app", host=args.host, port=args.port)
+        return
+
     from uchi.tui.app import UchiApp
     app = UchiApp(args.brain, args.preload)
     app.run()

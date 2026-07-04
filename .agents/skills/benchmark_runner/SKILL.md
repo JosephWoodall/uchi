@@ -1,29 +1,29 @@
 ---
 name: benchmark_runner
-description: Runs a miniature suite of MMLU and SWE-Bench tests against the current Uchi engine to evaluate correctness and inference latency.
+description: Runs MMLU, SWE-bench, and ARC-Challenge benchmarks against the current FLUX+Uchi engine to evaluate factual recall, code generation, and reasoning capabilities.
 ---
 
 # Benchmark Runner
 
-This skill allows agents (or the user) to quickly run a suite of baseline tests against Uchi. It is designed to expose both factual reasoning capabilities (MMLU) and code-generation capabilities (SWE-Bench), while also rigorously tracking the MCTS inference latency.
+With the v0.3.0 architecture (FLUX as Proposer, Uchi as Verifier), this skill runs the three core benchmarks to ensure our OOD generalization and reasoning chains remain state-of-the-art: MMLU (factual recall), SWE-bench (code generation), and ARC-Challenge (reasoning).
 
 ## Usage
-Run the script passing either the `--mmlu` or `--swe` flag. 
 
-You can also pass the `--wipe` flag to completely delete all `.uchi`, `.db`, and `.pt` brain files from the directory before running the benchmark, guaranteeing you are testing a completely blank slate.
+Run each benchmark individually using its dedicated script:
 
 ```bash
-# Run the MMLU factual reasoning benchmark with a completely wiped brain
-python scripts/benchmark_mini.py --mmlu --wipe
+# MMLU — factual recall across 57 academic subjects
+python benchmarks/mmlu_benchmark.py --sample 200 --brain brain.uchi
 
-# Run the SWE-Bench code generation benchmark
-python scripts/benchmark_mini.py --swe --wipe
+# SWE-bench — code generation quality proxy
+python benchmarks/swebench_benchmark.py --sample 50 --brain brain.uchi
+
+# ARC-Challenge — general reasoning and reasoning chains
+python benchmarks/arc_benchmark.py --sample 200 --brain brain.uchi
 ```
 
 ## Output
-The script will output:
-1. The exact prompt given to Uchi.
-2. Uchi's generated string.
-3. The inference latency in seconds (useful for verifying the Virtual Loss Batched Evaluation patch).
-4. A PASS/FAIL status based on substring matching.
-5. A final aggregate score and total time elapsed.
+Each benchmark reports accuracy, reasoning chain integrity, speed, and saves the JSON results.
+
+## Regression Policy
+Because FLUX provides the OOD generalization and Uchi guarantees it, any drop in these benchmarks indicates a failure in either the Proposer's raw capability or the Verifier's logic. All scores must be ≥ the prior release baseline.

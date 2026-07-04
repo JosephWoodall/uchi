@@ -7,73 +7,6 @@ from textual.containers import Horizontal, Vertical
 from textual import work
 from textual.binding import Binding
 
-# ── ASCII dog animation ───────────────────────────────────────────────────────
-
-_DOG_FRAMES = [
-    # 0 — sitting, tail low
-    "  /\\_____/\\\n"
-    " ( ^o   o^ )\n"
-    " (   ---   )\n"
-    "  \\_______/ ~\n"
-    "    |   |\n"
-    "   _|___|_",
-
-    # 1 — sitting, tail up
-    "  /\\_____/\\\n"
-    " ( ^o   o^ )\n"
-    " (   ---   )\n"
-    "  \\_______/~~\n"
-    "    |   |\n"
-    "   _|___|_",
-
-    # 2 — blink
-    "  /\\_____/\\\n"
-    " ( ^-   o^ )\n"
-    " (   ---   )\n"
-    "  \\_______/ ~\n"
-    "    |   |\n"
-    "   _|___|_",
-
-    # 3 — happy ears up
-    "  /\\_____/\\\n"
-    " ( *o   o* )\n"
-    " (   www   )\n"
-    "  \\_______/~~\n"
-    "    |   |\n"
-    "   _|___|_",
-
-    # 4 — running left
-    "  /\\_____/\\\n"
-    " ( ^o   o^ )\n"
-    " (   ---   )~\n"
-    "   \\ ___ /\n"
-    "  // | |  \\\n"
-    " //  |    \\",
-
-    # 5 — running right
-    "  /\\_____/\\\n"
-    " ( ^o   o^ )\n"
-    " (   ---   )~~\n"
-    "   \\ ___ /\n"
-    "   / | |  \\\\\n"
-    "  /  |     \\\\",
-
-    # 6 — sleepy
-    "  /\\_____/\\\n"
-    " ( -u   u- )\n"
-    " ( z  z  z )\n"
-    "  \\_______/\n"
-    "   |     |\n"
-    "  [_______|",
-]
-
-_PRED_FRAMES = [4, 5, 4, 5, 3, 1, 0, 3]
-_IDLE_FRAMES = [0, 1, 0, 2, 0, 1]
-
-_PRED_MOODS = ["predicting...", "searching...", "on it!", "thinking...", "*nose twitching*", "processing..."]
-_IDLE_MOODS = ["*wags tail*", "ready to help!", "*sniffs*", "at your service!"]
-
-_DOG_SLEEP_SECS = 30
 
 
 class UchiApp(App):
@@ -189,43 +122,24 @@ class UchiApp(App):
         color: #565f89;
     }
 
-    /* ── Dog strip — above input, full width ── */
-    #dog-strip {
-        height: 8;
+    /* ── Telemetry strip — above input, full width ── */
+    #telemetry-strip {
+        height: 3;
         background: #16161e;
         border-top: solid #1f2335;
         padding: 0 2;
+        layout: horizontal;
     }
 
-    #dog-widget {
-        width: 20;
-        height: 8;
+    .telemetry-item {
         color: #7dcfff;
-        content-align: center middle;
-        text-align: center;
+        height: 1;
+        padding-right: 4;
     }
 
-    #dog-info {
-        height: 8;
-        padding: 1 2;
-        layout: vertical;
-        content-align: left middle;
-    }
-
-    #dog-title {
-        color: #bb9af7;
+    .telemetry-val {
+        color: #9ece6a;
         text-style: bold;
-        height: 1;
-    }
-
-    #dog-mood {
-        color: #ff9e64;
-        height: 1;
-    }
-
-    #dog-desc {
-        color: #565f89;
-        height: 1;
     }
 
     /* ── Input box — prominent command prompt ── */
@@ -256,25 +170,16 @@ class UchiApp(App):
         Binding("down",   "history_next",     "History ↓", show=False),
     ]
 
-    TITLE = "Uchi ODUSP"
-    SUB_TITLE = "Omni-modal Deterministic Universal Sequence Predictor"
+    TITLE = "Uchi"
+    SUB_TITLE = "Grounded answers, honest abstentions — runs on your machine"
 
     def __init__(self, brain_path, preload_path, **kwargs):
         super().__init__(**kwargs)
         self.router         = None
         self.brain_path     = brain_path
         self.preload_path   = preload_path
-        self.active_learning_word  = None
-        self.active_learning_cmd   = None
-        self.active_teaching_query = None
-        self.active_hole_context   = None
-        # Dog animation indices per state
-        self._dog_pred_idx  = 0
-        self._dog_idle_idx  = 0
-        # Generation state
         self._predicting    = False
         self._cancel_event  = threading.Event()
-        # Command history
         self._history: list[str] = []
         self._history_idx: int   = 0
         import time
@@ -290,151 +195,72 @@ class UchiApp(App):
                     yield Label("Bootstrapping...", id="rl-label")
                     yield ProgressBar(id="rl-progress", show_eta=False)
                 with Vertical(id="think-section"):
-                    yield Label("◈ thinking  (ctrl+t to pin)", id="think-label")
+                    yield Label("🧠 What I'm thinking  (ctrl+t to keep open)", id="think-label")
                     yield RichLog(id="think-log", markup=True, highlight=False)
             with Vertical(id="side-panel"):
                 yield Static(self._stats_text(), id="stats-panel")
-        with Horizontal(id="dog-strip"):
-            yield Static(_DOG_FRAMES[0], id="dog-widget")
-            with Vertical(id="dog-info"):
-                yield Static("◈  UCHI  ODUSP", id="dog-title")
-                yield Static("*wags tail*",    id="dog-mood")
-                yield Static("Omni-modal Deterministic Sequence Predictor", id="dog-desc")
-        yield Input(placeholder="Initializing ODUSP...", id="input-box", disabled=True)
+        with Horizontal(id="telemetry-strip"):
+            yield Static("Multi-step reasoning: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+            yield Static("Fact-checking: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+            yield Static("Code sandbox: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+        yield Input(placeholder="Getting Uchi ready...", id="input-box", disabled=True)
         yield Footer()
 
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write("[bold #7dcfff]╔══════════════════════════════════════════╗[/bold #7dcfff]")
-        log.write("[bold #7dcfff]║    Uchi ODUSP  ◈  v0.2.0                ║[/bold #7dcfff]")
-        log.write("[bold #7dcfff]║    Omni-modal Deterministic Predictor    ║[/bold #7dcfff]")
-        log.write("[bold #7dcfff]╚══════════════════════════════════════════╝[/bold #7dcfff]")
-        log.write("[dim]Type [bold]/help[/bold] for commands and skills, or start chatting.[/dim]\n")
+        log.write("[bold #7aa2f7]◆ Uchi v0.3.0[/bold #7aa2f7]  [dim]— FLUX proposes, Uchi verifies[/dim]")
+        log.write("[dim]I ground every answer in what I actually know, and say so honestly when I don't.[/dim]")
+        log.write("[dim]Type [bold]/help[/bold] for commands, or just start chatting.[/dim]\n")
         self.initialize_brain()
-        self.set_interval(2.0,  self._tick_dog)
         self.set_interval(10.0, self._tick_stats)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         import time
         self.last_activity = time.time()
 
-    # ── Dog animation — stateful ──────────────────────────────────────────────
 
-    def _tick_dog(self) -> None:
-        import time
-        if self._predicting:
-            self._dog_pred_idx = (self._dog_pred_idx + 1) % len(_PRED_FRAMES)
-            frame = _PRED_FRAMES[self._dog_pred_idx]
-            mood  = _PRED_MOODS[self._dog_pred_idx % len(_PRED_MOODS)]
-        elif time.time() - self.last_activity >= _DOG_SLEEP_SECS:
-            frame = 6
-            mood  = "z z z..."
-        else:
-            self._dog_idle_idx = (self._dog_idle_idx + 1) % len(_IDLE_FRAMES)
-            frame = _IDLE_FRAMES[self._dog_idle_idx]
-            mood  = _IDLE_MOODS[self._dog_idle_idx % len(_IDLE_MOODS)]
-        self.query_one("#dog-widget", Static).update(_DOG_FRAMES[frame])
-        self.query_one("#dog-mood",   Static).update(mood)
 
     def _tick_stats(self) -> None:
         self.query_one("#stats-panel", Static).update(self._stats_text())
 
     def _stats_text(self) -> str:
-        lines = ["[bold #7dcfff]─ Stats ─[/bold #7dcfff]"]
+        lines = ["[bold #7aa2f7]─ At a glance ─[/bold #7aa2f7]"]
         if self.router is not None:
             try:
-                mem = len(self.router.memory.cpu_mem.records) if hasattr(self.router.memory, "cpu_mem") else 0
-                lines.append(f"Mem   {mem}")
-                lines.append(f"μ     {self.router.baseline.mean:.3f}")
-                lines.append(f"σ     {self.router.baseline.std:.3f}")
                 n_skills = len(self.router.skills.list_skills()) if hasattr(self.router, "skills") else 0
-                lines.append(f"Skills {n_skills}")
-                pool = getattr(self.router, "specialist_pool", None)
-                if pool:
-                    experts = " ".join(
-                        e for e in ("code", "math", "convo")
-                        if pool.has_specialist(e)
-                    )
-                    lines.append(f"[dim]{experts or 'none'}[/dim]")
-                    
-                import uchi.telemetry as _tel
-                tel_data = _tel.dump_all()
-                lines.append("\n[bold #bb9af7]─ Telemetry ─[/bold #bb9af7]")
-                
-                # L2 Norm
-                l2 = tel_data.get("latent_space", {}).get("vector_l2_norm", "N/A")
-                lines.append(f"L2: [dim]{l2}[/dim]")
-                
-                # MoE Experts
-                # (Assuming Claude recorded MoE experts, if not, this will just gracefully fallback to N/A)
-                moe = tel_data.get("latent_space", {}).get("active_experts", "N/A")
-                lines.append(f"MoE: [dim]{moe}[/dim]")
-                
-                # FAISS Fallback
-                faiss = tel_data.get("tokenizer", {}).get("faiss_fallback_count", 0)
-                lines.append(f"FAISS: [dim]{faiss}[/dim]")
-                
-                # MCTS Batch Util
-                batch = tel_data.get("mcts", {}).get("gpu_batch_utilization", "N/A")
-                lines.append(f"Batch: [dim]{batch}[/dim]")
-                
-                # Repetition Penalty
-                rep = tel_data.get("mcts", {}).get("repetition_penalty_applied", 0)
-                lines.append(f"RepPen: [dim]{'Active' if rep > 0 else 'Inactive'}[/dim]")
-                
-            except Exception as e:
-                lines.append(f"[dim]tel_err: {e}[/dim]")
+                n_facts = len(getattr(self.router.index, "passages", []) or [])
+                lines.append(f"[bold #9ece6a]{n_skills} skills[/bold #9ece6a]")
+                lines.append(f"[bold #9ece6a]{n_facts:,} facts known[/bold #9ece6a]")
+                if self.router.proposer:
+                    lines.append("[bold #9ece6a]Reasoning: on[/bold #9ece6a]")
+                else:
+                    lines.append("[bold #e0af68]Reasoning: extractive only[/bold #e0af68]")
+            except Exception:
+                pass
         else:
-            lines.append("[dim]loading...[/dim]")
+            lines.append("[dim]starting up...[/dim]")
         import os
         bp = getattr(self, "brain_path", "brain.uchi")
         if os.path.exists(bp):
             mb = os.path.getsize(bp) / 1024 / 1024
-            lines.append(f"Brain  {mb:.1f}MB")
-        lines.append("\n[dim]^s save  ^r skills[/dim]")
+            lines.append(f"Saved brain  {mb:.1f}MB")
+        lines.append("\n[dim]^s save  ^r reload skills[/dim]")
         return "\n".join(lines)
 
     # ── Brain init ────────────────────────────────────────────────────────────
 
     @work(thread=True)
     def initialize_brain(self) -> None:
-        self.call_from_thread(self.write_log, f"[dim][*] Loading brain from [bold]{self.brain_path}[/bold]...[/dim]")
+        self.call_from_thread(self.write_log, "[dim]Waking up...[/dim]")
 
-        from uchi.cli import load_brain, preload_context
-        from uchi.omni_router import OmniRouter
-        from uchi.node_compressor import NodeCompressor
-
-        import builtins
-        _orig_print = builtins.print
-        def _ui_print(*args, **kwargs):
-            self.call_from_thread(self.write_log, "[dim]" + " ".join(str(a) for a in args) + "[/dim]")
-        builtins.print = _ui_print
+        from uchi.simple import Uchi
 
         try:
-            router = load_brain(self.brain_path)
-            if router is None:
-                self.call_from_thread(self.write_log, "[yellow][-] No brain found — cold start.[/yellow]")
-
-                def _prog(cur, total):
-                    self.call_from_thread(self._update_progress, cur, total, "Bootstrapping persona")
-
-                router = OmniRouter(use_bpe=False, memory_window=5, progress_callback=_prog)
-                self.call_from_thread(self._hide_progress)
-
-                compressor = NodeCompressor()
-                self.call_from_thread(self.write_log, "[dim][*] Compressing persona memory...[/dim]")
-                pruned = compressor.compress_pass(router.predictor._pred._root, router.predictor._pred._cred_max_base)
-                self.call_from_thread(self.write_log, f"[dim][+] Compressed {pruned} nodes.[/dim]")
-
-            if self.preload_path:
-                preload_context(router, self.preload_path)
-
+            router = Uchi()
             self.router = router
             self.call_from_thread(self.on_brain_ready)
         except Exception as e:
-            self.call_from_thread(self.write_log, f"[bold #f7768e]Init error:[/bold #f7768e] {e}")
-        finally:
-            builtins.print = _orig_print
+            self.call_from_thread(self.write_log, f"[bold #f7768e]Couldn't start up:[/bold #f7768e] {e}")
 
     def write_log(self, msg: str) -> None:
         self.query_one("#chat-log", RichLog).write(msg)
@@ -444,16 +270,22 @@ class UchiApp(App):
 
     def on_brain_ready(self) -> None:
         n_skills = len(self.router.skills.list_skills())
+        n_facts = len(getattr(self.router.index, "passages", []) or [])
+        knowledge_note = (
+            f"{n_facts:,} general-knowledge facts pre-loaded" if n_facts
+            else "no prior knowledge yet — teach me with /learn"
+        )
         self.write_log(
-            f"[bold #9ece6a][+] Brain ready.[/bold #9ece6a] "
-            f"{n_skills} skills loaded. Type [bold]/help[/bold] to list them."
+            f"[bold #9ece6a]Ready![/bold #9ece6a] "
+            f"{n_skills} skills available, {knowledge_note}. "
+            f"Type [bold]/help[/bold] any time."
         )
         ib = self.query_one(Input)
         ib.disabled = False
-        ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
         ib.focus()
         self._tick_stats()
-        self.router.start_background_jobs()
+        self._tick_stats()
 
     def _update_progress(self, current: int, total: int, label: str = "Working") -> None:
         section = self.query_one("#rl-bar-section")
@@ -545,48 +377,7 @@ class UchiApp(App):
             self.learn_from(target)
             return
 
-        # ── stateful input modes ──────────────────────────────────────────────
-        if self.active_hole_context is not None:
-            orig_cmd, code_with_holes, hole_desc = self.active_hole_context
-            from uchi.code_engine import CodeEngine
-            filled = CodeEngine.fill_hole(code_with_holes, hole_desc, cmd)
-            seq = (
-                ["<|user|>"] + orig_cmd.split()
-                + ["<|assistant|>"] + filled.split()
-                + ["<|end|>"]
-            )
-            self.router.stream(seq)
-            log.write(f"[bold #9ece6a][+] Hole filled![/bold #9ece6a] Learned pattern for: [italic]{hole_desc}[/italic]")
-            log.write(f"\n[#7dcfff][bold]Uchi:[/bold][/#7dcfff] {filled}")
-            self.active_hole_context = None
-            ib.disabled = False
-            ib.placeholder = "Chat with Uchi, or /skill args..."
-            ib.focus()
-            return
 
-        if self.active_teaching_query is not None:
-            seq = (
-                ["<|user|>"] + self.active_teaching_query.split()
-                + ["<|assistant|>"] + cmd.split()
-                + ["<|end|>"]
-            )
-            self.router.stream(seq)
-            log.write(f"[bold #9ece6a][+] Taught:[/bold #9ece6a] '{self.active_teaching_query}' → '{cmd}'")
-            self.active_teaching_query = None
-            ib.disabled = False
-            ib.placeholder = "Chat with Uchi, or /skill args..."
-            ib.focus()
-            return
-
-        if self.active_learning_word is not None:
-            self.router.tokenizer.ontology.add_mapping(self.active_learning_word, cmd)
-            log.write(f"[#9ece6a][+] Learned:[/#9ece6a] '{self.active_learning_word}' → '{cmd}'")
-            self.active_learning_word = None
-            ib.disabled = True
-            ib.placeholder = "ODUSP predicting..."
-            self.process_command(self.active_learning_cmd)
-            self.active_learning_cmd = None
-            return
 
         # ── skill dispatch (/name args) ───────────────────────────────────────
         if cmd.startswith("/") and self.router is not None:
@@ -609,22 +400,33 @@ class UchiApp(App):
 
     # ── Workers ───────────────────────────────────────────────────────────────
 
+    # Internal-dialogue event tags: every step of Uchi's live thought process
+    # (status updates, FLUX's actual reasoning trace, the Devil's Advocate
+    # critique, verification outcomes) surfaces here with a clear label — this
+    # IS the "glass box" view into what's happening, kept out of the main
+    # conversation so that stays clean and readable.
+    _THINK_TAGS = {
+        "thinking":      ("💭", "Working",   "#7aa2f7"),
+        "reasoning":     ("🧠", "Reasoning", "#bb9af7"),
+        "critique":      ("⚖️", "Critique",  "#e0af68"),
+        "reinforce":     ("✓",  "Verified",  "#9ece6a"),
+        "prune":         ("✗",  "Rejected",  "#f7768e"),
+        "hallucination": ("⚠",  "Flagged",   "#e0af68"),
+    }
+
     def _make_callback(self):
         cancel = self._cancel_event
 
         def on_event(event_type, msg):
             if cancel.is_set():
                 raise InterruptedError("generation cancelled")
+            icon, label, colour = self._THINK_TAGS.get(event_type, ("•", event_type, "#a9b1d6"))
+            self.call_from_thread(self.write_think, f"[{colour}]{icon} {label}:[/{colour}] {msg}")
             if event_type == "thinking":
-                self.call_from_thread(self.write_think, msg)
                 m = re.search(r"rollout\s+(\d+)/(\d+)", msg)
                 if m:
                     n, total = int(m.group(1)), int(m.group(2))
-                    self.call_from_thread(self._update_progress, n, total, "Predicting")
-            else:
-                colours = {"reinforce": "#9ece6a", "prune": "#f7768e", "hallucination": "#e0af68"}
-                colour  = colours.get(event_type, "white")
-                self.call_from_thread(self.write_log, f"[{colour}]{msg}[/{colour}]")
+                    self.call_from_thread(self._update_progress, n, total, "Working")
 
         return on_event
 
@@ -642,7 +444,7 @@ class UchiApp(App):
         self.call_from_thread(self._begin_predict)
         self.call_from_thread(self._reset_think_log, cmd)
         try:
-            reply = self.router.chat(cmd, callback=self._make_callback())
+            reply = self.router.ask(cmd, callback=self._make_callback())
         except InterruptedError:
             self.call_from_thread(self.write_log, "[yellow]Generation cancelled.[/yellow]")
             self.call_from_thread(self._restore_input)
@@ -701,61 +503,44 @@ class UchiApp(App):
             self.call_from_thread(self._restore_input)
             return
 
-        tokens = self.router.tokenizer.tokenize(raw_text.split(), is_inference=False)
-        self.router.stream(tokens)
-
-        from uchi.cli import save_brain
-        save_brain(self.router, getattr(self, "brain_path", "brain.uchi"))
+        self.router.learn(raw_text)
 
         self.call_from_thread(
             self.write_log,
-            f"[bold #9ece6a][+] Ingested {len(tokens)} tokens from: {source_label}[/bold #9ece6a]",
+            f"[bold #9ece6a][+] Successfully ingested knowledge from: {source_label}[/bold #9ece6a]",
         )
         self.call_from_thread(self._restore_input)
 
     def _restore_input(self) -> None:
         ib = self.query_one(Input)
         ib.disabled = False
-        ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
         ib.focus()
 
     # ── Display helpers ───────────────────────────────────────────────────────
 
     def display_reply(self, cmd: str, reply_text: str) -> None:
         from rich.markdown import Markdown
+        from uchi.response_normalizer import normalize
+        reply_text = normalize(reply_text)
         log = self.query_one("#chat-log", RichLog)
         log.write("\n[#7dcfff][bold]Uchi:[/bold][/#7dcfff]")
         log.write(Markdown(reply_text))
 
         ib = self.query_one(Input)
 
-        from uchi.code_engine import CodeEngine
-        holes = CodeEngine.extract_holes(reply_text)
-        if holes:
-            self.active_hole_context = (cmd, reply_text, holes[0])
-            log.write("\n[bold #e0af68][?] Hole detected — fill in the implementation:[/bold #e0af68]")
-            log.write(f"[#e0af68]    {holes[0]}[/#e0af68]")
-            ib.placeholder = f"Fill: {holes[0][:38]}"
-            ib.disabled = False
-            ib.focus()
-            return
-
-        if reply_text == "I do not have enough context to accurately predict a response to that yet. How should I respond?":
-            self.active_teaching_query = cmd
-            ib.placeholder = f"Teach response to: '{cmd[:28]}'"
-        else:
-            ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
 
         ib.disabled = False
         ib.focus()
 
     def _show_help(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write("\n[bold #7dcfff]── Built-in Commands ──────────────────────────[/bold #7dcfff]")
+        log.write("\n[bold #7aa2f7]── Commands ──────────────────────────[/bold #7aa2f7]")
         log.write("  [bold]/help[/bold]               Show this menu")
-        log.write("  [bold]/save[/bold]               Serialize brain to disk")
-        log.write("  [bold]/load[/bold] [italic]<path>[/italic]        Ingest a file into the brain")
-        log.write("  [bold]/learn[/bold] [italic]<url|text>[/italic]   Fetch a URL or ingest raw text permanently")
+        log.write("  [bold]/save[/bold]               Save what I've learned to disk")
+        log.write("  [bold]/load[/bold] [italic]<path>[/italic]        Teach me from a file")
+        log.write("  [bold]/learn[/bold] [italic]<url|text>[/italic]   Teach me from a URL or raw text")
         log.write("  [bold]/quit[/bold]               Exit")
         log.write("  [bold]↑/↓[/bold]                 Cycle command history")
         log.write("  [bold]ctrl+c[/bold]              Cancel generation (or quit if idle)")
@@ -803,9 +588,7 @@ class UchiApp(App):
 
     def action_quit(self) -> None:
         if self.router:
-            from uchi.cli import save_brain
-            self.router.stop_background_jobs()
-            save_brain(self.router, self.brain_path)
+            pass
         self.exit()
 
     def action_reload_skills(self) -> None:
@@ -814,13 +597,3 @@ class UchiApp(App):
             n = len(self.router.skills.list_skills())
             self.write_log(f"[bold #9ece6a][+] Skills reloaded — {n} loaded.[/bold #9ece6a]")
 
-    def prompt_active_learning(self, word: str) -> None:
-        self.active_learning_word = word
-        self.write_log(
-            f"\n[#7dcfff][bold]Uchi:[/bold][/#7dcfff] "
-            f"I'm unfamiliar with '{word}'. What's a synonym?"
-        )
-        ib = self.query_one(Input)
-        ib.placeholder = f"Synonym for '{word}'> "
-        ib.disabled = False
-        ib.focus()

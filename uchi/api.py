@@ -2,9 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from .omni_router import OmniRouter
+from .simple import Uchi
 import os
-import pickle
 
 ASCII_LOGO = r"""
       |\_/\_/\_/|
@@ -49,16 +48,8 @@ class PredictRequest(BaseModel):
     temperature: float = 0.0
     creativity: float = 0.0
 
-def load_brain(path: str = "brain.uchi") -> OmniRouter:
-    if os.path.exists(path):
-        try:
-            with open(path, "rb") as f:
-                return pickle.load(f)
-        except Exception as e:
-            print(f"[-] Failed to load {path}: {e}")
-            # Fall back to new router if file is corrupted
-            pass
-    return OmniRouter(use_bpe=True, memory_window=5)
+def load_brain(path: str = "brain.uchi") -> Uchi:
+    return Uchi()
 
 @app.on_event("startup")
 async def startup_event():
@@ -72,15 +63,10 @@ async def startup_event():
 async def stream_data(req: StreamRequest):
     if not req.tokens:
         raise HTTPException(status_code=400, detail="Empty token list")
-    router.stream(req.tokens)
+    router.learn(" ".join(req.tokens))
     return {"status": "success", "processed": len(req.tokens)}
 
 @app.post("/query")
 async def query_memory(req: QueryRequest):
-    ans = router.query(req.tokens)
+    ans = router.ask(" ".join(req.tokens))
     return {"answer": ans}
-
-@app.post("/predict")
-async def predict_future(req: PredictRequest):
-    pred = router.predict_future(req.context, steps=req.steps, temperature=req.temperature, creativity=req.creativity)
-    return {"prediction": pred}

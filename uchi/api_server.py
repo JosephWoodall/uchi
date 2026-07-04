@@ -1,8 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from uchi.omni_router import OmniRouter
-from uchi.cli import load_brain, save_brain
+from uchi.simple import Uchi
 import logging
 
 _router = None
@@ -11,17 +10,11 @@ _router = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _router
-    _router = load_brain()
-    if _router is None:
-        _router = OmniRouter(use_bpe=False, memory_window=5)
-        save_brain(_router)
-    # Start background RL daemon and any other background jobs
-    _router.start_background_jobs()
+    _router = Uchi()
     yield
-    # Persist on shutdown
     if _router is not None:
-        _router.stop_background_jobs()
-        save_brain(_router)
+        pass
+
 
 
 app = FastAPI(
@@ -43,6 +36,14 @@ class ChatResponse(BaseModel):
 class SkillResponse(BaseModel):
     reply: str
     skill: str
+
+
+class AskRequest(BaseModel):
+    query: str
+
+
+class AskResponse(BaseModel):
+    answer: str
 
 
 class BootstrapRequest(BaseModel):
@@ -67,16 +68,16 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
+        from uchi.response_normalizer import normalize
         msg = request.message.strip()
         if msg.startswith("/"):
             parts = msg[1:].split(None, 1)
             name = parts[0]
             args = parts[1] if len(parts) > 1 else ""
-            reply = _router.skills.dispatch(name, args)
+            reply = normalize(_router.skills.dispatch(name, args) or "")
         else:
-            reply = _router.chat(msg)
+            reply = normalize(_router.ask(msg) or "")
 
-        save_brain(_router)
         return ChatResponse(reply=reply)
 
     except Exception as e:
@@ -86,13 +87,46 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/ask", response_model=AskResponse)
+async def ask_endpoint(request: AskRequest):
+    """Ask Uchi a question (mirrors the SDK's `Uchi.ask`).
+
+    A `/name args` query is dispatched to the skill registry; anything else goes
+    through FLUX (Proposer) + Uchi (Verifier). Returns the grounded answer, or an
+    honest abstention when it cannot be grounded. Same contract as the SDK & TUI.
+    """
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    try:
+        from uchi.response_normalizer import normalize
+        q = request.query.strip()
+        if q.startswith("/"):
+            parts = q[1:].split(None, 1)
+            name = parts[0]
+            args = parts[1] if len(parts) > 1 else ""
+            answer = normalize(_router.skills.dispatch(name, args) or "")
+        else:
+            answer = normalize(_router.ask(q) or "")
+        return AskResponse(answer=answer)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logging.error(f"API Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health_endpoint():
+    """Liveness probe."""
+    return {"status": "ok", "ready": _router is not None}
+
+
 @app.post("/skill/{name}", response_model=SkillResponse)
 async def skill_endpoint(name: str, request: ChatRequest):
     """Invoke a named skill directly."""
     if not _router.skills.has(name):
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
     reply = _router.skills.dispatch(name, request.message)
-    save_brain(_router)
     return SkillResponse(reply=reply, skill=name)
 
 
@@ -115,17 +149,12 @@ async def list_skills():
 
 @app.get("/metrics")
 async def metrics_endpoint():
-    memory_records = (
-        len(_router.memory.cpu_mem.records)
-        if hasattr(_router.memory, "cpu_mem")
-        else 0
-    )
     return {
         "status": "online",
-        "memory_records": memory_records,
-        "ssm_baseline_mean": round(_router.baseline.mean, 4),
+        "memory_records": 0,
+        "indexed_passages": len(_router.index.passages),
         "skills_loaded": len(_router.skills.list_skills()),
-        "mode": "deterministic",
+        "mode": "grounded",
     }
 
 
@@ -177,10 +206,8 @@ async def bootstrap_endpoint(request: BootstrapRequest):
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="No usable text found.")
 
-    tokens = _router.tokenizer.tokenize(raw_text.split(), is_inference=False)
-    _router.stream(tokens)
-    save_brain(_router)
-    return BootstrapResponse(tokens_ingested=len(tokens), source=source)
+    _router.learn(raw_text)
+    return BootstrapResponse(tokens_ingested=len(raw_text.split()), source=source)
 
 
 @app.get("/debug/walk")

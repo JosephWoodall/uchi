@@ -1,48 +1,23 @@
 """
-Shared pytest fixtures and patches.
+Shared pytest fixtures.
 
-Patches:
-- OmniRouter._bootstrap_knowledge  — skips HuggingFace downloads
-- OmniRouter._bootstrap_persona    — skips AssociativeMemory flooding (~14s loop)
-- SSM update_value / train_dynamics — kept for backward compat with any callers
+Architecture note: the legacy OmniRouter (and its _bootstrap_knowledge /
+_bootstrap_persona hooks) was removed. `Uchi` now boots a FLUX Proposer behind
+the Generate-and-Ground verifier. For tests we force the proposer to degrade to
+None so construction is fast, deterministic, and does not load a checkpoint onto
+the GPU (which would contend with any live training run). This exercises the
+verifier + extractive/abstention path independently of FLUX's trained weights.
 """
 import pytest
-import torch
-from unittest.mock import patch, MagicMock
-
-
-def _zero_loss(*args, **kwargs):
-    """Stub returning a differentiable zero so (v_loss + d_loss).backward() is a no-op."""
-    return torch.zeros(1, requires_grad=True)
 
 
 @pytest.fixture(autouse=True)
-def patch_omni_bootstraps():
-    """Speed up OmniRouter creation: skip bootstraps and legacy SSM update hooks."""
-    with patch("uchi.omni_router.OmniRouter._bootstrap_knowledge"), \
-         patch("uchi.omni_router.OmniRouter._bootstrap_persona"), \
-         patch("uchi.neuro_symbolic.StateSpaceModel.update_value", _zero_loss), \
-         patch("uchi.neuro_symbolic.StateSpaceModel.train_dynamics", _zero_loss):
-        yield
-
-
-@pytest.fixture
-def fast_convergent():
-    """
-    Mock ConvergentEngine.generate to return an instant stub result.
-
-    Apply to any test that exercises OmniRouter.chat() but does not need to
-    test the MCTS loop itself — prevents the full rollout budget from running
-    and keeps test suites under ~2 minutes.
-
-    Usage:
-        def test_something(fast_convergent):
-            router = OmniRouter(use_bpe=False)
-            reply = router.chat("hello")
-            ...
-    """
-    with patch(
-        "uchi.convergent_engine.ConvergentEngine.generate",
-        return_value=("text", ["mock", "response"], 0.5),
-    ):
+def no_flux_checkpoint():
+    """Force FluxProposer.load() -> None so Uchi() builds without a GPU checkpoint."""
+    try:
+        from unittest.mock import patch
+        with patch("uchi.proposer.FluxProposer.load", return_value=None):
+            yield
+    except Exception:
+        # If the proposer module is unavailable for some reason, don't block tests.
         yield

@@ -22,6 +22,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Fetch premade-brain weights via Git LFS
+        # Only uchi/data/*.pt goes into the wheel (package-data) —
+        # uchi/flux/checkpoints/flux_best.pt is intentionally NOT packaged
+        # (ships via the git repo/LFS instead, keeping pip installs lighter),
+        # so it's not needed here either.
+        run: git lfs pull --include="uchi/data/*.pt"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

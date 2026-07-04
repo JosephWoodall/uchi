@@ -14,17 +14,15 @@ theme:
 
 nav:
   - Home: index.md
-  - API Reference:
-    - Multi-Modal Router: omni-router.md
-    - Core Engine: core-engine.md
-    - Convergent Engine (MCTS): convergent-engine.md
+  - Python API: python-api.md
+  - Architecture: architecture.md
+  - Generate-and-Ground: generate-and-ground.md
+  - Reasoning: reasoning.md
+  - Training FLUX: training.md
+  - Benchmarks: benchmarks.md
+  - Skills:
     - Tabular Models: tabular.md
     - Time Series Models: timeseries.md
-    - Generative Sequences: generative.md
-    - Simulation Engine: simulation-engine.md
-  - Architecture: architecture.md
-  - Algorithmic Walkthrough: algorithmic-walkthrough.md
-  - Benchmarks: benchmarks.md
 
 markdown_extensions:
   - pymdownx.highlight:

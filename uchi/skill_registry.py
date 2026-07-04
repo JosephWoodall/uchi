@@ -130,13 +130,17 @@ class SkillRegistry:
             return None, 0.0
         return self._intent_encoder.match(query_tokens, trie_dist)
 
-    def dispatch(self, name: str, args: str, callback=None) -> str:
-        """Execute skill by name. Returns the response string."""
+    def dispatch(self, name: str, args: str, callback=None, data_kwargs=None) -> str:
+        """Execute skill by name. Returns the response string.
+
+        ``data_kwargs`` — when provided by the Python API (``u.ask("/cmd", X=X, y=y)``),
+        analytical skills receive data as Python objects rather than a CSV path.
+        """
         skill = self._skills.get(name.lower())
         if skill is None:
             available = "  ".join(f"/{s}" for s in sorted(self._skills))
             return f"Unknown skill '/{name}'.\nAvailable: {available}"
-        return self._execute(skill, args.strip(), callback)
+        return self._execute(skill, args.strip(), callback, data_kwargs=data_kwargs or {})
 
     def list_skills(self) -> List[Skill]:
         return sorted(self._skills.values(), key=lambda s: s.name)
@@ -160,18 +164,13 @@ class SkillRegistry:
     # ── internal ─────────────────────────────────────────────────────────────
 
     def _init_intent_encoder(self):
-        """Build (or rebuild) skill vectors in the LatentIntentEncoder."""
-        try:
-            from uchi.neuro_symbolic import get_ssm
-            from uchi.intent_encoder import LatentIntentEncoder
-            ssm = get_ssm()
-            enc = LatentIntentEncoder(ssm)
-            for skill in self._skills.values():
-                tokens = (skill.name + " " + skill.description).lower().split()
-                enc.register_skill(skill.name, tokens)
-            self._intent_encoder = enc
-        except Exception:
-            self._intent_encoder = None
+        """Semantic skill routing is disabled under FLUX + Uchi.
+
+        It depended on the SSM singleton from the removed ``neuro_symbolic``
+        module. Skill dispatch now uses prefix/slash-command matching, so the
+        intent encoder is simply absent (skills are still fully routable).
+        """
+        self._intent_encoder = None
 
     def _reload(self):
         self._skills.clear()
@@ -187,16 +186,17 @@ class SkillRegistry:
                 if skill:
                     self._skills[skill.name] = skill
 
-    def _execute(self, skill: Skill, args: str, callback) -> str:
+    def _execute(self, skill: Skill, args: str, callback, data_kwargs=None) -> str:
         message = f"{skill.prefix} {args}".strip() if skill.prefix else args
 
         if skill.mode == "chat":
             return self.router.chat(message, callback=callback)
 
         elif skill.mode == "code":
-            tokens = message.split()
-            concepts = self.router.tokenizer.tokenize(tokens, is_inference=True)
-            return self.router._handle_code_intent(message, tokens, concepts, callback)
+            # FLUX + Uchi: code generation is handled inside ask() by the FLUX
+            # proposer + REPL empirical-synthesis loop (writes Python, executes,
+            # verifies). Abstains gracefully when no trained proposer is loaded.
+            return self.router.chat(message, callback=callback)
 
         elif skill.mode == "web_search":
             try:
@@ -250,69 +250,223 @@ class SkillRegistry:
             return _knowledge_overview(self.router)
 
         elif skill.mode in ("classify", "regress", "anomaly", "forecast", "tsclassify"):
-            return _run_analytical(skill.mode, args, self.router)
+            return _run_analytical(skill.mode, args, self.router, **(data_kwargs or {}))
 
         # Fallback
         return self.router.chat(message, callback=callback)
 
 
-def _run_analytical(mode: str, args: str, router) -> str:
+def _run_analytical(mode: str, args: str, router, X=None, y=None, steps=10, **_) -> str:
+    """Execute an analytical ML skill.
+
+    Two paths:
+      - Programmatic (``X`` provided): data is a Python object — bypasses CSV parsing.
+      - String (``X`` is None): ``args`` is parsed for a CSV path.
+
+    Either way the text summary is streamed into the trie so future ``ask()``
+    calls can recall the analysis without re-running it.
     """
-    Execute an analytical ML skill.
+    if X is not None:
+        result = _run_analytical_direct(mode, X, y=y, steps=int(steps))
+    else:
+        from uchi.data_loader import parse_args, load_data
 
-    Loads data, instantiates the correct ML class, fits + predicts, and
-    streams a text summary back into the trie so future queries can recall it.
-    """
-    from uchi.data_loader import parse_args, load_data
+        parsed = parse_args(args)
+        path   = parsed["path"]
+        label  = parsed.get("label") or parsed.get("target")
+        steps  = int(parsed.get("steps", steps))
 
-    parsed = parse_args(args)
-    path   = parsed["path"]
-    label  = parsed.get("label") or parsed.get("target")
-    steps  = parsed.get("steps", 10)
+        if not path:
+            return (
+                f"Usage: /{mode} <path.csv>"
+                + ("" if mode == "anomaly" else " [--label <col>]")
+                + f"\n  Or from Python: u.ask('/{mode}', X=X"
+                + ("" if mode in ("anomaly", "forecast") else ", y=y") + ")"
+            )
+        if not __import__("os").path.exists(path):
+            return f"File not found: {path}"
 
-    if not path:
-        return (
-            f"Usage: /{mode} <path.csv> "
-            + ("" if mode == "anomaly" else "[--label <col>]")
-            + ("\n       e.g. /{} data.csv".format(mode))
-        )
+        try:
+            header, rows = load_data(path)
+        except Exception as exc:
+            return f"Failed to load '{path}': {exc}"
 
-    if not __import__("os").path.exists(path):
-        return f"File not found: {path}"
+        if not rows:
+            return f"No data rows found in '{path}'."
 
+        try:
+            if mode == "classify":
+                result = _skill_classify(header, rows, label)
+            elif mode == "regress":
+                result = _skill_regress(header, rows, label)
+            elif mode == "anomaly":
+                result = _skill_anomaly(header, rows, path)
+            elif mode == "forecast":
+                result = _skill_forecast(header, rows, steps, path)
+            elif mode == "tsclassify":
+                result = _skill_tsclassify(header, rows, label)
+            else:
+                result = "Unknown analytical mode."
+        except Exception as exc:
+            import traceback
+            return f"Analysis error: {exc}\n{traceback.format_exc(limit=3)}"
+
+    # Stream summary into the trie — makes results recallable via future ask()
     try:
-        header, rows = load_data(path)
-    except Exception as exc:
-        return f"Failed to load '{path}': {exc}"
-
-    if not rows:
-        return f"No data rows found in '{path}'."
-
-    try:
-        if mode == "classify":
-            result = _skill_classify(header, rows, label)
-        elif mode == "regress":
-            result = _skill_regress(header, rows, label)
-        elif mode == "anomaly":
-            result = _skill_anomaly(header, rows, path)
-        elif mode == "forecast":
-            result = _skill_forecast(header, rows, steps, path)
-        elif mode == "tsclassify":
-            result = _skill_tsclassify(header, rows, label)
-        else:
-            result = "Unknown analytical mode."
-    except Exception as exc:
-        import traceback
-        return f"Analysis error: {exc}\n{traceback.format_exc(limit=3)}"
-
-    # Stream the summary into the trie so it can be recalled later
-    try:
-        summary_tokens = result.replace("\n", " ").split()[:40]
-        router.stream(summary_tokens)
+        router.stream(result.replace("\n", " ").split()[:40])
     except Exception:
         pass
 
     return result
+
+
+def _to_list_of_lists(X) -> list:
+    """Normalise X to list-of-lists regardless of input type."""
+    try:
+        import pandas as pd
+        if isinstance(X, pd.DataFrame):
+            return X.values.tolist()
+    except ImportError:
+        pass
+    try:
+        import numpy as np
+        if isinstance(X, np.ndarray):
+            return X.tolist()
+    except ImportError:
+        pass
+    return [list(row) for row in X]
+
+
+def _run_analytical_direct(mode: str, X, y=None, steps: int = 10) -> str:
+    """Analytical skill with data provided as Python objects."""
+    X_list = _to_list_of_lists(X)
+    if not X_list:
+        return "No data provided."
+    if mode == "classify":
+        if y is None:
+            return "Classification requires y. Pass y=your_labels."
+        return _skill_classify_direct(X_list, list(y))
+    elif mode == "regress":
+        if y is None:
+            return "Regression requires y. Pass y=your_targets."
+        try:
+            y_num = [float(v) for v in y]
+        except (TypeError, ValueError):
+            return "Target y must be numeric for regression. Use /classify for categorical targets."
+        return _skill_regress_direct(X_list, y_num)
+    elif mode == "anomaly":
+        return _skill_anomaly_direct(X_list)
+    elif mode == "forecast":
+        return _skill_forecast_direct(X_list, steps)
+    elif mode == "tsclassify":
+        if y is None:
+            return "Time series classification requires y. Pass y=your_labels."
+        return _skill_tsclassify_direct(X_list, list(y))
+    return "Unknown analytical mode."
+
+
+def _skill_classify_direct(X, y) -> str:
+    from uchi.data_loader import train_test_split
+    from uchi.tabular import TabularPredictor
+
+    if len(X) < 4:
+        return f"Not enough rows for classification (need ≥ 4, got {len(X)})."
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y)
+    clf = TabularPredictor()
+    clf.fit(X_tr, y_tr)
+    acc = clf.score(X_te, y_te)
+    classes = list(clf.classes_)
+    return "\n".join([
+        "Classification complete.",
+        f"  Classes    : {classes[:8]}{'…' if len(classes) > 8 else ''}",
+        f"  Train rows : {len(X_tr)}",
+        f"  Test rows  : {len(X_te)}",
+        f"  Accuracy   : {acc:.1%}",
+    ])
+
+
+def _skill_regress_direct(X, y) -> str:
+    from uchi.data_loader import train_test_split
+    from uchi.tabular import TabularRegressor
+
+    if len(X) < 4:
+        return f"Not enough rows for regression (need ≥ 4, got {len(X)})."
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y)
+    reg = TabularRegressor()
+    reg.fit(X_tr, y_tr)
+    preds = reg.predict(X_te)
+    mae = sum(abs(p - t) for p, t in zip(preds, y_te)) / max(len(y_te), 1)
+    return "\n".join([
+        "Regression complete.",
+        f"  Train rows    : {len(X_tr)}",
+        f"  Test rows     : {len(X_te)}",
+        f"  MAE           : {mae:.4f}",
+        f"  Target range  : [{min(y_te):.3f}, {max(y_te):.3f}]",
+    ])
+
+
+def _skill_anomaly_direct(X) -> str:
+    from uchi.timeseries import AnomalyDetector
+
+    if len(X) < 4:
+        return f"Not enough rows for anomaly detection (need ≥ 4, got {len(X)})."
+    det = AnomalyDetector()
+    det.fit(X)
+    labels = det.predict(X)
+    scores = det.score_samples(X)
+    anomalous = [i for i, lbl in enumerate(labels) if lbl == 1]
+    n = len(anomalous)
+    top = sorted(anomalous, key=lambda i: scores[i], reverse=True)[:5]
+    lines = [
+        "Anomaly detection complete.",
+        f"  Total rows : {len(X)}",
+        f"  Anomalies  : {n}  ({100 * n / len(X):.1f}%)",
+    ]
+    lines.append(f"  Top anomalous indices: {top}" if top else "  No anomalies detected.")
+    return "\n".join(lines)
+
+
+def _skill_forecast_direct(X, steps: int = 10) -> str:
+    from uchi.timeseries import MultivariateTSPredictor
+
+    if len(X) < 4:
+        return f"Not enough rows for forecasting (need ≥ 4, got {len(X)})."
+    pred = MultivariateTSPredictor()
+    pred.fit(X)
+    forecast = pred.forecast(steps)
+    dims = len(X[0]) if X else 1
+    last = X[-1] if X else []
+    lines = [
+        "Forecast complete.",
+        f"  Train rows : {len(X)}",
+        f"  Dimensions : {dims}",
+        f"  Steps      : {steps}",
+        f"  Last obs   : [{', '.join(f'{v:.3f}' for v in last[:6])}{'…' if len(last) > 6 else ''}]",
+    ]
+    for i, step in enumerate(forecast[:5]):
+        vals = [f"{v:.3f}" for v in step[:6]]
+        lines.append(f"  t+{i+1:<3}      : [{', '.join(vals)}{'…' if len(step) > 6 else ''}]")
+    if steps > 5:
+        lines.append(f"  … ({steps - 5} more steps not shown)")
+    return "\n".join(lines)
+
+
+def _skill_tsclassify_direct(X, y) -> str:
+    from uchi.data_loader import train_test_split
+    from uchi.timeseries import TimeSeriesClassifier
+
+    if len(X) < 4:
+        return f"Not enough windows for time series classification (need ≥ 4, got {len(X)})."
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y)
+    clf = TimeSeriesClassifier()
+    clf.fit(X_tr, y_tr)
+    acc = clf.score(X_te, y_te)
+    return "\n".join([
+        "Time series classification complete.",
+        f"  Train windows : {len(X_tr)}",
+        f"  Test windows  : {len(X_te)}",
+        f"  Accuracy      : {acc:.1%}",
+    ])
 
 
 def _skill_classify(header, rows, label_col) -> str:
@@ -462,75 +616,45 @@ def _skill_tsclassify(header, rows, label_col) -> str:
 
 
 def _knowledge_overview(router) -> str:
-    import re
+    """Summarize the live FLUX + Uchi knowledge state from its real components.
 
-    _STOP = {
-        "you", "i", "is", "a", "the", "to", "can", "that", "my", "am", "it",
-        "are", "we", "me", "in", "of", "and", "or", "not", "be", "do", "if",
-        "for", "at", "but", "this", "so", "with", "from", "there", "how",
-        "who", "what", "no", "yes", "have", "your", "their", "our", "by",
-        "an", "as", "on", "up", "will", "<|user|>", "<|assistant|>", "<|end|>",
-        "see.n.01", "later.s.01",
-    }
+    Rewritten for the FLUX + Uchi architecture: reports the compounding semantic
+    index, episodic memory, proposer status, and registered skills (the old
+    version read OmniRouter internals — predictor._pred / memory.co_occurrence —
+    which no longer exist). Every field degrades gracefully if a component is absent.
+    """
+    lines = ["Knowledge Overview", "=================="]
 
-    _CLUSTERS = [
-        ("python / code",   {"def", "return", "class", "function", "trie", "sequence",
-                              "predict", "python", "code", "import", "```python",
-                              "learn", "train", "parameter", "operation", "optimum"}),
-        ("conversational",  {"hello", "thank", "appreciate", "good", "goodbye", "today",
-                              "aid", "correct", "sorry", "bye", "farewell", "adieu",
-                              "morning", "problem", "joke", "cool"}),
-        ("self-knowledge",  {"deterministic", "concept", "uchi", "forecaster", "asset",
-                              "capability", "sequence", "predict"}),
-        ("math / numbers",  {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-                              "square", "root", "sum", "mean"}),
-    ]
+    idx = getattr(router, "index", None)
+    if idx is not None:
+        n_pass = len(getattr(idx, "passages", []) or [])
+        n_vocab = len(getattr(idx, "w2i", {}) or {})
+        lines.append(f"  Semantic index : {n_pass:,} passages · {n_vocab:,} vocab terms")
 
-    def _clean(tok: str) -> str:
-        return re.sub(r"\.[a-z]+\.\d+$", "", tok)
+    epi = getattr(router, "episodic_memory", None)
+    if epi is not None:
+        lines.append(f"  Episodic memory: {len(getattr(epi, 'history', []) or []):,} recent turns")
 
-    inner   = router.predictor._pred
-    n_nodes = len(inner._nodes)
-    n_vocab = len(inner._vocab)
+    prop = getattr(router, "proposer", None)
+    lines.append(
+        f"  FLUX proposer  : {'loaded' if prop is not None else 'not loaded (extractive / abstain mode)'}"
+    )
 
-    co = router.memory.co_occurrence
-    totals = {
-        k: sum(v.values())
-        for k, v in co.items()
-        if k not in _STOP and not k.startswith("<|")
-    }
-    ranked = sorted(totals.items(), key=lambda x: -x[1])
+    skills = getattr(router, "skills", None)
+    if skills is not None:
+        try:
+            names = sorted(s.name for s in skills.list_skills())
+            lines.append(f"  Skills ({len(names):>2})     : {', '.join(names)}")
+        except Exception:
+            pass
 
-    placed: dict[str, list] = {name: [] for name, _ in _CLUSTERS}
-    placed["other"] = []
-    for tok, _ in ranked:
-        clean = _clean(tok)
-        matched = False
-        for name, keywords in _CLUSTERS:
-            if clean in keywords or tok in keywords:
-                placed[name].append(clean)
-                matched = True
-                break
-        if not matched:
-            placed["other"].append(clean)
-
-    n_episodic = len(router.memory.cpu_mem.records)
-    proc_keys  = list(getattr(router.procedural, "_store", {}).keys())
-
-    lines = [
-        "Knowledge Overview",
-        "==================",
-        f"  Trie          : {n_nodes:,} nodes · {n_vocab} concepts",
-        f"  Episodic mem  : {n_episodic:,} stored associations",
-        f"  Procedural    : {', '.join(proc_keys) if proc_keys else 'none'}",
-        "",
-        "Top concept clusters:",
-    ]
-    for name, _ in _CLUSTERS:
-        tokens = placed[name][:8]
-        if tokens:
-            lines.append(f"  {name:<20} {', '.join(tokens)}")
-    if placed["other"]:
-        lines.append(f"  {'other':<20} {', '.join(placed['other'][:8])}")
+    # Optional trie predictor (advanced SDK API): show stats only if attached.
+    pred = getattr(router, "predictor", None)
+    if pred is not None:
+        try:
+            inner = pred._pred
+            lines.append(f"  Trie predictor : {len(inner._nodes):,} nodes · {len(inner._vocab)} concepts")
+        except Exception:
+            pass
 
     return "\n".join(lines)

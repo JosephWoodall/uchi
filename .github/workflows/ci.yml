@@ -15,7 +15,14 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Fetch premade-brain weights via Git LFS
+      # Only uchi/data/*.pt — the test suite mocks out FluxProposer.load(), so
+      # uchi/flux/checkpoints/flux_best.pt (~450MB) is never needed here.
+      # A blanket `lfs: true` on checkout would fetch it anyway, 3x over for
+      # this matrix, burning LFS bandwidth for nothing.
+      run: git lfs pull --include="uchi/data/*.pt"
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:

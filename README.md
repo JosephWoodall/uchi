@@ -1,209 +1,232 @@
 ![Uchi Logo](docs/logo.png)
 
-# Universal Sequence Predictor
-
 [![PyPI version](https://img.shields.io/pypi/v/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Versions](https://img.shields.io/pypi/pyversions/uchi_python.svg)](https://pypi.org/project/uchi_python/)
 [![Tests](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml/badge.svg)](https://github.com/JosephWoodall/uchi/actions/workflows/ci.yml)
 
-## Core Mission: Omni-modal Deterministic Universal Sequence Predictor (ODUSP)
-Uchi v0.2.0 transforms the architecture from a simple sequence predictor into a completely multi-modal Deterministic Universal Sequence Predictor. It ingests text, audio, images, math telemetry, and code simultaneously—without any neural weights or pre-training. It adds a structured routing layer with intent-based query dispatch via `ProceduralMemory`, a trainable SSM confidence signal via GRPO, persistent vector memory, TUI, REST API, and SDK — all without introducing an LLM dependency.
+## Uchi v0.3.0: The Empirical Synthesis Engine
 
+LLMs are trapped in an imitation paradigm—they mimic patterns without understanding reality. Uchi breaks this cycle. By fusing a high-speed generative engine (FLUX) with a live mathematical sandbox (REPLOracle), Uchi doesn't just predict the next word; it writes code, tests its own assumptions, and **discovers** the truth from first principles.
 
-> [!NOTE]
-> Please see `docs/` for the complete Algorithmic Walkthrough, ODUSP vs LLM Benchmarks, and full API references.
+### The 5 Axioms of v0.3.0
+1. **Empirical Grounding:** Text fails; reality doesn't. Uchi uses Test-Driven Development (TDD) to prove its logic in a live Python sandbox before speaking.
+2. **The Swarm Synthesizer:** Complex problems are autonomously shattered into atomic concepts, solved in parallel by independent agents, and stitched back together.
+3. **Multi-Agent Debate:** Subjective claims are violently cross-examined by a "Devil's Advocate" instance to prune hallucinations.
+4. **Human-Readable Interface:** Complex mathematical discovery is seamlessly translated back into warm, conversational English.
+5. **The Compounding Effect:** Every verified script is permanently saved as an autonomous tool. Uchi never has to solve the same problem twice.
 
----
+### The Architecture: Under the Hood
 
-> [!NOTE]
-> **Comprehensive Documentation & API Reference**
->
-> For interactive examples, API documentation, and to see the newest capabilities (including online Math Learning, Vector Retrievals, and the Simulation Engine), please see our full documentation website.
->
-> **[Read the Full Documentation →](https://github.com/JosephWoodall/uchi/tree/main/docs)**
+To understand Uchi, you must understand the fundamental flaw in modern AI: **LLMs are trapped in an imitation paradigm.** They are autocomplete engines that predict the most statistically likely next word without understanding reality. Uchi solves this by separating the "creative reasoning" from the "factual grounding," and forcing the AI to prove its claims against reality before it is allowed to speak.
 
----
+Here is the exhaustive breakdown of how the architecture achieves this:
 
-## Installation
+#### 1. The FLUX Proposer (The Creative Brain)
+* **What it is:** A custom-built, ultra-lightweight (116M parameter) neural network trained from scratch. 
+* **The Philosophy:** *Small, fast, and creative.* Modern LLMs are massive because they try to memorize the entire internet. FLUX doesn't memorize trivia; it is trained strictly on *how to reason*, *how to code*, and *how to generalize*. It provides the raw, creative horsepower to tackle novel problems.
 
-```bash
-pip install -e ".[all]"
+#### 2. The Semantic Index / `brain.uchi` (The Factual Anchor)
+* **What it is:** A local, persistent database that ingests your PDFs, CSVs, and codebases into an algorithmic search space. 
+* **The Philosophy:** *Separate reasoning from facts.* Because FLUX is tiny and has amnesia regarding world trivia, the `brain.uchi` file provides the cold, hard truths. When you ask a question, the facts are pulled from the index, and FLUX applies its reasoning directly to *your* data. No hallucinations based on outdated training data.
+
+#### 3. The REPL Sandbox (Empirical Discovery)
+* **What it is:** A live, isolated Python execution environment. If the answer to your question isn't explicitly written in your documents, FLUX writes a Python script, injects Test-Driven Development (TDD) assertions to check its own logic, and executes the code.
+* **The Philosophy:** *Don't guess, calculate.* If you ask a standard LLM, "What is the average of these 50 invoices?", it will guess and often fail. Uchi will write a script, run the math, prove it empirically, and return the absolute truth. Reality doesn't lie.
+
+#### 4. The Swarm Synthesizer (Map-Reduce Reasoning)
+* **What it is:** An orchestration layer that intercepts complex questions, shatters them into atomic sub-tasks, and spins up a parallel swarm of FLUX agents to solve them simultaneously before stitching the final answer together.
+* **The Philosophy:** *Divide and conquer.* LLMs degrade rapidly when trying to hold complex, multi-step logic in a single context window. By breaking the problem down into independent threads, Uchi can scale its intelligence dynamically based on how difficult the prompt is.
+
+#### 5. Multi-Agent Debate (The Devil's Advocate)
+* **What it is:** An adversarial loop that violently cross-examines generated answers. The **FactCheck Oracle** algorithmically rejects any claims not grounded in the source text. The **Devil's Advocate** agent attacks the logical soundness of the argument and forces FLUX to reflect and rewrite if a flaw is found.
+* **The Philosophy:** *Truth is forged in conflict.* LLMs are sycophants; they want to please the user, even if it means lying. By forcing the model to defend its logic against a hostile critic, we physically prevent hallucinations from reaching the user. 
+
+#### 6. Procedural Memory (The Compounding Flywheel)
+* **What it is:** Whenever Uchi successfully uses the REPL Sandbox to solve a novel problem, it permanently caches that verified Python script as an autonomous tool.
+* **The Philosophy:** *Never solve the same problem twice.* Standard LLMs start from zero every single time you open a chat. Uchi actually *compounds* its knowledge over time. The longer you use it, the larger its library of custom-built tools grows, making it exponentially faster and more capable.
+
+When you type `uchi tui` and ask a question, you aren't just talking to a chatbot. You are kicking off a microscopic software engineering team. The Swarm breaks your question down, the Index pulls the facts, FLUX writes the code, the REPL executes it, the Devil's Advocate audits the logic, and finally, Uchi translates the mathematically proven result back into warm, conversational English.
+
+> **On benchmarks, honestly:** FLUX is a small (~116M) from-scratch model. MMLU,
+> SWE-bench, and ARC-Challenge are tracked as a **dashboard** to watch the proposer
+> improve — at this scale they stay near baseline, and that is expected. The point
+> of the pairing is *trustworthiness* (grounded answers or honest abstention), not
+> a leaderboard score. See [`docs/training.md`](docs/training.md) for how FLUX is
+> trained and what the final `flux_best.pt` artifact is.
+
+## The 5 Non-Negotiables for v0.3.0
+
+1. **Compounding Effect** — `learn()` always accepts a string; `ask()` always
+   returns one. The output of one `Uchi` instance is directly learnable by the
+   next — knowledge compounds across instances with zero glue code.
+2. **Simplified Public API** — the exact same commands work identically via
+   the Python SDK, the TUI (`uchi tui`), and the REST API (`uchi serve`).
+3. **General Reasoning & Reasoning Chains** — FLUX proposes multi-step
+   reasoning (real, CoT-trained); Uchi verifies every link — by fact-checking
+   against the brain, executing and testing code in a real sandbox, or
+   cross-examining the logic — and abstains the moment a step can't be proven.
+4. **Human-Readable I/O** — every input and output is a clear, interpretable
+   string. No raw tokens, no opaque state.
+5. **OOD Generalization** — FLUX supplies the generative capability to attempt
+   questions it has never seen verbatim; Uchi's grounding gate keeps those
+   attempts honest, emitting an answer only when it can be traced to something
+   real and abstaining otherwise.
+
+See [`tasks/0.3.0 Itemized Deliverables.md`](tasks/0.3.0%20Itemized%20Deliverables.md)
+for the problem/intent behind each one.
+
+## How It Connects
+
+Training produces **one artifact**, and every interface loads it through **one place** — `Uchi.__init__`. The SDK, TUI, and REST server all construct the same `Uchi` object, so training FLUX once makes it live everywhere automatically. If no checkpoint exists yet, the proposer degrades gracefully and the verifier falls back to grounded extraction / honest abstention — Uchi still runs.
+
+```
+scripts/train_all.sh ─► uchi/flux/checkpoints/flux_best.pt   ◄── the artifact
+                                     │
+        Uchi.__init__ picks first that exists:
+        flux_best → qat_best → cot_best → sft_best   (else None)
+                                     │
+        FluxProposer.load(ckpt) → build_generate_fn(ckpt)
+           loads the HybridTSSM model, returns generate_fn(prompt) -> str
+                                     │
+        self.proposer ──► GenerateAndGround(index, oracle, proposer)
+                                     │              (retrieve → propose → verify → emit/abstain)
+                               Uchi.ask(q)
+             ┌───────────────────────┼───────────────────────┐
+            SDK                      TUI                      REST
+   from uchi import Uchi     `uchi tui` → UchiApp     `uchi serve` → api_server
+   u = Uchi(); u.ask(q)      → router = Uchi()        → _router = Uchi(); POST /ask
 ```
 
-On first launch, Uchi runs a one-time bootstrap (Python stdlib patterns + Wikipedia facts) and saves the result to `brain.uchi`. Subsequent launches are instant.
+See [`docs/training.md`](docs/training.md) for the training pipeline and the `flux_best.pt` artifact.
 
-## Quickstart
+## Simplified Public API (SDK, TUI, & REST)
 
-Uchi has two entry points that share the same `brain.uchi` — every interaction in either one improves the other.
+Uchi v0.3.0 standardizes all interactions across three human-readable interfaces. Whether you are scripting, using the terminal, or building a web app, the commands are identical.
 
-### 1. Terminal UI (TUI)
+### 1. Python SDK
 
-```bash
-uchi                        # launch interactive chat
-uchi --preload data.txt     # pre-train with a file before chatting
-uchi --brain /path/to/brain.uchi   # use a specific brain file
-```
-
-Inside the TUI:
-
-| Command | Description |
-|---|---|
-| Just type | Chat with Uchi — it learns from every turn |
-| `/load <file>` | Stream any file into the knowledge base |
-| `/save` | Force-save the current brain state to disk |
-| `Ctrl+S` | Save brain |
-| `Ctrl+C` | Save and quit |
-
-Uchi gives positive/negative feedback signals to improve itself — type "good", "correct", "yes" to reinforce a response, or "wrong", "bad", "no" to prune it.
-
-### 2. REST API
-
-```bash
-uvicorn uchi.api_server:app --host 0.0.0.0 --port 8000
-```
-
-**POST /chat**
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "what is the capital of France?"}'
-# {"reply": "paris", "entropy": 3.2}
-```
-
-**GET /metrics**
-```bash
-curl http://localhost:8000/metrics
-# {"status": "online", "memory_records": 1024, "mode": "deterministic"}
-```
-
-**GET /debug/walk**
-```bash
-curl http://localhost:8000/debug/walk
-# Returns trie walk data from the last prediction (depth, contributions, similarity)
-```
-
-### 3. Python API
+The SDK is designed to be completely modular. Because all input and output is human-readable, multiple autonomous `Uchi` instances can be chained together. **The output of one instance becomes the factual grounding for the next.**
 
 ```python
-from uchi.omni_router import OmniRouter
-from uchi.cli import load_brain, save_brain
+from uchi import Uchi
 
-# Load existing brain or create a new one
-router = load_brain("brain.uchi") or OmniRouter()
+# ── 1. Basic Ingestion & Question Answering ──
+u = Uchi()
+u.ingest("docs/").ingest("data.csv") # Recursively ingest entire directories
+answer = u.ask("What is the primary conclusion of the Q3 data?")
 
-# Chat
-reply = router.chat("what is the capital of France?")
-print(reply)  # → "paris"
 
-# Teach it something new
-router.stream(["<|user|>", "what", "is", "the", "capital", "of", "germany",
-               "<|assistant|>", "berlin"])
+# ── 2. The Compounding Effect (Agent Chaining) ──
+# Instance 1: The Data Analyst
+analyst = Uchi()
+analyst.ingest("financials.csv")
+report = analyst.ask("Write a comprehensive financial report calculating YoY growth.")
 
-# Save
-save_brain(router, "brain.uchi")
+# Instance 2: The Executive Strategist
+executive = Uchi()
+executive.learn(report) # Ground the executive agent on the analyst's output
+strategy = executive.ask("Based on this report, should we cut marketing spend?")
+print(strategy)
+
+
+# ── 3. Analytical Tools via Slash Commands ──
+# You can bypass conversational text and run raw ML tasks through the exact same interface
+u.ask("/classify", X=X_train, y=y_train)
+u.ask("/forecast", X=time_series_data, steps=20)
 ```
 
-### 4. Offline Knowledge Bootstrapping
-
-To scale Uchi's knowledge base beyond the cold-start defaults, run these scripts once before distributing your `brain.uchi`:
+### 2. Terminal UI (TUI)
+The TUI isn't just a chatbot; it is a live telemetry dashboard into the Empirical Synthesis Engine. When you ask a question, you will see the Swarm decomposing the task, the REPL executing code, and the FactCheck Oracle pruning hallucinations in real-time.
 
 ```bash
-# Ingest Wikipedia + code_search_net via HuggingFace (requires: pip install datasets)
-python scripts/bootstrap_knowledge.py --limit 10000
+# Launch the dashboard
+uchi tui
 
-# Ingest Python stdlib function patterns via AST (no internet required)
-python scripts/bootstrap_code.py
-
-# Ingest Wikipedia fact triples via spaCy SVO extraction (requires: pip install wikipedia spacy)
-python scripts/bootstrap_wikidata.py
+# You can also preload a knowledge base directly from the command line:
+uchi tui --preload ./my_project_folder
 ```
 
-The resulting `brain.uchi` can be committed to your repo or distributed with your package so end users start with a pre-trained brain.
-
-## Benchmarks
-
-Uchi is a **deterministic sequence predictor**, not a language model. Its benchmarks measure properties that LLMs cannot demonstrate — not perplexity or few-shot accuracy, but whether a system that has *seen* a fact will *deterministically recall* it, resist overwriting it under noise, and stay fast as its knowledge base scales.
-
-Run yourself with:
+Inside the TUI, use the exact same commands as the SDK:
 ```bash
-python benchmarks/run_benchmarks.py
-python benchmarks/run_benchmarks.py --mini       # fast CI pass (10 facts)
-python benchmarks/run_benchmarks.py --wipe       # clean rebuild before benchmarking
+> What is the Eiffel Tower?
+> /classify data.csv --label target_col
 ```
 
-Results are written to `eval_metrics.json` and this table is updated automatically.
+### 3. REST API
+Uchi can be deployed as a headless reasoning microservice with a single command. 
 
----
+```bash
+# Boot the Uchi Swarm on port 8000
+uchi serve --port 8000
+```
 
-### Pre-load Recall — **80.0%** (40 / 50)
+Because the API is universal, you send the exact same queries via HTTP:
+```bash
+# Ask a reasoning question
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Calculate the factorial of 5 using Python."}'
 
-50 factual Q&A pairs (geography, science, history, Python/CS) are streamed directly into the trie as `<|user|> question <|assistant|> answer` sequences. Web search is then disabled and the system is asked each question cold. A pass requires the expected answer to appear in the reply.
+# Execute a specialized skill
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query": "/classify data.csv"}'
+```
 
-This is Uchi's core capability claim: *if you teach it something, it recalls it exactly*. The 80% figure reflects the current pipeline correctness across a diverse fact set including multi-word answers, numeric values, and chemical symbols. Failures are vocabulary edge cases (the tokenizer normalises "au" → `gold.n.03`, which is semantically correct but fails substring match).
+## Install
 
----
+```bash
+pip install uchi_python
+```
+See `docs/` for architecture details and the full API reference.
 
-### Zero Catastrophic Forgetting — **100.0%** (10 / 10, after 1 000 noise facts)
+## Training FLUX Yourself
 
-10 anchor facts are streamed first. Then 1 000 unrelated noise facts are streamed on top. The 10 anchors are then re-tested. 100% means not a single anchor fact was displaced.
+`pip install` (and a `git clone`) already ships a trained FLUX checkpoint —
+you don't need to train anything to use Uchi. This section is for anyone who
+wants to retrain FLUX, fine-tune it further, or reproduce the results.
 
-LLMs trained on a new document lose previously learned facts proportional to the dataset shift (catastrophic interference). Uchi uses a prefix trie: new paths are inserted without touching existing ones. Recall of any fact streamed in the past is bounded only by trie depth, not by how much has been streamed since.
+### Use the shipped weights (default, no training)
 
----
+```bash
+git clone https://github.com/JosephWoodall/uchi.git
+cd uchi
+git lfs install        # once per machine — see below if you don't have Git LFS
+git lfs pull           # fetches uchi/flux/checkpoints/flux_best.pt (~450MB)
+                        # and uchi/data/embeddings.pt (~230MB, the premade brain)
+```
 
-### Latency vs. Brain Size — flat O(depth)
+```python
+from uchi import Uchi
+u = Uchi()   # loads uchi/flux/checkpoints/flux_best.pt automatically
+```
 
-| Brain size | Latency |
-|---|---|
-| 10 facts | 10 666 ms |
-| 100 facts | 2 568 ms |
-| 500 facts | 2 282 ms |
-| 1 000 facts | 2 597 ms |
+If you don't have Git LFS: `sudo apt install git-lfs` (Debian/Ubuntu),
+`brew install git-lfs` (macOS), `sudo pacman -S git-lfs` (Arch), or see
+[git-lfs.github.com](https://git-lfs.github.com). Without it, the LFS-tracked
+files show up as small text pointers instead of the real weights — `Uchi()`
+will still run, just with the proposer degraded to `None` (grounded
+extraction / honest abstention only, no FLUX generation) until you `git lfs
+pull`.
 
-Latency is measured as wall-clock time for a single chat() turn on a pre-loaded fact, with web search disabled.
+### Train from scratch
 
-The pattern is deliberate: latency at 1 000 facts is the same as at 100 facts because trie lookup is O(depth), not O(vocabulary size). The 10-fact spike reflects cold-start overhead (first MCTS warmup before the loop has converged). At scale this overhead amortises to near-zero.
+The full pipeline — pre-training → SFT → CoT distillation → ternary QAT — is
+one script:
 
----
+```bash
+bash scripts/train_all.sh
+```
 
-### Code Completion — **5.0%** (1 / 20 HumanEval)
+This produces `uchi/flux/checkpoints/flux_best.pt` (the same artifact
+`Uchi()` loads) via four phases, each skipped automatically if its output
+already exists and is newer than its input (safe to re-run/resume). Needs a
+CUDA GPU; `~12GB` VRAM covers the default config. Full details — exact phase
+breakdown, hyperparameters, and what each phase teaches — are in
+[`docs/training.md`](docs/training.md).
 
-20 HumanEval function stubs (`def factorial(n):` etc.) are streamed as training pairs, then recalled. Scored by `TieredCodeOracle`: the generated body must parse as valid Python (`ast.parse`) and contain expected keywords.
-
-5% on HumanEval after single-pass training is the *floor*, not the ceiling. Uchi is not pre-trained on code corpora. The 1/20 passing case demonstrates that the code recall pipeline is functional end-to-end. Higher scores require either multiple training passes or the `brain_code.uchi` specialist loaded alongside the base brain.
-
----
-
-### Inference Latency — **2 333 ms** per turn
-
-Single chat turn on a pre-loaded fact, web search off. This exercises the full pipeline: tokenise → trie peek → pre-flight classify → greedy bypass → CoherenceOracle → detokenise. Down from 17 762 ms in the pre-optimization baseline (7.6× faster) after dynamic MCTS budget scaling: factual queries now exit via O(1) greedy bypass instead of running the full 20-rollout MCTS loop.
-
----
-
-### RAM Footprint — **1 374 MB** resident
-
-Measured after loading `brain.uchi` and running the recall stream. Dominated by the trie node store (~1.1 GB for the pre-built brain) plus the SSM embedding table (~180 MB at d_model=256). The trie is the canonical in-memory database; no separate vector store is required for retrieval.
-
----
-
-### Hallucination Rate — **0%**
-
-Uchi cannot fabricate tokens that are not in its trie. Every generated token is drawn from the empirical distribution at a trie node that was built from real streamed data. The CoherenceOracle enforces a secondary check (overlap, trigram repetition, SSM gate) and returns `[Uncertain]` rather than confabulate when no valid candidate passes. Zero hallucination is a structural guarantee, not a tuned behaviour.
-
----
-
-<!-- BENCHMARK_TABLE_START -->
-| Metric | Score | Notes |
-|---|---|---|
-| **Pre-load Recall** | **80.0%** (n=50) | Stream N facts → immediately test recall; measures deterministic memory |
-| **Zero Catastrophic Forgetting** | **100.0%** after 1000 noise facts | Anchor facts recalled correctly after 1000 distractors streamed on top |
-| **Latency vs. Brain Size** | 10facts→10666ms  100facts→2568ms  500facts→2282ms  1000facts→2597ms | Proves O(depth) trie lookup: latency stays flat as brain grows |
-| **Code Completion** | **5.0%** (n=20 HumanEval) | Python function stub → body; scored by syntax + keyword validity |
-| **Inference Latency** | **2333.1 ms** | Single turn on a pre-loaded fact, web search disabled |
-| **RAM Footprint** | **1374.2 MB** | Resident set after brain load + recall stream |
-| **Hallucination Rate** | **0%** | Strict trie boundary enforcement |
-<!-- BENCHMARK_TABLE_END -->
-
-
-
+```
+Pre-train (FineWeb-Edu)  →  SFT (SQuAD/Dolly/Code)  →  CoT (GSM8K)  →  Ternary QAT
+     ckpt_best.pt              sft_best.pt              cot_best.pt      flux_best.pt
+```

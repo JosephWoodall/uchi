@@ -7,7 +7,10 @@ __pycache__/
 # Runtime state regenerated at startup
 uchi_cpu_memory_index.json
 uchi_cpu_memory_vectors.npy
+uchi_cpu_memory_hnsw.bin
 uchi_procedural_memory.json
+ssm_calibration.json
+*_incremental_checkpoint.json
 # PyTorch weights checkpoint
 ssm_dynamics.pt
 # Dev / one-off root scripts
@@ -23,3 +26,11 @@ site/
 *.tmp
 replay.db
 .uchi/
+
+# Training checkpoints (per-phase snapshots, optimizer state) stay local —
+# large and not needed by anyone except someone resuming a training run.
+# flux_best.pt is the exception: the stripped, inference-only shipped model,
+# tracked via Git LFS (see .gitattributes) so `git clone` gets it automatically.
+uchi/flux/checkpoints/*.pt
+!uchi/flux/checkpoints/flux_best.pt
+uchi/flux/data/*.bin

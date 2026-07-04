@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uchi-python"
-version = "0.2.0"
-description = "Omni-modal Deterministic Universal Sequence Predictor (ODUSP)"
+version = "0.3.0"
+description = "A grounded, no-LLM assistant that verifies factual answers and abstains rather than confabulate."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -37,6 +37,10 @@ dependencies = [
     "textual>=0.50.0",
     "torch>=2.0.0",
     "spacy>=3.0.0",
+    "hnswlib>=0.7.0",
+    "sympy>=1.12",
+    "tiktoken>=0.5.0",
+    "transformers>=4.0.0",
 ]
 
 [project.urls]
@@ -62,7 +66,7 @@ where   = ["."]
 include = ["uchi*"]
 
 [tool.setuptools.package-data]
-uchi = ["py.typed", "persona.txt"]
+uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/*.pt", "data/.gitkeep"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
