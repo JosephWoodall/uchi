@@ -55,6 +55,27 @@ When you type `uchi tui` and ask a question, you aren't just talking to a chatbo
 > a leaderboard score. See [`docs/training.md`](docs/training.md) for how FLUX is
 > trained and what the final `flux_best.pt` artifact is.
 
+## The 5 Non-Negotiables for v0.3.0
+
+1. **Compounding Effect** — `learn()` always accepts a string; `ask()` always
+   returns one. The output of one `Uchi` instance is directly learnable by the
+   next — knowledge compounds across instances with zero glue code.
+2. **Simplified Public API** — the exact same commands work identically via
+   the Python SDK, the TUI (`uchi tui`), and the REST API (`uchi serve`).
+3. **General Reasoning & Reasoning Chains** — FLUX proposes multi-step
+   reasoning (real, CoT-trained); Uchi verifies every link — by fact-checking
+   against the brain, executing and testing code in a real sandbox, or
+   cross-examining the logic — and abstains the moment a step can't be proven.
+4. **Human-Readable I/O** — every input and output is a clear, interpretable
+   string. No raw tokens, no opaque state.
+5. **OOD Generalization** — FLUX supplies the generative capability to attempt
+   questions it has never seen verbatim; Uchi's grounding gate keeps those
+   attempts honest, emitting an answer only when it can be traced to something
+   real and abstaining otherwise.
+
+See [`tasks/0.3.0 Itemized Deliverables.md`](tasks/0.3.0%20Itemized%20Deliverables.md)
+for the problem/intent behind each one.
+
 ## How It Connects
 
 Training produces **one artifact**, and every interface loads it through **one place** — `Uchi.__init__`. The SDK, TUI, and REST server all construct the same `Uchi` object, so training FLUX once makes it live everywhere automatically. If no checkpoint exists yet, the proposer degrades gracefully and the verifier falls back to grounded extraction / honest abstention — Uchi still runs.
@@ -159,3 +180,53 @@ curl -X POST http://localhost:8000/ask \
 pip install uchi_python
 ```
 See `docs/` for architecture details and the full API reference.
+
+## Training FLUX Yourself
+
+`pip install` (and a `git clone`) already ships a trained FLUX checkpoint —
+you don't need to train anything to use Uchi. This section is for anyone who
+wants to retrain FLUX, fine-tune it further, or reproduce the results.
+
+### Use the shipped weights (default, no training)
+
+```bash
+git clone https://github.com/JosephWoodall/uchi.git
+cd uchi
+git lfs install        # once per machine — see below if you don't have Git LFS
+git lfs pull           # fetches uchi/flux/checkpoints/flux_best.pt (~450MB)
+                        # and uchi/data/embeddings.pt (~230MB, the premade brain)
+```
+
+```python
+from uchi import Uchi
+u = Uchi()   # loads uchi/flux/checkpoints/flux_best.pt automatically
+```
+
+If you don't have Git LFS: `sudo apt install git-lfs` (Debian/Ubuntu),
+`brew install git-lfs` (macOS), `sudo pacman -S git-lfs` (Arch), or see
+[git-lfs.github.com](https://git-lfs.github.com). Without it, the LFS-tracked
+files show up as small text pointers instead of the real weights — `Uchi()`
+will still run, just with the proposer degraded to `None` (grounded
+extraction / honest abstention only, no FLUX generation) until you `git lfs
+pull`.
+
+### Train from scratch
+
+The full pipeline — pre-training → SFT → CoT distillation → ternary QAT — is
+one script:
+
+```bash
+bash scripts/train_all.sh
+```
+
+This produces `uchi/flux/checkpoints/flux_best.pt` (the same artifact
+`Uchi()` loads) via four phases, each skipped automatically if its output
+already exists and is newer than its input (safe to re-run/resume). Needs a
+CUDA GPU; `~12GB` VRAM covers the default config. Full details — exact phase
+breakdown, hyperparameters, and what each phase teaches — are in
+[`docs/training.md`](docs/training.md).
+
+```
+Pre-train (FineWeb-Edu)  →  SFT (SQuAD/Dolly/Code)  →  CoT (GSM8K)  →  Ternary QAT
+     ckpt_best.pt              sft_best.pt              cot_best.pt      flux_best.pt
+```

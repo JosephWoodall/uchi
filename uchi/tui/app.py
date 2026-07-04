@@ -170,8 +170,8 @@ class UchiApp(App):
         Binding("down",   "history_next",     "History ↓", show=False),
     ]
 
-    TITLE = "Uchi ODUSP"
-    SUB_TITLE = "Omni-modal Deterministic Universal Sequence Predictor"
+    TITLE = "Uchi"
+    SUB_TITLE = "Grounded answers, honest abstentions — runs on your machine"
 
     def __init__(self, brain_path, preload_path, **kwargs):
         super().__init__(**kwargs)
@@ -195,24 +195,22 @@ class UchiApp(App):
                     yield Label("Bootstrapping...", id="rl-label")
                     yield ProgressBar(id="rl-progress", show_eta=False)
                 with Vertical(id="think-section"):
-                    yield Label("◈ thinking  (ctrl+t to pin)", id="think-label")
+                    yield Label("🧠 What I'm thinking  (ctrl+t to keep open)", id="think-label")
                     yield RichLog(id="think-log", markup=True, highlight=False)
             with Vertical(id="side-panel"):
                 yield Static(self._stats_text(), id="stats-panel")
         with Horizontal(id="telemetry-strip"):
-            yield Static("Swarm Synthesizer: [bold #9ece6a]ONLINE[/bold #9ece6a]", classes="telemetry-item")
-            yield Static("FactCheck Oracle: [bold #9ece6a]ONLINE[/bold #9ece6a]", classes="telemetry-item")
-            yield Static("REPL Sandbox: [bold #9ece6a]ONLINE[/bold #9ece6a]", classes="telemetry-item")
-        yield Input(placeholder="Initializing Uchi Synthesizer...", id="input-box", disabled=True)
+            yield Static("Multi-step reasoning: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+            yield Static("Fact-checking: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+            yield Static("Code sandbox: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
+        yield Input(placeholder="Getting Uchi ready...", id="input-box", disabled=True)
         yield Footer()
 
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write("[bold #7dcfff]╔══════════════════════════════════════════╗[/bold #7dcfff]")
-        log.write("[bold #7dcfff]║    Uchi Synthesizer ◈ v0.3.0             ║[/bold #7dcfff]")
-        log.write("[bold #7dcfff]║    Empirical Reasoning Engine            ║[/bold #7dcfff]")
-        log.write("[bold #7dcfff]╚══════════════════════════════════════════╝[/bold #7dcfff]")
-        log.write("[dim]Type [bold]/help[/bold] for commands and skills, or start chatting.[/dim]\n")
+        log.write("[bold #7aa2f7]◆ Uchi v0.3.0[/bold #7aa2f7]  [dim]— FLUX proposes, Uchi verifies[/dim]")
+        log.write("[dim]I ground every answer in what I actually know, and say so honestly when I don't.[/dim]")
+        log.write("[dim]Type [bold]/help[/bold] for commands, or just start chatting.[/dim]\n")
         self.initialize_brain()
         self.set_interval(10.0, self._tick_stats)
 
@@ -226,43 +224,43 @@ class UchiApp(App):
         self.query_one("#stats-panel", Static).update(self._stats_text())
 
     def _stats_text(self) -> str:
-        lines = ["[bold #7dcfff]─ Stats ─[/bold #7dcfff]"]
+        lines = ["[bold #7aa2f7]─ At a glance ─[/bold #7aa2f7]"]
         if self.router is not None:
             try:
                 n_skills = len(self.router.skills.list_skills()) if hasattr(self.router, "skills") else 0
-                lines.append(f"[bold #9ece6a]Skills: {n_skills}[/bold #9ece6a]")
+                n_facts = len(getattr(self.router.index, "passages", []) or [])
+                lines.append(f"[bold #9ece6a]{n_skills} skills[/bold #9ece6a]")
+                lines.append(f"[bold #9ece6a]{n_facts:,} facts known[/bold #9ece6a]")
                 if self.router.proposer:
-                    lines.append("[bold #9ece6a]FLUX: Loaded[/bold #9ece6a]")
+                    lines.append("[bold #9ece6a]Reasoning: on[/bold #9ece6a]")
                 else:
-                    lines.append("[bold #e0af68]FLUX: Offline[/bold #e0af68]")
+                    lines.append("[bold #e0af68]Reasoning: extractive only[/bold #e0af68]")
             except Exception:
                 pass
         else:
-            lines.append("[dim]loading...[/dim]")
+            lines.append("[dim]starting up...[/dim]")
         import os
         bp = getattr(self, "brain_path", "brain.uchi")
         if os.path.exists(bp):
             mb = os.path.getsize(bp) / 1024 / 1024
-            lines.append(f"Brain  {mb:.1f}MB")
-        lines.append("\n[dim]^s save  ^r skills[/dim]")
+            lines.append(f"Saved brain  {mb:.1f}MB")
+        lines.append("\n[dim]^s save  ^r reload skills[/dim]")
         return "\n".join(lines)
 
     # ── Brain init ────────────────────────────────────────────────────────────
 
     @work(thread=True)
     def initialize_brain(self) -> None:
-        self.call_from_thread(self.write_log, f"[dim][*] Loading brain from [bold]{self.brain_path}[/bold]...[/dim]")
+        self.call_from_thread(self.write_log, "[dim]Waking up...[/dim]")
 
         from uchi.simple import Uchi
-        
-        try:
-            self.call_from_thread(self.write_log, "[dim][*] Booting FLUX + Uchi architecture...[/dim]")
-            router = Uchi()
 
+        try:
+            router = Uchi()
             self.router = router
             self.call_from_thread(self.on_brain_ready)
         except Exception as e:
-            self.call_from_thread(self.write_log, f"[bold #f7768e]Init error:[/bold #f7768e] {e}")
+            self.call_from_thread(self.write_log, f"[bold #f7768e]Couldn't start up:[/bold #f7768e] {e}")
 
     def write_log(self, msg: str) -> None:
         self.query_one("#chat-log", RichLog).write(msg)
@@ -272,13 +270,19 @@ class UchiApp(App):
 
     def on_brain_ready(self) -> None:
         n_skills = len(self.router.skills.list_skills())
+        n_facts = len(getattr(self.router.index, "passages", []) or [])
+        knowledge_note = (
+            f"{n_facts:,} general-knowledge facts pre-loaded" if n_facts
+            else "no prior knowledge yet — teach me with /learn"
+        )
         self.write_log(
-            f"[bold #9ece6a][+] Brain ready.[/bold #9ece6a] "
-            f"{n_skills} skills loaded. Type [bold]/help[/bold] to list them."
+            f"[bold #9ece6a]Ready![/bold #9ece6a] "
+            f"{n_skills} skills available, {knowledge_note}. "
+            f"Type [bold]/help[/bold] any time."
         )
         ib = self.query_one(Input)
         ib.disabled = False
-        ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
         ib.focus()
         self._tick_stats()
         self._tick_stats()
@@ -396,22 +400,33 @@ class UchiApp(App):
 
     # ── Workers ───────────────────────────────────────────────────────────────
 
+    # Internal-dialogue event tags: every step of Uchi's live thought process
+    # (status updates, FLUX's actual reasoning trace, the Devil's Advocate
+    # critique, verification outcomes) surfaces here with a clear label — this
+    # IS the "glass box" view into what's happening, kept out of the main
+    # conversation so that stays clean and readable.
+    _THINK_TAGS = {
+        "thinking":      ("💭", "Working",   "#7aa2f7"),
+        "reasoning":     ("🧠", "Reasoning", "#bb9af7"),
+        "critique":      ("⚖️", "Critique",  "#e0af68"),
+        "reinforce":     ("✓",  "Verified",  "#9ece6a"),
+        "prune":         ("✗",  "Rejected",  "#f7768e"),
+        "hallucination": ("⚠",  "Flagged",   "#e0af68"),
+    }
+
     def _make_callback(self):
         cancel = self._cancel_event
 
         def on_event(event_type, msg):
             if cancel.is_set():
                 raise InterruptedError("generation cancelled")
+            icon, label, colour = self._THINK_TAGS.get(event_type, ("•", event_type, "#a9b1d6"))
+            self.call_from_thread(self.write_think, f"[{colour}]{icon} {label}:[/{colour}] {msg}")
             if event_type == "thinking":
-                self.call_from_thread(self.write_think, msg)
                 m = re.search(r"rollout\s+(\d+)/(\d+)", msg)
                 if m:
                     n, total = int(m.group(1)), int(m.group(2))
-                    self.call_from_thread(self._update_progress, n, total, "Predicting")
-            else:
-                colours = {"reinforce": "#9ece6a", "prune": "#f7768e", "hallucination": "#e0af68"}
-                colour  = colours.get(event_type, "white")
-                self.call_from_thread(self.write_log, f"[{colour}]{msg}[/{colour}]")
+                    self.call_from_thread(self._update_progress, n, total, "Working")
 
         return on_event
 
@@ -499,7 +514,7 @@ class UchiApp(App):
     def _restore_input(self) -> None:
         ib = self.query_one(Input)
         ib.disabled = False
-        ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
         ib.focus()
 
     # ── Display helpers ───────────────────────────────────────────────────────
@@ -514,18 +529,18 @@ class UchiApp(App):
 
         ib = self.query_one(Input)
 
-        ib.placeholder = "Chat with Uchi, or /skill args..."
+        ib.placeholder = "Ask me anything, or try /classify, /forecast, ..."
 
         ib.disabled = False
         ib.focus()
 
     def _show_help(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write("\n[bold #7dcfff]── Built-in Commands ──────────────────────────[/bold #7dcfff]")
+        log.write("\n[bold #7aa2f7]── Commands ──────────────────────────[/bold #7aa2f7]")
         log.write("  [bold]/help[/bold]               Show this menu")
-        log.write("  [bold]/save[/bold]               Serialize brain to disk")
-        log.write("  [bold]/load[/bold] [italic]<path>[/italic]        Ingest a file into the brain")
-        log.write("  [bold]/learn[/bold] [italic]<url|text>[/italic]   Fetch a URL or ingest raw text permanently")
+        log.write("  [bold]/save[/bold]               Save what I've learned to disk")
+        log.write("  [bold]/load[/bold] [italic]<path>[/italic]        Teach me from a file")
+        log.write("  [bold]/learn[/bold] [italic]<url|text>[/italic]   Teach me from a URL or raw text")
         log.write("  [bold]/quit[/bold]               Exit")
         log.write("  [bold]↑/↓[/bold]                 Cycle command history")
         log.write("  [bold]ctrl+c[/bold]              Cancel generation (or quit if idle)")

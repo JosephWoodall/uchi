@@ -218,8 +218,6 @@ def main():
                         help="Number of questions to sample (0 = full 14,042, default 200)")
     parser.add_argument("--subjects", type=str, default=None,
                         help="Comma-separated MMLU subjects to test (default: all 57)")
-    parser.add_argument("--brain", default="brain.uchi",
-                        help="Brain file path (default: brain.uchi)")
     parser.add_argument("--out", default=_DEFAULT_OUT,
                         help=f"Output JSON path (default: {_DEFAULT_OUT})")
     parser.add_argument("--verbose", action="store_true",
@@ -233,30 +231,10 @@ def main():
     print(" Uchi MMLU Benchmark — OOD Generalization Baseline")
     print("="*_W + "\n")
 
-    import gzip, pickle
-    from uchi.omni_router import OmniRouter
+    from uchi import Uchi
+    print("[*] Booting Uchi (FLUX + Uchi architecture, premade brain)...")
+    router = Uchi()
 
-    brain_path = args.brain
-    router = None
-    if os.path.exists(brain_path):
-        print(f"[*] Loading brain from {brain_path}…")
-        try:
-            with gzip.open(brain_path, "rb") as f:
-                router = pickle.load(f)
-        except Exception:
-            try:
-                with open(brain_path, "rb") as f:
-                    router = pickle.load(f)
-            except Exception as e:
-                print(f"[!] Failed to load brain: {e}")
-
-    if router is None:
-        print("[*] No brain loaded — using cold router (bootstrap disabled).")
-        OmniRouter._bootstrap_knowledge = lambda self, *a, **kw: None
-        OmniRouter._bootstrap_persona   = lambda self, *a, **kw: None
-        router = OmniRouter(use_bpe=False)
-
-    router.web_search_enabled = False
     results = run_mmlu(router, sample=sample, subjects=subjects, verbose=args.verbose)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

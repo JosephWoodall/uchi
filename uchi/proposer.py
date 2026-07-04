@@ -32,8 +32,13 @@ from typing import Optional, Protocol, runtime_checkable
 class Proposer(Protocol):
     """Any generator Uchi can gate. `propose` is required; `plan` is optional."""
 
-    def propose(self, question: str, evidence: list[str]) -> str:
-        """Generate a candidate answer conditioned on the retrieved evidence."""
+    def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
+        """Generate a candidate answer conditioned on the retrieved evidence.
+
+        `think=True` primes the model to reason step-by-step before answering
+        (the CoT-trained <|think|>...<|/think|> behaviour) instead of jumping
+        straight to <|assistant|>. Proposers without that training ignore it.
+        """
         ...
 
     def plan(self, question: str) -> Optional[str]:
@@ -49,8 +54,8 @@ class DecoderProposer:
     def __init__(self, decoder) -> None:
         self._d = decoder
 
-    def propose(self, question: str, evidence: list[str]) -> str:
-        return self._d.generate(question, evidence)
+    def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
+        return self._d.generate(question, evidence)   # from-scratch decoder has no think-trace format
 
     def plan(self, question: str) -> Optional[str]:
         return None                      # the small decoder can't decompose
@@ -86,16 +91,37 @@ class FluxProposer:
              "into a structured DSL Grid (e.g., State(A)=1, Relation(A,B)=True). Use this grid as a scratchpad.\n\n"
              "Question: {q}\nDSL Grid:\n")
 
-    def __init__(self, generate_fn, max_answer_tokens: int = 64, max_plan_tokens: int = 128) -> None:
+    def __init__(self, generate_fn, max_answer_tokens: int = 64, max_plan_tokens: int = 128,
+                 max_think_tokens: int = 160) -> None:
         self._gen = generate_fn
         self.max_answer_tokens = max_answer_tokens
         self.max_plan_tokens = max_plan_tokens
+        self.max_think_tokens = max_think_tokens   # reasoning + answer needs more room than answer alone
 
-    def propose(self, question: str, evidence: list[str]) -> str:
-        ctx = "\n".join(evidence[:4]) if evidence else "(no context)"
-        prompt = self._ANSWER.format(ctx=ctx, q=question)
+    def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
+        if think:
+            # CoT trained on the RAW question with no wrapper text at all
+            # (cot_distill.py: prompt_ids = [user_id] + encode_text(question)) —
+            # no "Context:\nUsing ONLY..." instruction paragraph, no context
+            # block. Wrapping it in the SFT-style _ANSWER template here is an
+            # out-of-distribution prompt shape that produced degenerate/looping
+            # output when tried; matching training's exact format is what makes
+            # <|think|> prime real reasoning instead. Grounding against evidence
+            # still happens downstream via the oracle regardless of prompt shape.
+            prompt = question
+        else:
+            ctx = "\n".join(evidence[:4]) if evidence else "(no context)"
+            prompt = self._ANSWER.format(ctx=ctx, q=question)
+        max_tokens = self.max_think_tokens if think else self.max_answer_tokens
         try:
-            return (self._gen(prompt, self.max_answer_tokens) or "").strip()
+            # `think=True` primes <|think|> instead of jumping straight to
+            # <|assistant|>, eliciting CoT's trained reasoning-before-answering.
+            # generate_fn degrades to plain answering if it doesn't support the
+            # kwarg (e.g. an older cached generate_fn from before this feature).
+            try:
+                return (self._gen(prompt, max_tokens, think=think) or "").strip()
+            except TypeError:
+                return (self._gen(prompt, max_tokens) or "").strip()
         except Exception:
             return ""
 

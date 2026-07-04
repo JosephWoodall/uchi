@@ -195,13 +195,22 @@ class GenerateAndGround:
                 
                 for attempt in range(max_reflections + 1):
                     try:
-                        candidate = self.proposer.propose(current_prompt, ev_texts)
+                        # think=True elicits CoT's trained reasoning-before-answering
+                        # so production candidates surface the full trace, not just
+                        # a bare answer. (Devil's Advocate/reflection prompts below
+                        # stay plain — they ask for a short critique, not a proof.)
+                        candidate = self.proposer.propose(current_prompt, ev_texts, think=True)
                     except Exception:
                         candidate = ""
                         
                     if not candidate or not candidate.strip():
                         break
-                        
+
+                    # Surface FLUX's full internal monologue (the actual <|think|>
+                    # trace), distinct from the "thinking" status-update events —
+                    # this is the literal reasoning content, not meta-commentary.
+                    if callback: callback("reasoning", candidate)
+
                     # Actor-Critic Reflection: Verify immediately to provide feedback
                     if self.oracle.is_grounded(candidate, ev_texts):
                         # Cross-Examination Flywheel (Multi-Agent Debate)
@@ -222,6 +231,7 @@ class GenerateAndGround:
                             yield candidate
                             break  # Passed debate!
                         else:
+                            if callback: callback("critique", critique)
                             if callback: callback("prune", "Devil's Advocate found a logical flaw. Forcing reflection...")
                             if attempt < max_reflections:
                                 if callback: callback("thinking", "Feeding Devil's Advocate critique back to FLUX...")

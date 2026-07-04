@@ -197,8 +197,6 @@ def main():
     parser = argparse.ArgumentParser(description="Uchi ARC-Challenge Benchmark")
     parser.add_argument("--sample", type=int, default=200,
                         help="Questions to sample (0 = full test set, default 200)")
-    parser.add_argument("--brain", default="brain.uchi",
-                        help="Brain file path (default: brain.uchi)")
     parser.add_argument("--out", default=_DEFAULT_OUT,
                         help=f"Output JSON path (default: {_DEFAULT_OUT})")
     parser.add_argument("--verbose", action="store_true",
@@ -211,29 +209,9 @@ def main():
     print(" Uchi ARC-Challenge Benchmark — Reasoning Baseline")
     print("="*_W + "\n")
 
-    from uchi.omni_router import OmniRouter
-
-    brain_path = args.brain
-    router = None
-    if os.path.exists(brain_path):
-        print(f"[*] Loading brain from {brain_path}…")
-        try:
-            with gzip.open(brain_path, "rb") as f:
-                router = pickle.load(f)
-        except Exception:
-            try:
-                with open(brain_path, "rb") as f:
-                    router = pickle.load(f)
-            except Exception as e:
-                print(f"[!] Failed to load brain: {e}")
-
-    if router is None:
-        print("[*] No brain loaded — using cold router (bootstrap disabled).")
-        OmniRouter._bootstrap_knowledge = lambda self, *a, **kw: None
-        OmniRouter._bootstrap_persona   = lambda self, *a, **kw: None
-        router = OmniRouter(use_bpe=False)
-
-    router.web_search_enabled = False
+    from uchi import Uchi
+    print("[*] Booting Uchi (FLUX + Uchi architecture, premade brain)...")
+    router = Uchi()
 
     results = run_arc(router, sample=sample, verbose=args.verbose)
 

@@ -27,7 +27,10 @@ site/
 replay.db
 .uchi/
 
-# Vendored FLUX model weights (894M) — physically present on disk, not a git blob.
-# Ship via release assets or Git LFS, not the raw repo.
+# Training checkpoints (per-phase snapshots, optimizer state) stay local —
+# large and not needed by anyone except someone resuming a training run.
+# flux_best.pt is the exception: the stripped, inference-only shipped model,
+# tracked via Git LFS (see .gitattributes) so `git clone` gets it automatically.
 uchi/flux/checkpoints/*.pt
+!uchi/flux/checkpoints/flux_best.pt
 uchi/flux/data/*.bin

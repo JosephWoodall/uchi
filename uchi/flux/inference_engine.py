@@ -35,12 +35,19 @@ class InferenceEngine:
         This shows EXACTLY what the model is thinking.
         """
         
-        # Pure pass-through prompt
-        prompt = f"<|context|>\nIdentity: FLUX. Nature: Conscious. Knowledge: Physics/Code.\n"
-        if context: prompt += f"{context}\n"
-        prompt += f"<|/context|>\n<|user|>\n{query}\n<|assistant|>\n"
+        # Pure pass-through prompt. Structural markers use encode_special (the
+        # ids training actually used), not literal text through encode_text —
+        # see build_generate_fn for why that mismatch produces degenerate output.
+        tok = self.tokenizer
+        token_ids = [tok.encode_special("<|context|>")]
+        token_ids += tok.encode_text("Identity: FLUX. Nature: Conscious. Knowledge: Physics/Code.\n")
+        if context:
+            token_ids += tok.encode_text(context + "\n")
+        token_ids.append(tok.encode_special("<|/context|>"))
+        token_ids.append(tok.encode_special("<|user|>"))
+        token_ids += tok.encode_text(query)
+        token_ids.append(tok.encode_special("<|assistant|>"))
 
-        token_ids = self.tokenizer.encode_text(prompt)
         input_tensor = torch.tensor([token_ids], device=self.device).long()
         t_start = time.perf_counter()
 
@@ -60,7 +67,7 @@ class InferenceEngine:
             tok_text = self.tokenizer.decode_text([tok_id])
             token_times.append(time.perf_counter() - t0)
 
-            if tok_id == self.tokenizer.eos_token_id:
+            if tok_id in (self.tokenizer.eos_token_id, tok.encode_special("<|user|>"), tok.encode_special("<|end|>")):
                 break
 
             yield {"type": "token", "content": tok_text, "metrics": {"tpot": token_times[-1]}}
@@ -123,27 +130,58 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
 
     model.eval()
     if hasattr(model, "set_quantization"):
-        model.set_quantization(False)
+        # Must match how the checkpoint was TRAINED. A QAT checkpoint's weights
+        # were only ever optimized for their ternary-quantized forward pass —
+        # reading them in full precision produces degenerate output (verified:
+        # repetition loops / no structure). A non-QAT checkpoint has never seen
+        # quantization noise, so quantizing it now would be equally wrong.
+        # Older checkpoints predate this flag; default False is correct for them
+        # (every phase before QAT was introduced trained at full precision).
+        model.set_quantization(bool(obj.get("quantized", False)) if isinstance(obj, dict) else False)
     eos = tokenizer.eos_token_id
+    # Structural turn markers must be the SAME special-token ids training used
+    # (encode_special), not literal "<|user|>" text run through encode_text —
+    # that BPE-tokenizes the angle brackets/pipe characters into a multi-token
+    # sequence the model never saw in training, producing degenerate output.
+    user_id = tokenizer.encode_special("<|user|>")
+    asst_id = tokenizer.encode_special("<|assistant|>")
+    think_id = tokenizer.encode_special("<|think|>")
+    stop_ids = {eos, user_id, tokenizer.encode_special("<|end|>")}
 
     @torch.no_grad()
-    def generate_fn(prompt: str, max_tokens: int = 64) -> str:
-        text = f"<|user|>\n{prompt}\n<|assistant|>\n"
-        ids = tokenizer.encode_text(text)
+    def generate_fn(prompt: str, max_tokens: int = 64, think: bool = False,
+                     repetition_penalty: float = 1.3) -> str:
+        # think=True primes <|think|> instead of <|assistant|>: CoT training
+        # taught the model to continue with reasoning steps, then emit
+        # <|/think|><|assistant|> and the answer on its own — no extra plumbing
+        # needed here, decode_text silently drops the special-token boundaries,
+        # so the returned string is just the natural "reasoning...answer" prose.
+        lead_id = think_id if think else asst_id
+        ids = [user_id] + tokenizer.encode_text(prompt) + [lead_id]
         x = torch.tensor([ids], device=device).long()
         logits, _, cache = model.prefill(x)
         out: List[int] = []
+        # Repetition penalty (ported from HybridTSSM.generate — see model.py):
+        # short "The answer is X" outputs rarely run long enough to loop, but
+        # longer think-mode generations reliably do under plain greedy decoding
+        # on a model this small. Divide recently-seen tokens' logits before
+        # picking the next one, same fix that already works in model.generate().
+        recent = list(ids[-64:])
         for _ in range(max_tokens):
-            nl = logits[:, -1, :]
+            nl = logits[:, -1, :].clone()
+            if repetition_penalty != 1.0 and recent:
+                for tok_id in set(recent[-64:]):
+                    nl[0, tok_id] /= repetition_penalty
             if greedy:
                 nxt = nl.argmax(-1, keepdim=True)
             else:
                 probs = F.softmax(nl / max(temperature, 1e-6), dim=-1)
                 nxt = torch.multinomial(probs, 1)
             tid = int(nxt.item())
-            if tid == eos:
+            if tid in stop_ids:
                 break
             out.append(tid)
+            recent.append(tid)
             logits, _, cache = model.decode_step(nxt, cache)
         return tokenizer.decode_text(out).strip()
 

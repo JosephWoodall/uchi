@@ -52,11 +52,25 @@ class SemanticIndex:
     # ── construction ──────────────────────────────────────────────────────────
     @classmethod
     def from_embeddings_file(cls, path: str) -> "SemanticIndex":
-        """Load skip-gram embeddings saved as a torch dict {w2i, E, dim}."""
+        """Load skip-gram embeddings saved as a torch dict {w2i, E, dim[, passages, P]}.
+
+        `passages`/`P` are optional pre-built general-knowledge passages (the
+        shipped brain seed) — when present the index can retrieve immediately,
+        with no `learn()` call required. Word vectors alone (no passages) is
+        also a valid file: the index is then ready for `learn()` to populate.
+        """
         import torch
         d = torch.load(path, map_location="cpu")
         E = torch.nn.functional.normalize(d["E"], p=2, dim=-1).cpu().numpy()
-        return cls(d["w2i"], E)
+        idx = cls(d["w2i"], E)
+        passages = d.get("passages")
+        if passages:
+            idx.passages = list(passages)
+            P = d.get("P")
+            if P is not None:
+                P = P.numpy() if hasattr(P, "numpy") else np.asarray(P)
+                idx._P = P.astype(np.float32)
+        return idx
 
     def _vec(self, text: str) -> Optional[np.ndarray]:
         ids = [self.w2i[w] for w in _WORD.findall(text.lower())

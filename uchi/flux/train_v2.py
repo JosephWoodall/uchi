@@ -187,8 +187,16 @@ def _unwrap_state_dict(model):
     return clean
 
 
-def save_checkpoint(model, optimizer, step, best_val_loss, path):
-    """Save a resumable checkpoint."""
+def save_checkpoint(model, optimizer, step, best_val_loss, path, quantized: bool = False):
+    """Save a resumable checkpoint.
+
+    `quantized` records whether this checkpoint was trained under ternary
+    quantization noise (QAT). Inference must match: running a QAT checkpoint
+    with quantization OFF reads weights that were only ever optimized for their
+    *quantized* forward pass, and produces degenerate output. Non-QAT phases
+    never pass this, so it defaults to False and is backward-compatible with
+    checkpoints saved before this flag existed (they simply lack the key).
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(
         {
@@ -196,6 +204,7 @@ def save_checkpoint(model, optimizer, step, best_val_loss, path):
             "optimizer": optimizer.state_dict(),
             "step": step,
             "best_val_loss": best_val_loss,
+            "quantized": quantized,
         },
         path,
     )

@@ -352,34 +352,48 @@ def main():
         batch_iter = make_sft_batches(train_data, args.micro_batch, shuffle=True)
         epoch_loss = 0.0
         n_epoch_batches = 0
+        accum = 0
+        optimizer.zero_grad(set_to_none=True)   # zero ONCE before accumulating
 
         for X, Y, mask in batch_iter:
-            # ── LR ──
-            lr = get_lr(global_step)
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr
-
-            # ── Forward/backward ──
             X, Y, mask = X.to(device), Y.to(device), mask.to(device)
-            optimizer.zero_grad(set_to_none=True)
 
             with amp_ctx():
                 logits, _ = model(X)
-                loss = masked_ce_loss(logits, Y, mask)
+                # scale by grad_accum so summed grads average across micro-batches
+                loss = masked_ce_loss(logits, Y, mask) / args.grad_accum
 
-            scaler.scale(loss).backward()
+            scaler.scale(loss).backward()           # accumulate (no zero here)
+            epoch_loss += loss.item() * args.grad_accum
+            n_epoch_batches += 1
+            accum += 1
+
+            # Step only after grad_accum micro-batches have accumulated — this is
+            # what makes eff_batch (and the LR schedule built on it) real instead
+            # of stepping — and decaying the LR to its floor — on every micro-batch.
+            if accum == args.grad_accum:
+                lr = get_lr(global_step)
+                for pg in optimizer.param_groups:
+                    pg["lr"] = lr
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), DEFAULTS["grad_clip"])
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                accum = 0
+                global_step += 1
+                if global_step % 50 == 0:
+                    avg = epoch_loss / n_epoch_batches
+                    print(f"  Step {global_step:05d} │ Loss: {avg:.4f} │ LR: {lr:.2e}", flush=True)
+
+        # Flush any partial accumulation at epoch end so no gradients are wasted.
+        if accum > 0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), DEFAULTS["grad_clip"])
             scaler.step(optimizer)
             scaler.update()
-
-            epoch_loss += loss.item()
-            n_epoch_batches += 1
+            optimizer.zero_grad(set_to_none=True)
             global_step += 1
-
-            if global_step % 50 == 0:
-                avg = epoch_loss / n_epoch_batches
-                print(f"  Step {global_step:05d} │ Loss: {loss.item():.4f} │ Avg: {avg:.4f} │ LR: {lr:.2e}")
 
         # ── End-of-epoch validation ──
         val_loss = validate()

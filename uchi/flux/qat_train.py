@@ -6,12 +6,15 @@ The model weights are quantized to {-1, 0, 1} during the forward pass, but
 we keep high-precision gradients and optimizer states to slowly adapt the
 model to the quantization noise.
 
-This ensures the 30M model is extremely fast and efficient for the Proposer.
-
-Data source:
-    - We use a mix of TinyStories (for language modeling) and SFT/CoT data.
-      For simplicity in this script, we'll just run on the TinyStories
-      data to recover any lost perplexity from the harsh quantization.
+Data source (fixed): a MIX of general text (FineWeb-Edu .bin, plain LM loss)
+and CoT-formatted reasoning traces (GSM8K, masked loss — same format as
+cot_distill.py). Recovering on general text ALONE was the original approach,
+and it silently erased the reasoning behaviour CoT had just installed: QAT
+would continue training on plain prose under quantization noise with nothing
+in the data to remind the model of the <|think|>...<|assistant|> structure,
+so 1500 steps of that pulled the weights back toward generic continuation.
+Mixing macro-steps between both distributions lets quantization noise be
+absorbed everywhere while the reasoning format keeps getting reinforced.
 
 Usage:
     .venv/bin/python -m uchi.flux.qat_train --base uchi/flux/checkpoints/cot_best.pt
@@ -20,12 +23,14 @@ Usage:
 import os
 import time
 import math
+import random
 import argparse
 import re
 import torch
 import torch.nn as nn
 from contextlib import nullcontext
-from .train_v2 import make_data_iter, make_bin_iter, chunked_cross_entropy, save_checkpoint, evaluate
+from .train_v2 import make_bin_iter, chunked_cross_entropy, save_checkpoint
+from .cot_distill import load_cot_examples, make_batches as make_cot_batches
 
 # ==============================================================================
 # Defaults
@@ -33,25 +38,45 @@ from .train_v2 import make_data_iter, make_bin_iter, chunked_cross_entropy, save
 DEFAULTS = dict(
     micro_batch_size=2,
     grad_accum_steps=32,       # effective batch = 64
-    max_seq_len=256,
-    max_steps=5000,            # QAT needs far fewer steps than pre-training
-    warmup_steps=500,
+    max_seq_len=384,           # matches CoT's format (unifies text + CoT batches)
+    max_steps=600,             # macro-steps (each = grad_accum micro-batches)
+    warmup_steps=60,
     learning_rate=1e-5,        # Very low LR for QAT
     min_lr_frac=0.1,
     weight_decay=0.01,
     grad_clip=1.0,
-    checkpoint_interval=1000,
-    eval_interval=200,
+    checkpoint_interval=200,
+    eval_interval=100,
     eval_steps=20,
     log_interval=10,
     checkpoint_dir="uchi/flux/checkpoints",
+    cot_frac=0.5,              # probability a given macro-step trains on CoT data
+    cot_examples=2000,
 )
+
+
+def masked_chunked_ce_loss(logits, targets, mask, chunk_size=64):
+    """Cross-entropy over masked (think+answer) positions only, chunked for memory."""
+    B, T, V = logits.shape
+    logits_flat = logits.reshape(B * T, V)
+    targets_flat = targets.reshape(B * T)
+    mask_flat = mask.reshape(B * T)
+    total_loss, n_chunks = 0.0, 0
+    for start in range(0, B * T, chunk_size):
+        end = min(start + chunk_size, B * T)
+        c_logits, c_targets, c_mask = logits_flat[start:end], targets_flat[start:end], mask_flat[start:end]
+        if c_mask.sum() > 0:
+            loss_per_token = nn.functional.cross_entropy(c_logits, c_targets, reduction="none")
+            total_loss = total_loss + (loss_per_token * c_mask).sum() / c_mask.sum()
+            n_chunks += 1
+    return total_loss / max(n_chunks, 1)
+
 
 # ==============================================================================
 # Main
 # ==============================================================================
 def main():
-    parser = argparse.ArgumentParser(description="FLUX Phase 4 — Ternary QAT")
+    parser = argparse.ArgumentParser(description="FLUX Phase 4 — Ternary QAT (mixed CoT + general text recovery)")
     parser.add_argument("--base", type=str, required=True, help="Path to Phase 3 CoT checkpoint")
     parser.add_argument("--steps", type=int, default=DEFAULTS["max_steps"])
     parser.add_argument("--lr", type=float, default=DEFAULTS["learning_rate"])
@@ -59,9 +84,12 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--seq-len", type=int, default=DEFAULTS["max_seq_len"])
     parser.add_argument("--no-compile", action="store_true")
-    parser.add_argument("--data-bin", type=str, default=None,
-                        help="Pre-tokenized train .bin (GPU-bound fast path)")
+    parser.add_argument("--data-bin", type=str, required=True,
+                        help="Pre-tokenized general-text train .bin (GPU-bound fast path)")
     parser.add_argument("--val-bin", type=str, default=None)
+    parser.add_argument("--cot-frac", type=float, default=DEFAULTS["cot_frac"],
+                        help="Probability a macro-step trains on CoT data vs general text")
+    parser.add_argument("--cot-examples", type=int, default=DEFAULTS["cot_examples"])
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -74,7 +102,7 @@ def main():
     tokenizer = TikTokenHybridTokenizer()
 
     print("=" * 72)
-    print("FLUX Phase 4 — Ternary Quantization-Aware Training (QAT)")
+    print("FLUX Phase 4 — Ternary QAT (mixed CoT + general-text recovery)")
     print("=" * 72)
 
     ckpt = torch.load(args.base, map_location=device, weights_only=False)
@@ -102,26 +130,38 @@ def main():
     if model is None:
         raise RuntimeError("Could not match architecture to checkpoint")
 
-    # 🔥 Turn on Ternary Quantization
+    # Turn on Ternary Quantization — stays on for the whole run, including the
+    # CoT-format steps, so the reasoning behaviour is reinforced UNDER the same
+    # quantization noise it needs to survive at inference.
     print("  [!] Activating 1.58-bit Ternary Quantization (BitNet)")
     model.set_quantization(True)
     model._gradient_checkpointing = True
     model.to(device)
 
-    # ── Load data ──
-    if args.data_bin:
-        print(f"  Using pre-tokenized bin (GPU-bound): {args.data_bin}")
-        train_iter = make_bin_iter(args.data_bin, args.micro_batch, args.seq_len, seed=42)
-        val_iter = make_bin_iter(args.val_bin or args.data_bin, args.micro_batch, args.seq_len, seed=0)
-    else:
-        print("  Loading streaming data for QAT recovery...")
-        train_iter = make_data_iter(tokenizer, "train", args.micro_batch, args.seq_len)
-        val_iter = make_data_iter(tokenizer, "validation", args.micro_batch, args.seq_len, seed=42)
+    # ── Data: general text (bin) + CoT-formatted reasoning traces ──
+    print(f"  General-text bin: {args.data_bin}")
+    train_text_iter = make_bin_iter(args.data_bin, args.micro_batch, args.seq_len, seed=42)
+    val_text_iter = make_bin_iter(args.val_bin or args.data_bin, args.micro_batch, args.seq_len, seed=0)
+
+    print("  Loading CoT reasoning traces (real GSM8K teacher traces)...")
+    # load_cot_examples internally calls generate_synthetic_cot and tokenizes/
+    # formats to the exact <|user|>/<|think|>/<|assistant|> layout CoT trained on.
+    cot_data = load_cot_examples(tokenizer, args.seq_len, args.cot_examples)
+    n_val = max(10, int(len(cot_data) * 0.1))
+    cot_val, cot_train = cot_data[:n_val], cot_data[n_val:]
+    print(f"  CoT train: {len(cot_train):,}  CoT val: {len(cot_val):,}")
+
+    def cot_train_gen():
+        while True:
+            for batch in make_cot_batches(cot_train, args.micro_batch, shuffle=True):
+                yield batch
+
+    cot_train_iter = cot_train_gen()
 
     # ── Training setup ──
     eff_batch = args.micro_batch * args.grad_accum
     max_steps = args.steps
-    warmup_steps = min(DEFAULTS["warmup_steps"], max_steps // 10)
+    warmup_steps = min(DEFAULTS["warmup_steps"], max(1, max_steps // 10))
     lr_min = args.lr * DEFAULTS["min_lr_frac"]
 
     optimizer = torch.optim.AdamW(
@@ -151,30 +191,69 @@ def main():
         coeff = 0.5 * (1.0 + math.cos(math.pi * progress))
         return lr_min + coeff * (args.lr - lr_min)
 
+    @torch.no_grad()
+    def evaluate_text():
+        model.eval()
+        total_loss, n = 0.0, 0
+        for _ in range(DEFAULTS["eval_steps"]):
+            X, Y = next(val_text_iter)
+            X, Y = X.to(device), Y.to(device)
+            with amp_ctx():
+                logits, _ = model(X)
+                loss = chunked_cross_entropy(logits, Y, ignore_index=tokenizer.pad_token_id)
+            total_loss += loss.item(); n += 1
+        model.train()
+        avg = total_loss / max(n, 1)
+        return avg, math.exp(min(avg, 20.0))
+
+    @torch.no_grad()
+    def evaluate_cot():
+        model.eval()
+        total_loss, n = 0.0, 0
+        for X, Y, mask in make_cot_batches(cot_val, args.micro_batch, shuffle=False):
+            X, Y, mask = X.to(device), Y.to(device), mask.to(device)
+            with amp_ctx():
+                logits, _ = model(X)
+                loss = masked_chunked_ce_loss(logits, Y, mask)
+            total_loss += loss.item(); n += 1
+        model.train()
+        avg = total_loss / max(n, 1)
+        return avg, math.exp(min(avg, 20.0))
+
     ckpt_dir = DEFAULTS["checkpoint_dir"]
     os.makedirs(ckpt_dir, exist_ok=True)
     model.train()
-    best_val = float("inf")
+    best_cot_val = float("inf")
+    rng = random.Random(123)
     t0 = time.time()
-    
-    print(f"\n  Starting QAT from step 0 to {max_steps} ...\n")
+
+    print(f"\n  Starting mixed QAT recovery: {max_steps} macro-steps "
+          f"(cot_frac={args.cot_frac}, eff_batch={eff_batch}, seq_len={args.seq_len})\n")
 
     for step in range(max_steps):
         lr = get_lr(step)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
+        is_cot_step = rng.random() < args.cot_frac
         optimizer.zero_grad(set_to_none=True)
         loss_accum = 0.0
 
-        for micro_step in range(args.grad_accum):
-            X, Y = next(train_iter)
-            X, Y = X.to(device), Y.to(device)
-
-            with amp_ctx():
-                lang_logits, _ = model(X)
-                loss = chunked_cross_entropy(lang_logits, Y, ignore_index=tokenizer.pad_token_id)
-                scaled_loss = loss / args.grad_accum
+        for _ in range(args.grad_accum):
+            if is_cot_step:
+                X, Y, mask = next(cot_train_iter)
+                X, Y, mask = X.to(device), Y.to(device), mask.to(device)
+                with amp_ctx():
+                    logits, _ = model(X)
+                    loss = masked_chunked_ce_loss(logits, Y, mask)
+                    scaled_loss = loss / args.grad_accum
+            else:
+                X, Y = next(train_text_iter)
+                X, Y = X.to(device), Y.to(device)
+                with amp_ctx():
+                    logits, _ = model(X)
+                    loss = chunked_cross_entropy(logits, Y, ignore_index=tokenizer.pad_token_id)
+                    scaled_loss = loss / args.grad_accum
 
             scaler.scale(scaled_loss).backward()
             loss_accum += loss.item() / args.grad_accum
@@ -188,27 +267,26 @@ def main():
             elapsed = time.time() - t0
             ms_per_step = (elapsed * 1000) / DEFAULTS["log_interval"]
             t0 = time.time()
-            print(f"  Step {step + 1:05d}/{max_steps} │ Loss: {loss_accum:.4f} │ LR: {lr:.2e} │ {ms_per_step:.0f}ms/step")
+            kind = "cot " if is_cot_step else "text"
+            print(f"  Step {step + 1:05d}/{max_steps} │ [{kind}] Loss: {loss_accum:.4f} │ LR: {lr:.2e} │ {ms_per_step:.0f}ms/step")
 
         if (step + 1) % DEFAULTS["eval_interval"] == 0:
-            val_loss, val_ppl = evaluate(
-                model, val_iter,
-                DEFAULTS["eval_steps"], device, dtype, amp_ctx,
-                tokenizer_pad_id=tokenizer.pad_token_id,
-            )
-            is_best = val_loss < best_val
+            text_loss, text_ppl = evaluate_text()
+            cot_loss, cot_ppl = evaluate_cot()
+            is_best = cot_loss < best_cot_val   # CoT val loss is the "best" criterion —
+            if is_best:                         # preserving reasoning is the point of this fix.
+                best_cot_val = cot_loss
+            print(f"\n  ──── VAL step {step + 1:05d} │ "
+                  f"text loss {text_loss:.4f} (PPL {text_ppl:.1f}) │ "
+                  f"CoT loss {cot_loss:.4f} (PPL {cot_ppl:.1f}) "
+                  f"{'★ best (CoT)' if is_best else ''}\n")
             if is_best:
-                best_val = val_loss
-                
-            print(f"\n  ──── VAL step {step + 1:05d} │ Loss: {val_loss:.4f} │ PPL: {val_ppl:.1f} {'★ best' if is_best else ''}\n")
-            
-            if is_best:
-                save_checkpoint(raw_model, optimizer, step + 1, best_val, os.path.join(ckpt_dir, "qat_best.pt"))
+                save_checkpoint(raw_model, optimizer, step + 1, best_cot_val, os.path.join(ckpt_dir, "qat_best.pt"), quantized=True)
 
         if (step + 1) % DEFAULTS["checkpoint_interval"] == 0:
-            save_checkpoint(raw_model, optimizer, step + 1, best_val, os.path.join(ckpt_dir, f"qat_{step + 1:05d}.pt"))
+            save_checkpoint(raw_model, optimizer, step + 1, best_cot_val, os.path.join(ckpt_dir, f"qat_{step + 1:05d}.pt"), quantized=True)
 
-    print(f"\n  QAT complete. Best val loss: {best_val:.4f}")
+    print(f"\n  QAT complete. Best CoT val loss: {best_cot_val:.4f}")
 
 if __name__ == "__main__":
     main()

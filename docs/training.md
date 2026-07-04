@@ -10,6 +10,14 @@ end up with**.
 > tracked as a dashboard, not conquered; at this scale they stay near their
 > baselines. The value is a grounded, honest system, not a leaderboard number.
 
+## You probably don't need to train anything
+
+A trained `flux_best.pt` (~450MB, optimizer state stripped for inference) ships
+with the repo via Git LFS, along with the premade general-knowledge brain
+(`uchi/data/embeddings.pt`, ~230MB). `git clone` + `git lfs pull` gets both —
+see the README's "Training FLUX Yourself" section. The rest of this page is
+for retraining, fine-tuning further, or reproducing the pipeline.
+
 ## The one-liner
 
 ```bash

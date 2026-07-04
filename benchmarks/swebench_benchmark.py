@@ -333,8 +333,6 @@ def main():
     parser = argparse.ArgumentParser(description="Uchi SWE-bench Benchmark")
     parser.add_argument("--sample", type=int, default=50,
                         help="Number of instances to sample (0 = full 2,294, default 50)")
-    parser.add_argument("--brain", default="brain.uchi",
-                        help="Brain file path (default: brain.uchi)")
     parser.add_argument("--out", default=_DEFAULT_OUT,
                         help=f"Output JSON path (default: {_DEFAULT_OUT})")
     parser.add_argument("--verbose", action="store_true",
@@ -347,31 +345,10 @@ def main():
     print(" Uchi SWE-bench Benchmark — Code Generation Quality Proxy")
     print("="*_W + "\n")
 
-    import gzip
-    import pickle
-    from uchi.omni_router import OmniRouter
+    from uchi import Uchi
+    print("[*] Booting Uchi (FLUX + Uchi architecture, premade brain)...")
+    router = Uchi()
 
-    brain_path = args.brain
-    router = None
-    if os.path.exists(brain_path):
-        print(f"[*] Loading brain from {brain_path}…")
-        try:
-            with gzip.open(brain_path, "rb") as f:
-                router = pickle.load(f)
-        except Exception:
-            try:
-                with open(brain_path, "rb") as f:
-                    router = pickle.load(f)
-            except Exception as e:
-                print(f"[!] Failed to load brain: {e}")
-
-    if router is None:
-        print("[*] No brain loaded — using cold router (bootstrap disabled).")
-        OmniRouter._bootstrap_knowledge = lambda self, *a, **kw: None
-        OmniRouter._bootstrap_persona   = lambda self, *a, **kw: None
-        router = OmniRouter(use_bpe=False)
-
-    router.web_search_enabled = False
     results = run_swebench(router, sample=sample, verbose=args.verbose)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
