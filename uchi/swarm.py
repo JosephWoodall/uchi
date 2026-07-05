@@ -40,8 +40,17 @@ class SwarmSynthesizer:
 
     def answer(self, question: str, callback=None) -> str:
         if callback: callback("thinking", "Swarm Orchestrator analyzing problem complexity...")
+
+        # 0.4.0 Item 9 (IQ Task Router): a cheap heuristic pre-check gates
+        # the FLUX round-trip in _decompose() — most questions are atomic
+        # lookups and shouldn't pay for a decomposition attempt at all.
+        from .iq_router import should_decompose
+        if not should_decompose(question):
+            if callback: callback("thinking", "IQ router: low complexity, skipping decomposition.")
+            return self.qa.answer(question, callback=callback)
+
         sub_questions = self._decompose(question)
-        
+
         if len(sub_questions) <= 1:
             if callback: callback("thinking", "Problem is atomic. Running single pipeline...")
             return self.qa.answer(question, callback=callback)

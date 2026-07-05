@@ -253,10 +253,10 @@ class UchiApp(App):
     def initialize_brain(self) -> None:
         self.call_from_thread(self.write_log, "[dim]Waking up...[/dim]")
 
-        from uchi.simple import Uchi
+        from uchi.simple import Core
 
         try:
-            router = Uchi()
+            router = Core()
             self.router = router
             self.call_from_thread(self.on_brain_ready)
         except Exception as e:

@@ -138,7 +138,7 @@ class GenerateAndGround:
                                 f"the logic and constraints of the problem before returning the final result.\n"
                                 f"Question: {question}\n\nOnly output the Python code.")
                                 
-            from .procedural_memory import REPLOracle
+            from .code_engine import REPLOracle
             repl = REPLOracle()
             
             for attempt in range(2 + 1):

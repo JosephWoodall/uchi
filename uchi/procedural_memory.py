@@ -1,58 +1,6 @@
 import os
-import ast
-import tempfile
-import subprocess
-import sys
-from typing import Tuple
 
-class REPLOracle:
-    """Stateless compile-time verification for generated Python code."""
-    def verify(self, code: str, timeout: float = 3.0) -> Tuple[bool, float]:
-        try:
-            ast.parse(code)
-        except SyntaxError:
-            return False, -1.0
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
-            path = f.name
-
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "py_compile", path],
-                capture_output=True, timeout=timeout
-            )
-            return (result.returncode == 0), (1.0 if result.returncode == 0 else -0.5)
-        except Exception:
-            return False, -0.3
-        finally:
-            try: os.remove(path)
-            except OSError: pass
-
-    def execute(self, code: str, timeout: float = 3.0) -> Tuple[bool, str]:
-        """Executes the code and returns (success, stdout/stderr)."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
-            # If the code defines `def run():`, call it and print the result
-            f.write("\n\nif __name__ == '__main__':\n    try:\n        print(run())\n    except Exception as e:\n        print('Error:', e)\n")
-            path = f.name
-
-        try:
-            result = subprocess.run(
-                [sys.executable, path],
-                capture_output=True, timeout=timeout, text=True
-            )
-            if result.returncode == 0:
-                return True, result.stdout.strip()
-            else:
-                return False, result.stderr.strip() or result.stdout.strip()
-        except subprocess.TimeoutExpired:
-            return False, "TimeoutExpired"
-        except Exception as e:
-            return False, str(e)
-        finally:
-            try: os.remove(path)
-            except OSError: pass
+from .code_engine import REPLOracle
 
 class ProceduralMemory:
     """

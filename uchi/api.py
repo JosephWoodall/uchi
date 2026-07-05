@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from .simple import Uchi
+from .simple import Core
 import os
 
 ASCII_LOGO = r"""
@@ -48,8 +48,8 @@ class PredictRequest(BaseModel):
     temperature: float = 0.0
     creativity: float = 0.0
 
-def load_brain(path: str = "brain.uchi") -> Uchi:
-    return Uchi()
+def load_brain(path: str = "brain.uchi") -> Core:
+    return Core()
 
 @app.on_event("startup")
 async def startup_event():

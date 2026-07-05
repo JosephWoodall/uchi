@@ -1,12 +1,15 @@
-"""Uchi — single import, everything discoverable.
+"""Core — the raw single-instance Uchi engine.
 
-The ``Uchi`` class is the canonical public interface for the Uchi library.
-Import once, access everything: the generative brain, the sequence predictor,
-all analytical tools, and persistent brain state.
+``Core`` is the lightweight, single-instance engine: the generative brain, the
+sequence predictor, all analytical tools, and persistent brain state, with no
+orchestration layered on top. Most users should import ``Uchi`` from the top
+of the package instead (``from uchi import Uchi``), which wraps ``Core`` in
+the ``MetaUchi`` facade (see ``uchi/meta.py``). Import ``Core`` directly only
+if you want the raw, un-orchestrated node.
 
-    from uchi import Uchi
+    from uchi import Core
 
-    u = Uchi()
+    u = Core()
     u.learn("Q3 revenue was $4.2M, up 23% YoY.")
     print(u.ask("What was Q3 revenue growth?"))
 
@@ -15,18 +18,18 @@ Compounding analysis — the core value proposition
 ``ask()`` always returns a plain string.
 ``learn()`` always accepts a plain string.
 This means the output of any analysis is immediately learnable by any other
-``Uchi`` instance. Knowledge compounds across instances without any glue code:
+``Core`` instance. Knowledge compounds across instances without any glue code:
 
     # Instance 1: run classification on your dataset
-    u1 = Uchi()
+    u1 = Core()
     report = u1.ask("/classify", X=X_train, y=y_train)
 
     # Instance 2: treat that report as learned knowledge
-    u2 = Uchi()
+    u2 = Core()
     u2.learn(report)
     u2.ask("What accuracy did we achieve and what does it imply for Q4?")
 
-Each ``ask()`` result can feed the next ``learn()``. Pipelines of Uchi
+Each ``ask()`` result can feed the next ``learn()``. Pipelines of Core
 instances build compounding analytical context without any external
 orchestration layer.
 """
@@ -36,13 +39,18 @@ from __future__ import annotations
 import gzip
 import os
 import pickle
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .goal_state import GoalState
 
 
-class Uchi:
-    """Single entry-point for the Uchi toolkit.
+class Core:
+    """The raw, single-instance Uchi engine.
 
-    One import. Everything discoverable. Outputs always compound.
+    One import. Everything discoverable. Outputs always compound. This is
+    the unorchestrated node ``MetaUchi`` wraps by default — use it directly
+    only when you want lightweight, raw trie access with no facade on top.
 
     Parameters
     ----------
@@ -57,7 +65,7 @@ class Uchi:
     --------
     Knowledge & Q&A:
 
-        u = Uchi()
+        u = Core()
         u.learn("The boiling point of water is 100°C at sea level.")
         u.ask("At what temperature does water boil?")
 
@@ -67,7 +75,7 @@ class Uchi:
         u.ingest("report.pdf")               # requires pip install pdfminer.six
         u.ingest("events.csv", col="notes")  # specific CSV column
         # chainable
-        u = Uchi().ingest("docs/").ingest("data.csv").ingest("report.md")
+        u = Core().ingest("docs/").ingest("data.csv").ingest("report.md")
 
     Analytical tools via slash commands:
 
@@ -83,14 +91,9 @@ class Uchi:
         u.predictor.train(["a", "b", "c", "d"])
         u.predictor.predict_next(["b", "c"])   # → "d"
 
-    Toggle web search at any time:
-
-        u.web_search = True   # live web sourcing on knowledge gaps
-        u.web_search = False  # back to fully offline
-
     Escape hatch for power users:
 
-        u.router   # the underlying OmniRouter
+        u.pipeline   # the underlying GenerateAndGround pipeline
     """
 
     _DEFAULT_BRAIN = os.path.join(os.path.dirname(__file__), "data", "brain.uchi")
@@ -154,8 +157,53 @@ class Uchi:
         from .swarm import SwarmSynthesizer
         self.swarm = SwarmSynthesizer(self.pipeline)
 
+        # New: Tool Calling (0.4.0 Item 4) — filesystem ops + Python scratchpad
+        # + (0.4.0 Item 11) web search, gated by the web_search flag above.
+        from .tool_calling import default_registry
+        self.tools = default_registry(enable_web_search=self.web_search_enabled)
+
+        # New: Goal State (0.4.0 Item 5) — set via start_goal(); inert by
+        # default so single-shot ask() calls are unaffected.
+        self.goal_state = None
+
+        # New: HitL Yielding (0.4.0 Item 10) — set when ask() pauses on a
+        # <|yield_to_user|> or an auto-escalated loop-guard block; the next
+        # ask() call is treated as the human's answer to it.
+        self.pending_yield = None
+
         # Advanced SDK sequence predictor (trie), constructed lazily on first use.
         self._predictor = None
+
+    def start_goal(self, goal: str) -> "GoalState":
+        """Begin tracking a multi-step task under *goal*.
+
+        While active, every tool call dispatched during ``ask()`` is
+        recorded into the returned ``GoalState`` and compacted once the
+        raw log grows past the threshold; ``goal_state.context_string()``
+        is folded into subsequent ``ask()`` calls so the task never loses
+        the original intent, however many steps it takes.
+        """
+        from .goal_state import GoalState
+        self.goal_state = GoalState(goal=goal)
+        return self.goal_state
+
+    def end_goal(self) -> None:
+        """Stop tracking the active goal (subsequent ask() calls stop
+        injecting goal context / recording tool calls into it)."""
+        self.goal_state = None
+
+    def learn_tools(self, path: str) -> list:
+        """Parse *path* and register every top-level Python function as a
+        tool callable via ``<|tool_call|>`` — no source changes to Uchi
+        itself required. Each function's docstring and signature are also
+        ingested into the knowledge index, so they're discoverable the
+        same way any other learned fact is.
+        """
+        from .tool_learning import learn_tools as _learn_tools
+        learned = _learn_tools(path, self.tools)
+        for t in learned:
+            self.learn(t.as_knowledge())
+        return learned
 
     @property
     def predictor(self):
@@ -214,26 +262,64 @@ class Uchi:
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, callback=callback) or ""
         else:
-            # Inject episodic memory context
+            # Inject episodic memory context, plus the active goal state's
+            # context (goal + compacted notes) if start_goal() is active.
+            # If a HitL yield is pending (Item 10), this question IS the
+            # human's answer to it — fold it in and clear the pending yield.
             context = self.episodic_memory.get_context_string(n_turns=3)
-            augmented_question = f"{context}\n\nQuestion: {question}" if context else question
-            
+            goal_context = self.goal_state.context_string() if self.goal_state else ""
+            pending_context = ""
+            if self.pending_yield:
+                pending_context = f"Uchi previously asked: {self.pending_yield!r}\nHuman answered: {question}"
+                self.pending_yield = None
+            combined_context = "\n\n".join(c for c in (pending_context, goal_context, context) if c)
+            augmented_question = f"{combined_context}\n\nQuestion: {question}" if combined_context else question
+
             # Route to Swarm by default
             raw = self.swarm.answer(augmented_question, callback=callback) or ""
-            
+
+            # Dispatch any <|tool_call_async|> calls concurrently first
+            # (Item 7), then any remaining sequential <|tool_call|> calls
+            # (Item 4), splicing results back before it's saved/returned.
+            # Recorded into the active goal state (if any) so long tasks
+            # compact instead of losing the plot.
+            from .tool_calling import run_async_tool_calls, run_with_tools
+            log_before = len(self.tools.log)
+            raw = run_async_tool_calls(raw, self.tools, goal_state=self.goal_state)
+            raw = run_with_tools(raw, self.tools, goal_state=self.goal_state)
+            new_entries = self.tools.log[log_before:]
+
+            # HitL Yielding (Item 10): an explicit <|yield_to_user|> marker,
+            # or a tool call auto-escalated because the loop guard (Item 6)
+            # blocked an exact repeat of a prior failure, pauses the
+            # response instead of returning it as a normal answer.
+            from .hitl import format_yield, is_blocked_by_loop_guard, parse_yield
+            explicit_yield = parse_yield(raw)
+            blocked = next((e for e in new_entries if is_blocked_by_loop_guard(e)), None)
+            if explicit_yield is not None:
+                self.pending_yield = explicit_yield.question
+                raw = format_yield(explicit_yield.question)
+            elif blocked is not None:
+                clarifying = (
+                    f"The '{blocked.name}' tool keeps failing with the same arguments "
+                    f"({blocked.args}). How would you like me to proceed?"
+                )
+                self.pending_yield = clarifying
+                raw = format_yield(clarifying)
+
             # Save to episodic memory
             self.episodic_memory.add_interaction(question, raw)
-            
+
         return normalize(raw)
 
-    def ingest(self, path: str, col: Optional[str] = None) -> "Uchi":
+    def ingest(self, path: str, col: Optional[str] = None) -> "Core":
         """Load files or directories into the brain.
 
         Walks *path* recursively if it is a directory. Each file is read,
         converted to text, and streamed through ``learn()``. Returns ``self``
         so calls can be chained::
 
-            u = Uchi().ingest("docs/").ingest("reports/").ingest("events.csv")
+            u = Core().ingest("docs/").ingest("reports/").ingest("events.csv")
 
         Supported formats
         -----------------

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from uchi.simple import Uchi
+from uchi.simple import Core
 import logging
 
 _router = None
@@ -10,7 +10,7 @@ _router = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _router
-    _router = Uchi()
+    _router = Core()
     yield
     if _router is not None:
         pass
