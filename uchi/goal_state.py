@@ -37,9 +37,17 @@ class GoalState:
     notes: List[str] = field(default_factory=list)
     raw_log: List["ToolCallLogEntry"] = field(default_factory=list)
     compacted_count: int = 0
+    # Lightweight (name, args) trace of every *successful* call, kept
+    # forever regardless of compaction — compaction only drops the bulky
+    # result text in raw_log, never this, since Item 13's macro
+    # distillation needs the replayable steps even after a long task's
+    # raw logs have long since been compacted away.
+    successful_steps: List["tuple[str, dict]"] = field(default_factory=list)
 
     def record(self, entry: "ToolCallLogEntry") -> None:
         self.raw_log.append(entry)
+        if entry.ok:
+            self.successful_steps.append((entry.name, dict(entry.args)))
 
     def raw_log_chars(self) -> int:
         return sum(len(_entry_text(e)) for e in self.raw_log)

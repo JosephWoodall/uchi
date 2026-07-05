@@ -71,3 +71,35 @@ def run_python(code: str, timeout: float = 5.0, root: str = DEFAULT_ROOT) -> Scr
             delete_file(filename, root=root)
         except OSError:
             pass
+
+
+def lint_python(code: str, timeout: float = 5.0, root: str = DEFAULT_ROOT) -> str:
+    """Static-analysis pass over *code* via ``ruff`` (0.4.0 Item 16.7),
+    sandboxed the same way as ``run_python``.
+
+    Gives instant "red squiggly line" feedback — syntax and obvious
+    correctness issues — before spending a subprocess execution on code
+    that was never going to run, speeding up the autonomous debugging
+    loop. Returns ``"No issues found."`` when clean, or ruff's own
+    findings as text otherwise. Falls back to a plain message if ``ruff``
+    isn't installed, rather than raising.
+    """
+    filename = f"_lint_{uuid.uuid4().hex}.py"
+    path = write_file(filename, code, root=root)
+    try:
+        result = subprocess.run(
+            ["ruff", "check", path, "--no-cache"],
+            capture_output=True, timeout=timeout, text=True,
+        )
+        if result.returncode == 0:
+            return "No issues found."
+        return (result.stdout or result.stderr).strip()
+    except FileNotFoundError:
+        return "ruff is not installed; skipping lint."
+    except subprocess.TimeoutExpired:
+        return "lint timed out."
+    finally:
+        try:
+            delete_file(filename, root=root)
+        except OSError:
+            pass

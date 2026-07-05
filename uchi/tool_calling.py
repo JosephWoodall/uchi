@@ -56,6 +56,7 @@ class ToolCallLogEntry:
     result: Optional[str]
     error: Optional[str]
     timestamp: float = field(default_factory=time.time)
+    duration_seconds: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -80,6 +81,43 @@ def parse_async_tool_calls(text: str) -> List[ToolCall]:
     return calls
 
 
+def _escape_embedded_newlines(argstr: str) -> str:
+    """Escape raw newlines that fall inside a quoted string literal.
+
+    Tool-call arguments legitimately contain multi-line code (``run_python``,
+    ``lint_python``) — but a raw, unescaped newline inside a single/double
+    -quoted Python string literal is a ``SyntaxError``. Left unhandled,
+    ``_parse_kwargs``'s broad ``except`` would silently swallow that and
+    return ``{}``, turning any multi-line ``code="..."`` argument into a
+    missing-argument error instead of running the code. Track quote state
+    char-by-char (respecting backslash-escapes) and escape only the
+    newlines that fall inside an open string.
+    """
+    out = []
+    in_string = None
+    escape_next = False
+    for ch in argstr:
+        if in_string:
+            if escape_next:
+                out.append(ch)
+                escape_next = False
+            elif ch == "\\":
+                out.append(ch)
+                escape_next = True
+            elif ch == in_string:
+                in_string = None
+                out.append(ch)
+            elif ch == "\n":
+                out.append("\\n")
+            else:
+                out.append(ch)
+        else:
+            if ch in ("'", '"'):
+                in_string = ch
+            out.append(ch)
+    return "".join(out)
+
+
 def _parse_kwargs(argstr: str) -> Dict[str, Any]:
     """Parse ``key=value, key2=value2`` via ast so quoted strings containing
     commas/parens are handled correctly, not split naively on ','."""
@@ -87,7 +125,8 @@ def _parse_kwargs(argstr: str) -> Dict[str, Any]:
     if not argstr:
         return {}
     try:
-        node = ast.parse(f"f({argstr})", mode="eval").body
+        safe_argstr = _escape_embedded_newlines(argstr)
+        node = ast.parse(f"f({safe_argstr})", mode="eval").body
         return {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords}
     except Exception:
         return {}
@@ -133,12 +172,17 @@ class ToolRegistry:
             self.log.append(entry)
             return entry
 
+        t0 = time.perf_counter()
         try:
             result = fn(**call.args)
-            entry = ToolCallLogEntry(call.name, call.args, str(result), None)
+            elapsed = time.perf_counter() - t0
+            entry = ToolCallLogEntry(call.name, call.args, str(result), None, duration_seconds=elapsed)
             self.loop_guard.record_success(sig)
         except Exception as e:
-            entry = ToolCallLogEntry(call.name, call.args, None, f"{type(e).__name__}: {e}")
+            elapsed = time.perf_counter() - t0
+            entry = ToolCallLogEntry(
+                call.name, call.args, None, f"{type(e).__name__}: {e}", duration_seconds=elapsed
+            )
             self.loop_guard.record_failure(sig)
         self.log.append(entry)
         return entry
@@ -254,11 +298,14 @@ def default_registry(enable_web_search: bool = False) -> ToolRegistry:
     from . import workspace
 
     registry = ToolRegistry()
+    from .scratchpad import lint_python
+
     registry.register("read_file", workspace.read_file)
     registry.register("write_file", workspace.write_file)
     registry.register("list_files", workspace.list_files)
     registry.register("delete_file", workspace.delete_file)
     registry.register("run_python", _run_python_tool)
+    registry.register("lint_python", lint_python)
     if enable_web_search:
         registry.register("web_search", _web_search_tool)
     return registry

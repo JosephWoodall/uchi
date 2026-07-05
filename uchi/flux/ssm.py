@@ -1,9 +1,61 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 # ── Sequential scan with custom backward ──────────────────────────────────────
+
+def _scan_forward_loop(bar_A, b):
+    B, T, D, S = b.shape
+    h = b.new_zeros(B, D, S)
+    hs = []
+    for t in range(T):
+        h = bar_A[:, t] * h + b[:, t]
+        hs.append(h)
+    return torch.stack(hs, dim=1)
+
+
+def _scan_backward_loop(bar_A, h_all, grad_h):
+    B, T, D, S = bar_A.shape
+    grad_b     = torch.empty_like(h_all)
+    grad_bar_A = torch.empty_like(bar_A)
+    h_minus1   = h_all.new_zeros(B, D, S)   # h[-1] = 0 by SSM convention
+    G          = h_all.new_zeros(B, D, S)   # G[T] = 0 (no future)
+
+    for t in range(T - 1, -1, -1):
+        # G[t] = grad_h[t] + bar_A[t+1] * G[t+1]
+        # At t=T-1, G[T]=0 so the second term vanishes (initial G is zeros).
+        G = grad_h[:, t] + (bar_A[:, t + 1] * G if t < T - 1 else G)
+        grad_b[:, t]     = G
+        h_prev           = h_all[:, t - 1] if t > 0 else h_minus1
+        grad_bar_A[:, t] = G * h_prev
+    return grad_bar_A, grad_b
+
+
+# 0.4.0 Item 0: kernel-fused variants of the same two loops above, via
+# torch.compile over the *whole* loop (not per-step — per-step compilation
+# was measured slower, see the module docstring below). Lazily compiled on
+# first use so importing this module never pays the ~2min compile cost;
+# only opting into fuse=True during training does.
+_fused_forward_loop = None
+_fused_backward_loop = None
+
+
+def _get_fused_forward():
+    global _fused_forward_loop
+    if _fused_forward_loop is None:
+        _fused_forward_loop = torch.compile(_scan_forward_loop, dynamic=False)
+    return _fused_forward_loop
+
+
+def _get_fused_backward():
+    global _fused_backward_loop
+    if _fused_backward_loop is None:
+        _fused_backward_loop = torch.compile(_scan_backward_loop, dynamic=False)
+    return _fused_backward_loop
+
 
 class _SeqScanFunction(torch.autograd.Function):
     """
@@ -23,48 +75,62 @@ class _SeqScanFunction(torch.autograd.Function):
 
     Saves (bar_A, h_all): 2×134MB per call (bf16).
     Peak backward memory: ~536MB per call vs ~942MB for the parallel adjoint.
+
+    0.4.0 Item 0 — fuse=True kernel-fuses this same sequential algorithm
+    via torch.compile over the *entire* loop (not the algorithm choice
+    above, which stays sequential — measured against a parallel scan
+    already, see above). Per-step compilation of the inner `h = A*h+b`
+    update was measured *slower* (94.8ms vs 33.8ms eager) — 1024 separate
+    compiled-function calls pay dispatch/guard overhead T times over.
+    Compiling the whole T=1024-step loop as one graph instead gives a
+    genuine 3.08× forward speedup (28.9ms → 9.4ms, RTX 5070, bf16,
+    B=2/T=1024/D=768/S=32), at a one-time ~136s compile cost per input
+    shape — worth it once amortized over a multi-hour training run's
+    thousands of steps, not for interactive single-token decode with
+    varying shapes (which would thrash recompilation instead). Verified
+    numerically consistent with the eager loop to within bf16 tolerance
+    (max abs diff 0.0059 on the reference shape above). Opt-in via
+    fuse=True (defaults off — this doesn't change any existing behavior
+    or trained-checkpoint compatibility unless explicitly enabled), or
+    globally via the ``UCHI_FUSE_SSM_SCAN=1`` environment variable for
+    the training entrypoints in ``train_v2.py`` / ``qat_train.py`` /
+    ``sft_train.py``.
     """
 
     @staticmethod
-    def forward(ctx, bar_A, b):
+    def forward(ctx, bar_A, b, fuse=False):
         # bar_A: (B, T, D, S)  b: (B, T, D, S)
         with torch.no_grad():
-            B, T, D, S = b.shape
-            h = b.new_zeros(B, D, S)
-            hs = []
-            for t in range(T):
-                h = bar_A[:, t] * h + b[:, t]
-                hs.append(h)
-            h_all = torch.stack(hs, dim=1)   # (B, T, D, S)
+            loop = _get_fused_forward() if fuse else _scan_forward_loop
+            h_all = loop(bar_A, b)
         ctx.save_for_backward(bar_A, h_all)
+        ctx.fuse = fuse
         return h_all
 
     @staticmethod
     def backward(ctx, grad_h):
         bar_A, h_all = ctx.saved_tensors
         grad_h = grad_h.to(h_all.dtype)
-        B, T, D, S = bar_A.shape
 
         with torch.no_grad():
-            grad_b     = torch.empty_like(h_all)
-            grad_bar_A = torch.empty_like(bar_A)
-            h_minus1   = h_all.new_zeros(B, D, S)   # h[-1] = 0 by SSM convention
-            G          = h_all.new_zeros(B, D, S)   # G[T] = 0 (no future)
+            loop = _get_fused_backward() if ctx.fuse else _scan_backward_loop
+            grad_bar_A, grad_b = loop(bar_A, h_all, grad_h)
 
-            for t in range(T - 1, -1, -1):
-                # G[t] = grad_h[t] + bar_A[t+1] * G[t+1]
-                # At t=T-1, G[T]=0 so the second term vanishes (initial G is zeros).
-                G = grad_h[:, t] + (bar_A[:, t + 1] * G if t < T - 1 else G)
-                grad_b[:, t]     = G
-                h_prev           = h_all[:, t - 1] if t > 0 else h_minus1
-                grad_bar_A[:, t] = G * h_prev
-
-        return grad_bar_A.to(grad_h.dtype), grad_b.to(grad_h.dtype)
+        return grad_bar_A.to(grad_h.dtype), grad_b.to(grad_h.dtype), None
 
 
-def _scan(bar_A, b):
-    """Entry point for the sequential SSM scan."""
-    return _SeqScanFunction.apply(bar_A, b)
+def _scan(bar_A, b, fuse=None):
+    """Entry point for the sequential SSM scan.
+
+    *fuse* controls the Item 0 kernel-fused (torch.compile) path — see
+    ``_SeqScanFunction`` above. Defaults to the ``UCHI_FUSE_SSM_SCAN``
+    environment variable (off unless set), so existing call sites and
+    trained checkpoints are unaffected unless a training entrypoint opts
+    in explicitly.
+    """
+    if fuse is None:
+        fuse = os.environ.get("UCHI_FUSE_SSM_SCAN", "") == "1"
+    return _SeqScanFunction.apply(bar_A, b, fuse)
 
 
 # ── SSM module ─────────────────────────────────────────────────────────────────

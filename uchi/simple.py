@@ -102,6 +102,8 @@ class Core:
         self,
         brain_path: Optional[str] = None,
         web_search: bool = False,
+        allowed_paths: Optional[list] = None,
+        denied_paths: Optional[list] = None,
     ) -> None:
         from .retrieval import SemanticIndex
         from .oracle import FactCheckOracle
@@ -110,7 +112,12 @@ class Core:
         from .skill_registry import SkillRegistry
 
         self.web_search_enabled = web_search
-        
+
+        # New: Enterprise Data Silos (0.4.0 Item 16.5) — application-layer
+        # allow/deny list enforced on ingest(). Inert unless configured.
+        from .data_silo import DataSilo
+        self.data_silo = DataSilo(allowed_paths=allowed_paths, denied_paths=denied_paths)
+
         # New Uchi Architecture Components
         from .brain_fetch import get_embeddings_path
         embed_path = get_embeddings_path()   # bundled -> cached -> download -> None
@@ -139,7 +146,8 @@ class Core:
         self.pipeline = GenerateAndGround(
             index=self.index,
             oracle=self.oracle,
-            proposer=self.proposer
+            proposer=self.proposer,
+            web_search_enabled=self.web_search_enabled,
         )
         
         # New: Episodic Memory
@@ -170,6 +178,13 @@ class Core:
         # <|yield_to_user|> or an auto-escalated loop-guard block; the next
         # ask() call is treated as the human's answer to it.
         self.pending_yield = None
+
+        # New: Infinite Session Memory (0.4.0 Item 16.4) — auto-ingest any
+        # remembered user preferences from a prior session.
+        from .user_profile import load_profile
+        profile_text = load_profile()
+        if profile_text.strip():
+            self.learn(profile_text)
 
         # Advanced SDK sequence predictor (trie), constructed lazily on first use.
         self._predictor = None
@@ -204,6 +219,72 @@ class Core:
         for t in learned:
             self.learn(t.as_knowledge())
         return learned
+
+    def checkpoint(self, path: str) -> None:
+        """Save the active task state (goal state, tool log, loop-guard
+        penalties, pending HitL yield, episodic memory) to *path* so it
+        can be restored later with ``resume()``. Model weights and the
+        semantic index aren't re-serialized — they're already
+        reproducible from the ``brain.uchi`` file and FLUX checkpoint
+        this instance was constructed from.
+        """
+        from .checkpoint import save
+        save(self, path)
+
+    def resume(self, path: str) -> None:
+        """Restore task state saved by ``checkpoint(path)`` onto this
+        instance, in place — picks a paused task back up where it left
+        off rather than starting over."""
+        from .checkpoint import load_into
+        load_into(self, path)
+
+    def distill_and_learn(self):
+        """On task success, extract the active goal state's successful
+        tool-call sequence (errors and dead-ends were never recorded in
+        it to begin with) and compile it into a reusable Macro (0.4.0
+        Item 13): registered as a fast-path tool so a similar goal next
+        time replays it in one call instead of reasoning step-by-step,
+        ingested into the knowledge index so its existence is
+        permanently discoverable, and persisted to ``.uchi/macros/`` so
+        it survives across sessions. Returns the ``Macro``, or ``None``
+        if there's no active goal or nothing successful was recorded.
+        """
+        if self.goal_state is None:
+            return None
+        from .macro import distill, register_macro_tool, save_macro
+        macro = distill(self.goal_state)
+        if macro is None:
+            return None
+        register_macro_tool(macro, self.tools)
+        self.learn(macro.as_knowledge())
+        save_macro(macro)
+        return macro
+
+    def export_skill(self, name: str, out_dir: str = ".") -> str:
+        """Export skill *name* as a shareable ``<name>.uchi_skill`` file
+        (0.4.0 Item 16.3) — the community-sharing half of Procedural
+        Memory. Same markdown+frontmatter format skills already use, so
+        nothing new to parse on the receiving end."""
+        from .skill_sharing import export_skill as _export_skill
+        return _export_skill(name, out_dir=out_dir)
+
+    def import_skill(self, path: str) -> Any:
+        """Import a ``.uchi_skill`` file (validated with the same
+        frontmatter parser used for built-in skills) and reload the
+        skill registry so it's usable immediately on this instance."""
+        from .skill_sharing import import_skill as _import_skill
+        skill = _import_skill(path)
+        self.skills.reload()
+        return skill
+
+    def remember_preference(self, text: str) -> None:
+        """Persist a user preference to ``.uchi/user_profile.md`` (0.4.0
+        Item 16.4) and learn it immediately in this session too — future
+        ``Core()`` instances auto-ingest it on startup, giving
+        cross-session memory with no vector database required."""
+        from .user_profile import remember_preference as _remember
+        _remember(text)
+        self.learn(text)
 
     @property
     def predictor(self):
@@ -312,6 +393,41 @@ class Core:
 
         return normalize(raw)
 
+    def ask_friendly(self, question: str, callback=None, **data: Any) -> str:
+        """Like ``ask()``, but the final answer is rewritten in a warm,
+        conversational tone (0.4.0 Item 16.6) — verified against the
+        original dry answer with the same ``FactCheckOracle`` used
+        everywhere else in the pipeline, so the tone pass cannot
+        introduce a claim that wasn't already there. Falls back to the
+        original dry answer if the rewrite isn't grounded, the proposer
+        is unavailable, or it fails for any reason.
+        """
+        answer = self.ask(question, callback=callback, **data)
+        from .front_desk import friendly_tone_pass
+        return friendly_tone_pass(answer, self.proposer, self.oracle)
+
+    def ask_stream(self, question: str, **data: Any):
+        """Stream ``ask()``'s internal progress in real time (0.4.0 Item
+        16.9): yields ``{"type": "thought", "stage": ..., "message": ...}``
+        events as the pipeline actually produces them (Observable
+        Monologue), followed by one final ``{"type": "speech", "content":
+        ...}`` event with the answer — genuine Thought-vs-Speech
+        separation, not string-chunking after the fact.
+        """
+        from .streaming import stream_ask
+        yield from stream_ask(self, question, **data)
+
+    def export_telemetry(self, out_path: Optional[str] = None) -> list:
+        """Export the current tool-call trace as OpenTelemetry-shaped
+        spans (0.4.0 Item 16.8) — the same ``ToolRegistry.log`` the Glass
+        Brain (Item 14) renders, in a format most observability
+        pipelines (Datadog, Grafana Loki, LangSmith) can ingest directly
+        as structured logs. Appends JSON Lines to *out_path* if given;
+        always returns the span dicts.
+        """
+        from .observability import export_spans
+        return export_spans(self.tools.log, out_path=out_path)
+
     def ingest(self, path: str, col: Optional[str] = None) -> "Core":
         """Load files or directories into the brain.
 
@@ -340,9 +456,17 @@ class Core:
         col : str, optional
             For CSV files: the column name whose values are fed into the
             brain. When *None* every text-valued cell is concatenated.
+
+        Raises
+        ------
+        DataSiloViolation
+            If this instance was constructed with ``allowed_paths`` /
+            ``denied_paths`` (0.4.0 Item 16.5) and *path* falls outside
+            them.
         """
         import os
         path = os.path.expanduser(str(path))
+        self.data_silo.check(path)
         if os.path.isdir(path):
             for root, _, files in os.walk(path):
                 for fname in sorted(files):

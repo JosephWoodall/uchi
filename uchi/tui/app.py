@@ -117,9 +117,16 @@ class UchiApp(App):
     }
 
     #stats-panel {
+        height: auto;
+        background: #16161e;
+        color: #565f89;
+    }
+
+    #glass-brain-panel {
         height: 1fr;
         background: #16161e;
         color: #565f89;
+        margin-top: 1;
     }
 
     /* ── Telemetry strip — above input, full width ── */
@@ -199,6 +206,7 @@ class UchiApp(App):
                     yield RichLog(id="think-log", markup=True, highlight=False)
             with Vertical(id="side-panel"):
                 yield Static(self._stats_text(), id="stats-panel")
+                yield Static(self._glass_brain_text(), id="glass-brain-panel")
         with Horizontal(id="telemetry-strip"):
             yield Static("Multi-step reasoning: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
             yield Static("Fact-checking: [bold #9ece6a]ready[/bold #9ece6a]", classes="telemetry-item")
@@ -213,6 +221,7 @@ class UchiApp(App):
         log.write("[dim]Type [bold]/help[/bold] for commands, or just start chatting.[/dim]\n")
         self.initialize_brain()
         self.set_interval(10.0, self._tick_stats)
+        self.set_interval(1.0, self._tick_glass_brain)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         import time
@@ -222,6 +231,22 @@ class UchiApp(App):
 
     def _tick_stats(self) -> None:
         self.query_one("#stats-panel", Static).update(self._stats_text())
+
+    def _tick_glass_brain(self) -> None:
+        """0.4.0 Item 14 — refreshed faster than the 10s stats tick so the
+        tool-call trace feels live while a request is in flight."""
+        self.query_one("#glass-brain-panel", Static).update(self._glass_brain_text())
+
+    def _glass_brain_text(self) -> str:
+        """0.4.0 Item 14 — live tool-call trace / goal state / pending
+        HitL yield, refreshed on the same tick as the stats panel."""
+        if self.router is None:
+            return "[bold #bb9af7]─ Glass Brain ─[/bold #bb9af7]\n[dim]starting up...[/dim]"
+        from uchi.tui.glass_brain import render_glass_brain
+        try:
+            return render_glass_brain(self.router)
+        except Exception:
+            return "[bold #bb9af7]─ Glass Brain ─[/bold #bb9af7]\n[dim]unavailable[/dim]"
 
     def _stats_text(self) -> str:
         lines = ["[bold #7aa2f7]─ At a glance ─[/bold #7aa2f7]"]

@@ -49,7 +49,8 @@ class GenerateAndGround:
     def __init__(self, index: SemanticIndex, oracle: Optional[FactCheckOracle] = None,
                  decoder=None, proposer=None, predictor=None, answerability=None,
                  retrieve_k: int = 10, min_sim: float = 0.5,
-                 min_known: float = 0.5, min_answerable: float = 0.5) -> None:
+                 min_known: float = 0.5, min_answerable: float = 0.5,
+                 web_search_enabled: bool = False) -> None:
         self.index = index
         self.oracle = oracle or FactCheckOracle()
         # `proposer` is the pluggable generator (decoder / FLUX / LLM); `decoder`
@@ -62,6 +63,11 @@ class GenerateAndGround:
         self.min_sim = min_sim
         self.min_known = min_known
         self.min_answerable = min_answerable
+        # 0.4.0 Item 16.2 ("Lazy" World Knowledge): when local evidence
+        # retrieval comes up empty, silently fall back to a live web
+        # search, learn what it finds, and retry retrieval once — before
+        # abstaining, not instead of grounding.
+        self.web_search_enabled = web_search_enabled
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _content(self, text: str) -> list[str]:
@@ -95,6 +101,16 @@ class GenerateAndGround:
 
         if callback: callback("thinking", f"Retrieving top {self.retrieve_k} memories...")
         evidence = self.index.retrieve(question, self.retrieve_k)
+        if (not evidence or evidence[0][1] < self.min_sim) and self.web_search_enabled:
+            if callback: callback("thinking", "No local evidence — falling back to web search...")
+            try:
+                from .web_search import perform_web_search
+                web_text = perform_web_search(question)
+            except Exception:
+                web_text = ""
+            if web_text:
+                self.index.build_from_corpus(web_text)
+                evidence = self.index.retrieve(question, self.retrieve_k)
         if not evidence or evidence[0][1] < self.min_sim:
             return _ABSTAIN
         ev_texts = [t for t, _ in evidence]
