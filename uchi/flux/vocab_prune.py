@@ -19,9 +19,13 @@ against the real training corpus to get the actual achievable
 """
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
+from typing import TYPE_CHECKING, Dict, Iterable, List
+
+if TYPE_CHECKING:
+    from .tokenizer_v2 import TikTokenHybridTokenizer
 
 _UNK_TOKEN_ID = -1  # sentinel; mapped vocab reserves slot 0 for UNK
 
@@ -78,3 +82,89 @@ def coverage(pruned: PrunedVocab, token_id_sequences: Iterable[List[int]]) -> fl
             if tok in pruned.old_to_new:
                 covered += 1
     return covered / total if total else 1.0
+
+
+def load_pruned_vocab(path: str) -> PrunedVocab:
+    """Load a ``PrunedVocab`` saved by ``scripts/build_pruned_vocab.py``."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    old_to_new = {int(k): v for k, v in data["old_to_new"].items()}
+    new_to_old = {int(k): v for k, v in data["new_to_old"].items()}
+    return PrunedVocab(old_to_new=old_to_new, new_to_old=new_to_old, size=data["size"])
+
+
+class PrunedTikTokenTokenizer:
+    """Drop-in wrapper around ``TikTokenHybridTokenizer`` with a pruned
+    vocabulary (0.4.0 Item 0).
+
+    Special-token IDs (``0 .. n_special-1``) are left untouched. The
+    shifted base cl100k_base range is remapped through a ``PrunedVocab``,
+    so the embedding table only needs ``pruned.size + n_special`` rows
+    instead of the full ~100K — the actual mechanism behind "cut the
+    vocab, reclaim the capacity for reasoning layers."
+
+    Anything outside the pruned vocab decodes as nothing (the UNK slot
+    has no real-text inverse) — expected: a token that essentially never
+    appeared in the real training corpus isn't worth spending an
+    embedding row on, by construction.
+    """
+
+    def __init__(self, base_tokenizer: "TikTokenHybridTokenizer", pruned: PrunedVocab):
+        self._base = base_tokenizer
+        self._pruned = pruned
+        self.n_special = base_tokenizer.n_special
+        self.vocab_size = pruned.size + self.n_special
+        self.syntax_vocab_size = base_tokenizer.syntax_vocab_size
+        self.syntax_vocab = base_tokenizer.syntax_vocab
+        self.id_to_syntax = base_tokenizer.id_to_syntax
+        self.SPECIAL_TOKENS = base_tokenizer.SPECIAL_TOKENS
+
+    def encode_text(self, text: str, max_length: int = 1024) -> List[int]:
+        raw_ids = self._base.encode_text(text, max_length=max_length)
+        out = []
+        for tid in raw_ids:
+            if tid < self.n_special:
+                out.append(tid)
+            else:
+                new_id = self._pruned.old_to_new.get(tid - self.n_special, 0)
+                out.append(new_id + self.n_special)
+        return out
+
+    def decode_text(self, ids: List[int]) -> str:
+        raw_ids = []
+        for tid in ids:
+            if tid < self.n_special:
+                raw_ids.append(tid)
+                continue
+            base_id = self._pruned.new_to_old.get(tid - self.n_special)
+            if base_id is not None:
+                raw_ids.append(base_id + self.n_special)
+            # else: UNK slot -- no real-text inverse, drop it.
+        return self._base.decode_text(raw_ids)
+
+    def encode_special(self, token_name: str) -> int:
+        return self._base.encode_special(token_name)
+
+    def get_syntax_state(self, code_str: str) -> str:
+        return self._base.get_syntax_state(code_str)
+
+    @property
+    def pad_token_id(self) -> int:
+        return self._base.pad_token_id
+
+    @property
+    def eos_token_id(self) -> int:
+        return self._base.eos_token_id
+
+    @property
+    def bos_token_id(self) -> int:
+        return self._base.bos_token_id
+
+
+def load_pruned_tokenizer(path: str, base_tokenizer: "TikTokenHybridTokenizer" = None) -> PrunedTikTokenTokenizer:
+    """Load a saved pruned vocab and wrap it around a base tokenizer."""
+    if base_tokenizer is None:
+        from .tokenizer_v2 import TikTokenHybridTokenizer
+        base_tokenizer = TikTokenHybridTokenizer()
+    pruned = load_pruned_vocab(path)
+    return PrunedTikTokenTokenizer(base_tokenizer, pruned)

@@ -96,11 +96,107 @@ def generate_synthetic_cot(num_examples):
     print(f"  [+] Loaded {len(examples)} real GSM8K teacher CoT traces.")
     return examples
 
+
+def _split_think_answer(response: str):
+    """Split a real response into (reasoning, final_answer): the last
+    sentence is the answer, everything before it is the reasoning trace.
+    A simple heuristic, not perfect — but it splits an existing real
+    response rather than fabricating one, same principle as GSM8K's
+    '####' split above. Used for sources (OpenOrca, Magicoder) that don't
+    ship a pre-separated reasoning/answer field the way GSM8K does.
+    """
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", response.strip()) if s.strip()]
+    if not sentences:
+        return "", ""
+    if len(sentences) == 1:
+        return sentences[0], sentences[0]
+    return " ".join(sentences[:-1]), sentences[-1]
+
+
+def generate_openorca_cot(num_examples):
+    """General step-by-step reasoning CoT from OpenOrca (0.4.0 Item 0).
+
+    GSM8K alone only teaches math CoT. Items 3/4/6 (scratchpad, tool
+    calling, self-healing loop) need FLUX to reason step-by-step about
+    arbitrary problems, not just arithmetic. Real GPT-4-generated
+    responses, split into reasoning/answer via _split_think_answer —
+    still an actual teacher trace, not a fabricated one.
+    """
+    from datasets import load_dataset
+
+    examples = []
+    try:
+        ds = load_dataset("Open-Orca/OpenOrca", split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load OpenOrca teacher traces: {e}")
+        return []
+
+    for row in ds:
+        question = row.get("question", "").strip()
+        response = row.get("response", "").strip()
+        if not question or not response:
+            continue
+        think, answer = _split_think_answer(response)
+        if not think or not answer:
+            continue
+        examples.append({"question": question, "think": think, "answer": answer})
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real OpenOrca teacher CoT traces.")
+    return examples
+
+
+def generate_magicoder_cot(num_examples):
+    """Code-specific reasoning CoT from Magicoder-OSS-Instruct (0.4.0 Item 0).
+
+    GSM8K/OpenOrca teach math/general reasoning; neither teaches
+    plan-then-code structure, which is exactly what the empirical
+    synthesis loop (Items 3/6) needs FLUX to do well. Real solutions from
+    real OSS-derived problems, not fabricated.
+    """
+    from datasets import load_dataset
+
+    examples = []
+    try:
+        ds = load_dataset("ise-uiuc/Magicoder-OSS-Instruct-75K", split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load Magicoder teacher traces: {e}")
+        return []
+
+    for row in ds:
+        problem = row.get("problem", "").strip()
+        solution = row.get("solution", "").strip()
+        if not problem or not solution:
+            continue
+        think, answer = _split_think_answer(solution)
+        if not think or not answer:
+            continue
+        examples.append({"question": problem, "think": think, "answer": answer})
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real Magicoder teacher CoT traces.")
+    return examples
+
+
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
     random.seed(seed)
-    print("  Generating synthetic CoT examples ...")
-    examples = generate_synthetic_cot(max_examples)
-    
+    print("  Generating CoT examples from 3 real teacher-trace sources ...")
+    # Each source gets its own independent share of max_examples (not a
+    # shared cumulative counter — see the 0.4.0 fix in sft_train.py's
+    # load_sft_examples for why a shared counter silently starves every
+    # source after the first).
+    per_source = max(1, max_examples // 3)
+    examples = (
+        generate_synthetic_cot(per_source)
+        + generate_openorca_cot(per_source)
+        + generate_magicoder_cot(per_source)
+    )
+    random.shuffle(examples)
+    examples = examples[:max_examples]
+    print(f"  Total CoT examples: {len(examples):,}")
+
     formatted = []
     user_id = tokenizer.encode_special("<|user|>")
     asst_id = tokenizer.encode_special("<|assistant|>")
