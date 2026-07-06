@@ -1,104 +1,257 @@
-# Uchi Comprehensive Integration + Overhaul — EXECUTION PLAN (locked)
+# Uchi 0.4.0 — Execution Order (locked)
 
-Research history + all de-risk findings preserved in
-`memory/project_state.md` (PIVOT 1/2/3). This file is now the execution tracker.
+Supersedes the previous version of this file, which tracked a completely
+different, now-superseded architecture (`omni_router`, "Family C", etc. —
+none of that exists in the current codebase). This is the current,
+accurate order of remaining work, most recent session first. Full detail
+for every item lives in `tasks/0.4.0 Itemized Deliverables.md` — this file
+is the compressed, sequenced checklist, not a duplicate of it.
 
-## Architecture (final)
+## Architecture, end to end
 
-`ask(question) -> string`, primary endpoint = **Generate-and-Ground**:
+Two separate diagrams below — **training-time** (what produces the
+checkpoints) and **runtime** (what `Core.ask()` actually does with them).
+They're separate because they run at different times, on different
+resources, and (for the proposer and verifier) are deliberately trained
+with zero shared weights.
+
+### Training-time: what feeds into what to produce each checkpoint
+
 ```
-retrieve evidence (semantic index over brain)
-  → [trie fast-path: confident exact recall]
-  → neural decoder generates candidate (retrieval-conditioned)
-  → fact-check oracle verifies vs evidence
-  → emit if grounded, else ABSTAIN   (never confabulate)
+                                    ┌─────────────────────────────────────┐
+                                    │      PROPOSER (FLUX) — 4 phases      │
+                                    └─────────────────────────────────────┘
+
+Phase 0  FineWeb-Edu (→OpenWebText fallback)
+              │
+              ▼  scripts/pretokenize.py
+         data/{train,val}.bin  (uint32 memmap, GPU-bound throughput)
+              │
+              ▼  uchi/flux/train_v2.py   (--pruned-vocab)
+Phase 1  ckpt_best.pt   [64.0M params, pruned 32,018-token vocab]
+              │
+              ▼  uchi/flux/sft_train.py   (--pruned-vocab)
+         SQuAD + Dolly + CodeAlpaca + UltraChat-200k  ──┐
+         (fair-budgeted, independent per-source share)   │→ sft_best.pt
+              │                                          │  (conversational
+              ▼                                          │   tone added)
+Phase 2  sft_best.pt
+              │
+              ▼  uchi/flux/cot_distill.py   (--pruned-vocab)
+         GSM8K + OpenOrca + Magicoder + CommitPackFT  ───┐
+         (fair-budgeted, 4-way independent share)         │→ cot_best.pt
+              │                                            │ (reasoning +
+              ▼                                            │  code-change
+Phase 3  cot_best.pt                                       │  understanding)
+              │
+              ▼  uchi/flux/qat_train.py   (ternary, CoT-preserving mix)
+Phase 4  qat_best.pt
+              │
+              ▼  cp (train_all.sh's final step)
+         flux_best.pt   ◄── canonical artifact Core() loads by default
+
+
+                                    ┌─────────────────────────────────────┐
+                                    │   VERIFIER (EntailmentClassifier)    │
+                                    │   own embedding table, FULL (not     │
+                                    │   pruned) tokenizer, never shares    │
+                                    │   weights with the proposer above    │
+                                    └─────────────────────────────────────┘
+
+nyu-mll/glue (mnli) + stanfordnlp/snli  ──┐
+(fair-budgeted, independent share)         │
+                                            │
+uchi/verifier_flywheel.py's exported ──────┼──► uchi/flux/verifier_train.py
+real user corrections (jsonl, grows        │         │
+over time, empty on a first run)          ─┘         │
+                                                       ├──► verifier_best.pt
+                                                       │    (the classifier)
+                                                       │
+                                                       └──► verifier_best.ood.pt
+                                                            (Mahalanobis mean +
+                                                            precision, fit on a
+                                                            sample of the SAME
+                                                            training run's
+                                                            pooled latent reps)
 ```
-Trie = recall + grounding (NOT generator). Oracle (retrieval fact-check) = honesty.
-Family B = dynamically-callable SKILLS (tabular/timeseries/forest/ontology/code/…).
-ARC-AGI DSL = a separate reasoning skill.
 
-## Phase A — Integrate Generate-and-Ground into `uchi/`  [IN PROGRESS]
-- [x] `uchi/retrieval.py` — semantic index (skip-gram embeddings + passage store). VERIFIED.
-- [x] `uchi/oracle.py` — retrieval fact-check verifier (validated 93.5% adversarial). VERIFIED.
-      (note: strongest on answer-span; IDF-weight terms later to cut the 6.5% leak.)
-- [x] `uchi/decoder.py` — from-scratch BiGRU retrieval-conditioned decoder + ckpt loader (inference wrapper; graceful extractive fallback when no ckpt).
-- [x] `uchi/generate_and_ground.py` — the loop orchestrator. VERIFIED end-to-end in
-      package (extractive mode): correct grounded answers + honest abstention on
-      nonsense/unknowable.
-- [x] Wire `omni_router.answer()` + `simple.Uchi.ask()` → GenerateAndGround.
-      `learn()` feeds the index (compounding). Embeddings shipped uchi/data/skipgram_emb.pt.
-      VERIFIED via `Uchi().ask()`: grounded answers + honest abstention.
-- [x] Trained + shipped decoder checkpoint (uchi/data/decoder.pt, 72MB, from-scratch,
-      rough as expected). Loop tries synthesis → oracle rejects fabrication →
-      falls back to grounded EXTRACTIVE → abstain only if neither grounds. VERIFIED.
-- [x] Build retrieval index into the brain in `incremental_builder.run` (init + feed
-      each ingested doc). Shipped brains will be groundable automatically.
-- [ ] Legacy chat() fallback in answer() removed in Phase B (once brains ship an index).
+### Runtime: what `Core.ask(question)` actually does, in order
 
-**PHASE A COMPLETE** — Generate-and-Ground is the live `ask()` endpoint, verified
-end-to-end via the public API (grounded answers + honest abstention). Running the
-test suite before Phase B deletions.
+```
+from uchi import Uchi  →  MetaUchi(Core)         ◄── what users actually construct
+                             │
+                             ▼
+                    Core.__init__ loads, in order:
+                    1. SemanticIndex   ← premade brain (uchi/data/embeddings.pt)
+                                          or whatever ingest()/learn() added
+                    2. FactCheckOracle ← auto-detects verifier_best.pt if present
+                                          (entailment_checker + its .ood.pt gate);
+                                          numeric_checker stays off until
+                                          fit_numeric_plausibility_checker() is
+                                          explicitly called (real cost, opt-in)
+                    3. FluxProposer    ← auto-detects flux_best.pt (→qat→cot→sft
+                                          fallback order), tokenizer auto-matches
+                                          pruned vs full vocab from the
+                                          checkpoint's own embedding shape
+                    4. ToolRegistry, GoalState, EpisodicMemory, VerifierFlywheel
+                       (flywheel inert unless the same entailment_checker above
+                       was actually loaded)
 
-## Phase B — Delete Family C  ✅ DONE (150 tests green)
-- [x] Refactored omni_router: chat()→answer() delegation; removed SSM training,
-      GRPO baseline, convergent engine, background daemons from init/setstate/
-      getstate/bootstrap/code-intent. answer() abstains (no chat recursion).
-- [x] Deleted: convergent_engine, tree_search_engine, grpo, grpo_offline_trainer,
-      calibration, grammar_mask, omni_evaluator (+ their 3 test files, test_v030_items).
-- [x] Fixed: build_pipeline (GRPO/calibrate phases → no-op), api_server /metrics
-      (baseline→index), cli.load_brain (no auto-rebuild → return None), conftest
-      (removed fast_convergent), 3 test files' Family C imports.
-- [x] Removed stale bundled brain (old grpo format triggered a rebuild-hang).
-- KEPT (still present, some dead refs to clean): neuro_symbolic (SSM — used by
-  memory.py + conftest patch), memory, generative (SequenceGenerator=trie),
-  intent_encoder (skills use it).
-- [ ] POLISH: remove dead _chat_legacy + SSM helpers (_train_ssm, _fire_contrastive_
-      update, _replay_train_step, _push_experience, _compute_response_reward),
-      query/predict_future if dead; then re-check if neuro_symbolic/memory removable.
+Core.ask(question)
+    │
+    ├─ fold in: episodic memory context (last N turns) + active goal state
+    │           context + pending HitL-yield answer, if any
+    │
+    ├─ VerifierFlywheel.check_for_correction(prior_Q, prior_A, question)
+    │     — does THIS turn contradict the LAST answer? (reuses the same
+    │       entailment checker below; purely observational, logged only)
+    │
+    ├─ SwarmSynthesizer.answer()  — IQ-router gate (skip decompose if
+    │     the question is atomic) → loop-guard check (skip if this exact
+    │     question already failed delegation) → decompose → parallel
+    │     sub-answers → aggregate
+    │
+    │     each sub-answer runs the FULL loop below:
+    │
+    │     GenerateAndGround.answer(question)
+    │       │
+    │       ├─ is the question asking anything SPECIFIC (proper noun/number)?
+    │       │     no  → skip the two honesty gates below, proceed straight
+    │       │           to candidate generation (a greeting doesn't need
+    │       │           retrieval to have "worked" to be answerable)
+    │       │     yes → both gates apply at full strength
+    │       │
+    │       ├─ gate 1: known_fraction(question) ≥ min_known?  (else ABSTAIN)
+    │       ├─ retrieve top-k evidence from SemanticIndex
+    │       ├─ gate 2: best evidence similarity ≥ min_sim?
+    │       │     no + web_search enabled → live search → learn() it → retry
+    │       │     no (still)                → ABSTAIN
+    │       ├─ ev_texts = only evidence that cleared min_sim (weak/irrelevant
+    │       │   matches don't count as "evidence" for the oracle either)
+    │       │
+    │       ├─ FluxProposer.propose(question, ev_texts, think=True)
+    │       │     → candidate text (n_votes candidates, reflection retries)
+    │       │
+    │       ├─ FactCheckOracle.is_grounded(candidate, ev_texts)
+    │       │     1. deterministic word-overlap (or no-evidence relaxation:
+    │       │        only the candidate's SPECIFIC content needs support)
+    │       │     2. entailment_checker.is_contradiction(evidence, candidate)?
+    │       │          — gated by OOD detector first: input far from the
+    │       │            classifier's training distribution → treated as
+    │       │            "no opinion", verdict falls back to step 1's result
+    │       │     3. numeric_checker.is_plausible(number)? (if fitted)
+    │       │     — 2 and 3 can only turn a PASS into a REJECT, never the
+    │       │       reverse; if 1 already rejected, 2/3 are moot
+    │       │
+    │       ├─ Devil's Advocate critique (logical soundness, separate axis
+    │       │   from grounding — same proposer, adversarial framing)
+    │       │
+    │       └─ if nothing grounds: Empirical Synthesis Loop (REPLOracle
+    │           executes proposer-written Python) → else extractive
+    │           fallback → else honest ABSTAIN
+    │
+    ├─ <|tool_call|> / <|tool_call_async|> dispatch (ToolRegistry, LoopGuard-
+    │     checked, logged) — filesystem, scratchpad, web search, macros
+    │
+    ├─ HitL yield check (explicit <|yield_to_user|>, or loop-guard auto-
+    │     escalation) — pauses instead of guessing if genuinely stuck
+    │
+    └─ save turn to EpisodicMemory (unless an external conversation_context
+         was supplied, e.g. the REST API's per-request isolation)
+              │
+              ▼
+      response_normalizer.normalize(raw)  →  returned to the caller
+```
 
-## Phase B2 — Family B → dynamically-callable skills
-- [ ] Skill registry routes ask() to tabular/timeseries/forest/ontology/code_engine/… when relevant.
-- [ ] ARC-AGI DSL reasoner registered as a skill.
+### The one cycle that closes training back into runtime
 
-## Phase C — Trustworthiness benchmark suite — IN PROGRESS
-- [x] `benchmarks/trustworthiness.py` (SQuAD 2.0): coverage / precision@answered /
-      honest-abstention / hallucination-rate. VERIFIED — and it exposed a real,
-      unflattering truth:
-      **SQuAD 2.0 (800q): coverage 99.5%, precision@answered 55.8%,
-      honest-abstention 1.5%, HALLUCINATION 72.6%.**
-      HONEST FINDING: the word-overlap oracle is too weak for SUBTLE
-      unanswerability (context indexed + topically relevant but answer absent →
-      retrieval finds context, generator pulls something, oracle sees words
-      present → emits). "Never confabulates" holds only for clearly-OOV queries,
-      NOT SQuAD-2.0 traps. This is the #1 improvement lever.
-- [ ] STRONGER ORACLE (key work): verify the answer ANSWERS the question given
-      evidence (entailment/answerability), not just token-presence. Hard problem.
-- [ ] Add TriviaQA/SimpleQA + TruthfulQA + retrieval recall@k. ARC-AGI separate.
-- [ ] Update skills/benchmark scripts. Retire MMLU/ARC-Challenge/SWE as primary.
+```
+ runtime: VerifierFlywheel logs a confirmed correction
+              │
+              ▼
+ export_training_examples()  →  corrections.jsonl  (real, never fabricated)
+              │
+              ▼
+ next `train_verifier.sh` run:  --flywheel-path corrections.jsonl
+              │                  (folded in as a genuine 3rd fair-budgeted
+              │                   source alongside MNLI/SNLI)
+              ▼
+ a better-calibrated verifier_best.pt  →  promoted  →  back into runtime
+```
 
-## Phase B2/conversationalist — DONE
-- [x] 3-lane router (`uchi/intent_router.py`): skill / social / factual.
-- [x] `uchi/conversation.py` ConversationEngine + `data/chat_decoder.pt` (trained on
-      empathetic_dialogues — DailyDialog gone from HF; decoder is ROUGH + emotion-biased,
-      the honest from-scratch ceiling). Social = free-gen, NO oracle (no facts to lie about).
-- [x] Wired: Uchi.ask() → router.chat() 3-lane. Factual→Generate-and-Ground, social→chat,
-      skill→SkillRegistry. 150 tests green.
-- Family B (tabular/timeseries/forest/…) remain callable via SkillRegistry slash-commands;
-  deeper plugin refactor (frontmatter→callable) is a noted future improvement.
+## Where things actually stand right now
 
-## Phase D — Docs — DONE (core)
-- [x] README rewritten HONESTLY: Generate-and-Ground + 3-lane routing, real
-      trustworthiness KPI table, retrieval/generation ~57% limitation stated
-      plainly, no false "0% hallucination" claim.
-- [x] version → 0.4.0 (pyproject + __init__); CHANGELOG 0.4.0 entry (new
-      architecture + removed Family C + honest status).
-- [ ] FOLLOW-UP (larger, not blocking): full docs/ rewrite, TUI copy, SDK API-ref,
-      skill plugin refactor (frontmatter→callable), and the #1 roadmap item —
-      RETRIEVAL + GENERATION precision (dense retriever + stronger decoder).
+- Phase 1 (pretrain) — **done**. 64.0M params, pruned 32,018-token vocab.
+- Phase 2 (SFT) — **running now**, step ~250/742, healthy, no errors.
+  `nvidia-smi` confirms the GPU is fully committed to this.
+- Phase 3 (CoT), Phase 4 (QAT) — **not started**.
+- Item 17 (verifier upgrade) — code, data pipeline, and tests **fully
+  built and CPU-verified**; training **not yet run** (needs the GPU, which
+  Phase 2–4 has first).
 
-## OVERHAUL COMPLETE (A–D). 150 tests green. Uchi 0.4.0 = grounded, no-LLM,
-## abstains-not-confabulates on facts, converses socially, runs skills. Honest
-## ceiling: retrieval/generation precision (~57%) → next roadmap item.
+## 1. Let training finish — no action, just don't interrupt it
 
-## Guardrails
-- audit-and-confirm before deleting (granted). Verify after each phase. Keep tests green.
+- [ ] Phase 2 (SFT) completes
+- [ ] Phase 3 (CoT distillation) — now includes CommitPackFT as a 4th
+      fair-budgeted source alongside GSM8K/OpenOrca/Magicoder
+- [ ] Phase 4 (ternary QAT)
+
+## 2. Promotion (manual step, not automatic)
+
+- [ ] Copy the final artifact from the isolated `v040_phaseN/` directories
+      into the default `uchi/flux/checkpoints/` path — `Core()` only
+      searches the default path, so nothing happens on its own
+- [ ] Re-verify the inference-time pruned-vocab fix
+      (`build_generate_fn`/`EntailmentChecker.load`-style auto-detection)
+      against the real final artifact, not just Phase 1's intermediate one
+
+## 3. Benchmarking — real, unstarted work, not a formality
+
+- [ ] Zero-regression vs. v0.3.0 (MMLU/SWE-bench through `MetaUchi`) —
+      named 0.4.0 exit criterion, never run
+- [ ] Web Navigation Baseline — named exit criterion, never run this
+      entire session
+- [ ] Trustworthiness benchmark (SQuAD 2.0) on the new model — the real
+      release gate per this project's own doctrine, not MMLU/SWE-bench
+- [ ] Resume the PyPI-vs-local-branch parity check — explicitly paused
+      mid-session when training started; never resumed
+
+## 4. Verifier training (Item 17) — sequenced after Phase 4, same GPU
+
+- [ ] Run `scripts/train_verifier.sh` for real (MNLI+SNLI, ~200K examples)
+- [ ] Fit the OOD detector on the trained model's own latent space
+      (already wired into `verifier_train.py`, runs automatically at the
+      end of training)
+- [ ] Held-out adversarial validation (the "330m vs 500m" style test set)
+      — **hard gate**, exit criterion #7 in the deliverables doc. Nothing
+      below this line happens until it passes.
+- [ ] Once validated: flip it on (`Core.__init__` already auto-detects the
+      checkpoint at `uchi/flux/checkpoints/verifier/verifier_best.pt` —
+      no code change needed) and watch `oracle.layered_veto_log` closely
+      in real use before fully trusting it
+- [ ] Only after the verifier has a real production track record: revisit
+      verifier-as-tool (0.7.0-adjacent, pulled forward if it still makes
+      sense) and the rejection-filter proposer-training idea — **not**
+      before, and **not** joint/shared-weight training, RL-style reward
+      optimization against the verifier, or shared latent spaces (all
+      explicitly rejected, not just deferred)
+
+## 5. Documentation — real updates once the model actually changes
+
+- [ ] README/docs currently describe FLUX as "~116M-class" throughout —
+      that's v0.3.0. Update once the new (64M, pruned-vocab) model is
+      validated and promoted, not before
+- [ ] Re-check the "How It Connects" diagram still matches reality
+
+## 6. Release readiness — one full pass, not the individual pieces checked ad hoc
+
+- [ ] Run the full `.agents/skills/release_readiness/SKILL.md` checklist
+      end-to-end against the finished, promoted model
+- [ ] Item 16 bonus objectives remain explicitly non-blocking — ship
+      whatever fraction is done, don't gate on the rest
+
+## 7. Release commit
+
+- [ ] Prepare the release commit
+- [ ] **Do not push or merge to main without explicit confirmation** —
+      same standing rule as every other hard-to-reverse action this session

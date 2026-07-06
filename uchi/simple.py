@@ -127,8 +127,28 @@ class Core:
             import numpy as np
             self.index = SemanticIndex({}, np.zeros((1, 1), dtype=np.float32))
             
-        self.oracle = FactCheckOracle()
-        
+        # 0.4.0 Item 17: entailment_checker defaults to None (unchanged
+        # oracle behavior) until a verifier checkpoint actually exists,
+        # auto-detected the same way the proposer's checkpoint is below.
+        # numeric_checker is NOT auto-fitted here -- fitting scans every
+        # passage in the index (130K+ in the premade brain), which is real,
+        # measurable cost that shouldn't be paid on every Core() startup
+        # without being asked for. See fit_numeric_plausibility_checker().
+        verifier_ckpt = os.path.join(
+            os.path.dirname(__file__), "flux", "checkpoints", "verifier", "verifier_best.pt"
+        )
+        entailment_checker = None
+        if os.path.exists(verifier_ckpt):
+            from .flux.verifier_model import EntailmentChecker
+            entailment_checker = EntailmentChecker.load(verifier_ckpt)
+        self.oracle = FactCheckOracle(entailment_checker=entailment_checker)
+
+        # 0.4.0 Item 17 flywheel: observes (never blocks) whether the next
+        # user turn contradicts Uchi's own prior answer, using the same
+        # entailment_checker above -- inert until one is actually loaded.
+        from .verifier_flywheel import VerifierFlywheel
+        self.verifier_flywheel = VerifierFlywheel(entailment_checker=entailment_checker)
+
         # Load the trained FLUX checkpoint (the Proposer). flux_best.pt is the
         # canonical artifact produced by scripts/train_all.sh; the per-phase
         # checkpoints are fallbacks in pipeline order. If none exist, the proposer
@@ -286,6 +306,23 @@ class Core:
         _remember(text)
         self.learn(text)
 
+    def fit_numeric_plausibility_checker(self, min_facts: int = 50) -> bool:
+        """Fit the oracle's numeric-plausibility veto layer (0.4.0 Item 17)
+        on real numbers pulled from this instance's own ingested passages.
+
+        Opt-in rather than automatic at construction time: scanning every
+        passage in the index (130K+ in the premade brain) is real,
+        measurable cost that shouldn't be paid on every ``Core()`` startup
+        without being asked for. Returns whether fitting actually happened
+        (False if there weren't enough real numeric facts yet).
+        """
+        from .numeric_plausibility import NumericPlausibilityChecker
+        checker = NumericPlausibilityChecker(min_facts=min_facts)
+        if checker.fit_from_passages(self.index.passages):
+            self.oracle.numeric_checker = checker
+            return True
+        return False
+
     @property
     def predictor(self):
         """Underlying sequence predictor (CTW-style trie) for power users.
@@ -420,6 +457,17 @@ class Core:
             # managing its own history never writes into (or is mixed
             # into) this instance's shared episodic memory.
             if not using_external_context:
+                # 0.4.0 Item 17 flywheel: before this turn overwrites the
+                # history, check whether IT looks like a correction of the
+                # PRIOR turn's answer. Purely observational -- never blocks
+                # or alters this or the prior answer, just records a real,
+                # confirmed signal for later verifier retraining. No-op
+                # when no entailment checker is loaded.
+                if self.verifier_flywheel.is_active and self.episodic_memory.history:
+                    last_turn = self.episodic_memory.history[-1]
+                    self.verifier_flywheel.check_for_correction(
+                        last_turn["user"], last_turn["uchi"], question,
+                    )
                 self.episodic_memory.add_interaction(question, raw)
 
         return normalize(raw)

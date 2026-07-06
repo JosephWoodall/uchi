@@ -258,6 +258,24 @@ class TestUserProfileEdgeCases:
         u.remember_preference("Prefers Python 3.10")
 
 
+class TestNumericPlausibilityEdgeCases:
+    def test_fit_with_no_numeric_passages_returns_false(self, u):
+        """The premade/empty brain in test fixtures has few or no numeric
+        facts -- fitting must decline gracefully (return False), not raise
+        or silently leave a broken checker installed."""
+        result = u.fit_numeric_plausibility_checker(min_facts=50)
+        assert isinstance(result, bool)
+        if not result:
+            assert u.oracle.numeric_checker is None
+
+    def test_fit_with_enough_real_numeric_facts_activates_the_checker(self, u):
+        u.learn(" ".join(f"The value on day {i} was {i * 7} units." for i in range(100)))
+        result = u.fit_numeric_plausibility_checker(min_facts=10)
+        assert result is True
+        assert u.oracle.numeric_checker is not None
+        assert u.oracle.numeric_checker.is_fitted
+
+
 class TestTelemetryEdgeCases:
     def test_export_telemetry_with_no_tool_calls_returns_empty_list(self, u):
         assert u.export_telemetry() == []
@@ -305,6 +323,7 @@ _COVERAGE = {
     "end_goal": TestGoalStateAndDistillationEdgeCases,
     "export_skill": TestSkillSharingEdgeCases,
     "export_telemetry": TestTelemetryEdgeCases,
+    "fit_numeric_plausibility_checker": TestNumericPlausibilityEdgeCases,
     "import_skill": TestSkillSharingEdgeCases,
     "ingest": TestIngestEdgeCases,
     "learn": TestLearnEdgeCases,

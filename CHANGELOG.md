@@ -16,6 +16,30 @@ FLUX itself is mid-retraining as of this entry (Phase 1 of 4 complete, Phase 2
 running) — see "FLUX scale-up" below and `docs/training.md`.
 
 ### Added
+- **Verifier upgrade — layered veto architecture (Item 17), code and data
+  pipeline built, training not yet run**: `EntailmentClassifier`
+  (`uchi/flux/verifier_model.py`) — a from-scratch entailment classifier on
+  its own embedding table, trained on real MNLI+SNLI, plugs into
+  `FactCheckOracle` as a strictly additive veto — it can reject a claim the
+  deterministic check already passed, never accept one it rejected.
+  `uchi/numeric_plausibility.py` adds a second additive layer flagging
+  implausible numbers via median+MAD outlier detection on real numeric
+  facts pulled from the semantic index — the original plan to reuse
+  `UniversalPredictor`/`AnomalyDetector` was tested and found unsuitable
+  (that predictor needs sequential/ordered data; scattered numeric facts
+  have no such order, and it scored 55 and 50,000 nearly identically in
+  testing). Both default to `None` in `FactCheckOracle`'s constructor —
+  zero behavior change until something is actually trained/fitted.
+  `OODDetector` (Mahalanobis distance over the classifier's own pooled
+  latent space) gates the entailment veto rather than acting as an
+  independent one — out-of-distribution input suppresses the classifier's
+  judgment to "no opinion" instead of trusting a confident-but-baseless
+  verdict. `uchi/verifier_flywheel.py` closes the self-improvement loop:
+  reuses the same entailment checker to detect when a user's next turn
+  contradicts Uchi's prior answer, wired into `Core.ask()` purely
+  observationally, exporting confirmed corrections as real training data
+  for the next verifier run — no fabricated examples, empty until real
+  conversations happen.
 - **`MetaUchi`** (`uchi/meta.py`): the default facade, wraps `Core` and adds
   everything below. Forwards `ask()`/`learn()`/`ingest()` unchanged.
 - **Tool Calling Interface** (`uchi/tool_calling.py`): `<|tool_call|> name(args)
