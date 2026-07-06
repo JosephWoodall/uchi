@@ -40,10 +40,10 @@ are **skipped if their output already exists**, so an interrupted run resumes.
 
 | # | Phase | Script | Data | Output |
 |---|-------|--------|------|--------|
-| 0 | Tokenize | `scripts/pretokenize.py` | FineWeb-Edu → memmap | `uchi/flux/data/{train,val}.bin` |
-| 1 | Pre-training | `uchi/flux/train_v2.py` | `train.bin` | `checkpoints/ckpt_best.pt` |
-| 2 | SFT | `uchi/flux/sft_train.py` | SQuAD + Dolly + CodeAlpaca | `checkpoints/sft_best.pt` |
-| 3 | CoT distillation | `uchi/flux/cot_distill.py` | GSM8K teacher traces | `checkpoints/cot_best.pt` |
+| 0 | Tokenize | `scripts/pretokenize.py` | FineWeb-Edu → memmap (falls back to OpenWebText) | `uchi/flux/data/{train,val}.bin` |
+| 1 | Pre-training | `uchi/flux/train_v2.py` | `train.bin` (or, without `--data-bin`: a streaming fallback over OpenWebText + Wikipedia + Code, ~10× slower) | `checkpoints/ckpt_best.pt` |
+| 2 | SFT | `uchi/flux/sft_train.py` | SQuAD + Dolly + CodeAlpaca + **UltraChat-200k** (0.4.0) | `checkpoints/sft_best.pt` |
+| 3 | CoT distillation | `uchi/flux/cot_distill.py` | GSM8K + **OpenOrca + Magicoder-OSS-Instruct** (0.4.0) | `checkpoints/cot_best.pt` |
 | 4 | Ternary QAT | `uchi/flux/qat_train.py` | `train.bin` | `checkpoints/qat_best.pt` |
 
 **Final step:** `train_all.sh` copies the last successful phase
@@ -55,10 +55,14 @@ canonical model the Proposer loads.
 1. **Pre-training** learns language from FineWeb-Edu (educational-filtered web).
    This is the bulk of training and where coherence comes from.
 2. **SFT** teaches instruction-following and grounded answering-from-context
-   (the shape `FluxProposer` uses at inference).
-3. **CoT distillation** imitates *real* GSM8K worked-solution reasoning traces
+   (the shape `FluxProposer` uses at inference), plus — as of 0.4.0 —
+   conversational tone from UltraChat-200k (the prior mix had zero natural
+   multi-turn dialogue, which showed up as stiff, disjointed live output).
+3. **CoT distillation** imitates *real* worked-solution reasoning traces
    (static teacher distillation — a small model can't bootstrap reasoning from
-   self-play).
+   self-play): GSM8K for math, and — as of 0.4.0 — OpenOrca for general
+   reasoning and Magicoder-OSS-Instruct for code-specific plan-then-code
+   reasoning (GSM8K alone only taught math CoT).
 4. **Ternary QAT** (optional) quantizes weights to 1.58-bit for efficiency.
    Skippable; on a small model it can trade quality for size, so `cot_best.pt`
    is a valid full-precision final model.
@@ -67,10 +71,25 @@ canonical model the Proposer loads.
 
 - **GPU-bound throughput** requires the pre-tokenized `.bin` (step 0). Training
   directly from a streaming/tokenizing loop starves the GPU (~10× slower).
-- **`torch.compile` is disabled** (`--no-compile`) — it cannot compile the
-  custom SSM scan. All phases run eager.
+- **Whole-model `torch.compile` is disabled** (`--no-compile`, passed by
+  `train_all.sh`) — it doesn't handle the custom SSM-scan `autograd.Function`
+  well. All phases run eager by default. As of 0.4.0 there's a narrower,
+  measured alternative: `UCHI_FUSE_SSM_SCAN=1` compiles just the scan's inner
+  loop as a whole graph (not per-step — per-step compilation of the `h =
+  A*h+b` update was measured *slower* than eager, since 1024 separate
+  compiled-function calls pay dispatch overhead T times over). Measured 3.08×
+  forward speedup on an RTX 5070, ~2min one-time compile cost per shape — set
+  it for a real training run, not interactive decode.
 - Default config: `d_model=768, n_layers=12, d_state=64`, seq 512, bf16, gradient
   checkpointing on (fits a 12 GB GPU at micro-batch 6).
+- **0.4.0 vocab pruning**: `--pruned-vocab uchi/flux/checkpoints/pruned_vocab_32k.json`
+  on `train_v2.py`/`sft_train.py` switches to a compact 32K-token vocab (from
+  the full ~100K cl100k_base) built by `scripts/build_pruned_vocab.py` against
+  the real training corpus mix — measured 97–99% real coverage, frees ~52M
+  params from the embedding table. If a `--base` checkpoint was trained with
+  a pruned vocab, downstream phases **must** pass the same `--pruned-vocab`
+  file — encoding with the full tokenizer against a smaller embedding table
+  produces out-of-range token IDs.
 
 ## Loading the result
 

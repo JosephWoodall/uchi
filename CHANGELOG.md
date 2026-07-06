@@ -2,6 +2,130 @@
 
 All notable changes to the Uchi project will be documented in this file.
 
+## [0.4.0] - In Progress - MetaUchi: giving Uchi hands
+
+Wraps the v0.3.0 grounded Q&A engine in **`MetaUchi`**, the new default
+orchestrator (`from uchi import Uchi`) — tool calling, a sandboxed Python
+scratchpad, web search, multi-step goal tracking with pause/resume, and macro
+distillation, on top of the same verified engine. The single-instance engine
+moves to `uchi.Core` (unchanged internals) for anyone who wants the raw,
+un-orchestrated node. **The grounded-or-abstain contract from 0.3.0 is
+unchanged** — autonomy never gets to assert something ungrounded.
+
+FLUX itself is mid-retraining as of this entry (Phase 1 of 4 complete, Phase 2
+running) — see "FLUX scale-up" below and `docs/training.md`.
+
+### Added
+- **`MetaUchi`** (`uchi/meta.py`): the default facade, wraps `Core` and adds
+  everything below. Forwards `ask()`/`learn()`/`ingest()` unchanged.
+- **Tool Calling Interface** (`uchi/tool_calling.py`): `<|tool_call|> name(args)
+  <|end_tool|>` grammar halts generation, dispatches to a registered Python
+  function, splices the result back in. `<|tool_call_async|>` fires several
+  calls concurrently. Every dispatch is logged (name, args, result/error,
+  duration) from day one.
+- **Filesystem sandbox** (`uchi/workspace.py`): tool-driven file reads/writes
+  are resolved against a fixed `.uchi/workspace` root; realpath-based checks
+  block both path-traversal and symlink escapes.
+- **Python scratchpad** (`uchi/scratchpad.py`): arbitrary multi-line code
+  execution in the sandbox, returns stdout/stderr/return code as text. Also
+  `lint_python` — a `ruff`-based static-analysis pass before execution.
+- **Self-Healing Loop Prevention** (`uchi/loop_guard.py`): an exact repeat of
+  a previously-failed tool call, MCTS code candidate, or (closing a gap
+  identified after initial release) swarm delegation attempt is blocked
+  outright rather than retried, forcing a structurally different path.
+- **Goal State & Memory Compaction** (`uchi/goal_state.py`): tracks a
+  multi-step task's intent and running notes; compacts raw tool logs
+  (extractive only, never a paraphrase) once they grow large.
+- **Agentic Checkpointing** (`uchi/checkpoint.py`): `checkpoint()`/`resume()`
+  serialize goal state, tool history, and pending HitL questions to disk —
+  survives across processes.
+- **Macro Skill Distillation** (`uchi/macro.py`): a successful multi-step
+  task's tool-call sequence (errors already excluded) distills into a
+  reusable fast-path tool, ingested into the knowledge index.
+- **Human-in-the-Loop Yielding** (`uchi/hitl.py`): an explicit
+  `<|yield_to_user|>`, or a tool call auto-escalated after a repeated
+  failure, pauses and asks the human instead of guessing or looping.
+- **IQ Task Router** (`uchi/iq_router.py`): a cheap heuristic gates
+  `SwarmSynthesizer`'s FLUX-round-trip decomposition — most questions are
+  atomic and shouldn't pay for it.
+- **Dynamic Tool Registration** (`uchi/tool_learning.py`): `learn_tools(path)`
+  parses a plain Python file's top-level functions into callable tools, no
+  source changes required.
+- **Web search as a tool** (opt-in via `Core(web_search=True)`), plus a
+  default fallback: `GenerateAndGround` silently retries against live web
+  search when local retrieval comes up empty, before abstaining.
+- **OpenAI-compatible endpoint** (`POST /v1/chat/completions`) and **SSE
+  streaming** (`POST /ask/stream`) — the latter streams real "thought" events
+  (swarm decomposition, candidate generation, oracle pruning) as they occur,
+  then a final "speech" event.
+- **Skill sharing**: `export_skill()`/`import_skill()` package a verified
+  skill as a `.uchi_skill` file (same markdown+frontmatter format skills
+  already use) for sharing between instances.
+- **Persistent user preferences** (`uchi/user_profile.py`): `remember_
+  preference()` writes to `.uchi/user_profile.md`, auto-ingested on every
+  `Core()` construction — cross-session memory with no vector database.
+- **Enterprise data silos** (`uchi/data_silo.py`): `Core(allowed_paths=...,
+  denied_paths=...)` restricts which directories `ingest()` may touch.
+- **Front-Desk tone pass**: `ask_friendly()` rewrites a dry grounded answer
+  in a warmer tone, verified against the original fact with the same
+  `FactCheckOracle` before being trusted — falls back to the dry answer if
+  the rewrite isn't grounded.
+- **Observability exporter** (`uchi/observability.py`): tool-call log as
+  OpenTelemetry-shaped spans (JSON Lines), no SDK dependency required.
+- **Glass Brain** (`uchi/tui/glass_brain.py`): live tool-call trace panel in
+  the TUI.
+- **OPS Benchmark Harness** (`benchmarks/ops_benchmark.py`): Operations Per
+  Second for the autonomous tool-calling loop — baseline 41.66 ops/sec,
+  10-step task, 25-step context coherence confirmed.
+- **`tests/test_edge_cases.py`**: black-box adversarial testing of every
+  public `Core` method, existing and new — self-checking (fails if a new
+  public method ships without corresponding coverage), so it can't quietly
+  go stale as the API grows.
+
+### Fixed
+- `ask("/")` (bare slash, no command) raised an unhandled `IndexError` from
+  slash-command parsing instead of a clean "unknown skill" message.
+- `_parse_kwargs` (tool-call argument parsing) silently dropped any
+  multi-line `code=` argument — a raw newline inside a quoted string broke
+  `ast.parse`, caught by a bare `except`. Broke every real multi-line
+  `run_python`/`lint_python` call.
+- `run_python`'s registry-facing wrapper never raised on script failure, so
+  the loop guard and HitL auto-escalation couldn't see scratchpad errors as
+  failures.
+- Two duplicate `REPLOracle` classes (`code_engine.py`, `procedural_
+  memory.py`) consolidated to one — the duplicate was live and load-bearing
+  in `generate_and_ground.py`'s empirical-synthesis fallback.
+- `uchi/simple.py`'s docstring referenced a `u.router`/`OmniRouter` that was
+  never actually assigned — the real object is `self.pipeline`
+  (`GenerateAndGround`).
+- SFT/CoT data-source loading (`sft_train.py`, `cot_distill.py`) shared one
+  cumulative example-count cap across all sources — the first source to
+  load (SQuAD / GSM8K) reached the cap before exhausting its pool, silently
+  starving every source loaded after it to ~1 example. Each source now gets
+  an independent budget.
+- `pyproject.toml`'s `package-data` never included `uchi/skills/*.md` — every
+  documented slash command (`/classify`, `/forecast`, etc.) silently failed
+  on every real `pip install` with zero warning.
+
+### FLUX scale-up (in progress)
+- **Vocab pruning** (`uchi/flux/vocab_prune.py`, `scripts/build_pruned_
+  vocab.py`): the full cl100k_base vocab is ~66% of the model's params at
+  `d_model=768`; a compact 32K vocab built from the real training corpus
+  mix measures 97–99% token coverage, freeing ~52M params. `PrunedTikToken
+  Tokenizer` is a drop-in wrapper; `--pruned-vocab` on `train_v2.py`/
+  `sft_train.py` opts in.
+- **Fused SSM scan**: `UCHI_FUSE_SSM_SCAN=1` kernel-fuses the existing
+  sequential scan (same algorithm — a parallel scan was already tried and
+  reverted for measured memory-bandwidth reasons) via `torch.compile` over
+  the whole loop. Measured 3.08× forward speedup on an RTX 5070.
+- **New training data**: UltraChat-200k (Phase 2, conversational tone),
+  OpenOrca and Magicoder-OSS-Instruct (Phase 3, general and code reasoning
+  CoT) — closing gaps where the prior data mix had zero natural dialogue
+  and math-only CoT.
+- Phase 1 (pretrain) complete: 64.0M params (32K vocab), val loss 5.82 →
+  4.11 over 5,000 steps, no NaN/crash. Phase 2 (SFT) proof run validated
+  the new tokenizer + data sources end-to-end; full run in progress.
+
 ## [0.3.0] - 2026-07-04 - FLUX + Uchi: a trained proposer behind the verifier
 
 Adds **FLUX**, a small (~116M) from-scratch SSM/attention model, as the swappable
