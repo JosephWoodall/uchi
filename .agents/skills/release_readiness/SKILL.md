@@ -144,6 +144,19 @@ new vocabulary) — this is a release blocker, not a degraded-mode fallback.
   changes (vocab pruning, fused scan) folded into the current training run.
 - README must show exactly how to train FLUX from scratch, and how to
   obtain pretrained weights if not training locally.
+- **The "How It Connects" architecture diagram in `README.md` must be
+  updated whenever the architecture it depicts changes.** As of this
+  writing it's still the v0.3.0 diagram — `Uchi.__init__` picking a
+  checkpoint, `GenerateAndGround`, then SDK/TUI/REST fanning out from a
+  single `Uchi()` construction. It has no `MetaUchi`/`Core` split, no tool
+  calling, no scratchpad, no goal state, no `/ask/stream` or
+  `/v1/chat/completions`. Do not let a release ship with a diagram that
+  describes last release's architecture: redraw it (same ASCII-box style)
+  to show what `from uchi import Uchi` actually constructs and connects to
+  as of the release being cut, and confirm every box in it is a real,
+  current class/function name — grep for each one before publishing, the
+  same way the rest of this checklist insists on verifying claims against
+  running code rather than assuming docs kept up.
 
 ## 7. CI/CD & APIs
 - Ensure all Simplified APIs are functional: `uchi tui` loads, `uchi serve`

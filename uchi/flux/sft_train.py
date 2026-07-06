@@ -273,6 +273,16 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--max-examples", type=int, default=DEFAULTS["max_examples"])
     parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument("--pruned-vocab", type=str, default=None,
+                        help="0.4.0 Item 0: path to the same PrunedVocab JSON the Phase 1 "
+                             "--base checkpoint was trained with. REQUIRED if --base was "
+                             "trained with a pruned vocab -- encoding with the full ~100K "
+                             "cl100k_base tokenizer against a smaller embedding table would "
+                             "produce out-of-range token IDs.")
+    parser.add_argument("--checkpoint-dir", type=str, default=DEFAULTS["checkpoint_dir"],
+                        help="Where to write sft_epoch*.pt/sft_best.pt. Defaults to the "
+                             "shared checkpoints dir -- override for proof/experimental "
+                             "runs so they don't overwrite production checkpoints.")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -283,7 +293,13 @@ def main():
     from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
     from uchi.flux.model import HybridTSSM
 
-    tokenizer = TikTokenHybridTokenizer()
+    if args.pruned_vocab:
+        from uchi.flux.vocab_prune import load_pruned_tokenizer
+        tokenizer = load_pruned_tokenizer(args.pruned_vocab)
+        print(f"  Tokenizer:    pruned, vocab_size={tokenizer.vocab_size:,} (from {args.pruned_vocab})")
+    else:
+        tokenizer = TikTokenHybridTokenizer()
+        print(f"  Tokenizer:    full cl100k_base, vocab_size={tokenizer.vocab_size:,}")
 
     print("=" * 72)
     print("FLUX Phase 2 — Supervised Fine-Tuning")
@@ -399,7 +415,7 @@ def main():
         return total_loss / max(n_batches, 1)
 
     # ── Training ──
-    ckpt_dir = DEFAULTS["checkpoint_dir"]
+    ckpt_dir = args.checkpoint_dir
     os.makedirs(ckpt_dir, exist_ok=True)
     model.train()
     best_val = float("inf")
