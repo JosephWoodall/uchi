@@ -334,12 +334,14 @@ class Core:
         from .response_normalizer import normalize
         if question.startswith("/") and data:
             parts = question.lstrip("/").split(None, 1)
-            cmd = parts[0].lower()
+            # A bare "/" (or "/" plus only whitespace) leaves parts empty --
+            # lstrip("/") strips it to "", and "".split(None, 1) is [].
+            cmd = parts[0].lower() if parts else ""
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, data_kwargs=data, callback=callback) or ""
         elif question.startswith("/"):
             parts = question.lstrip("/").split(None, 1)
-            cmd = parts[0].lower()
+            cmd = parts[0].lower() if parts else ""
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, callback=callback) or ""
         else:
