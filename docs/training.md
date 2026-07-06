@@ -43,7 +43,7 @@ are **skipped if their output already exists**, so an interrupted run resumes.
 | 0 | Tokenize | `scripts/pretokenize.py` | FineWeb-Edu → memmap (falls back to OpenWebText) | `uchi/flux/data/{train,val}.bin` |
 | 1 | Pre-training | `uchi/flux/train_v2.py` | `train.bin` (or, without `--data-bin`: a streaming fallback over OpenWebText + Wikipedia + Code, ~10× slower) | `checkpoints/ckpt_best.pt` |
 | 2 | SFT | `uchi/flux/sft_train.py` | SQuAD + Dolly + CodeAlpaca + **UltraChat-200k** (0.4.0) | `checkpoints/sft_best.pt` |
-| 3 | CoT distillation | `uchi/flux/cot_distill.py` | GSM8K + **OpenOrca + Magicoder-OSS-Instruct** (0.4.0) | `checkpoints/cot_best.pt` |
+| 3 | CoT distillation | `uchi/flux/cot_distill.py` | GSM8K + **OpenOrca + Magicoder-OSS-Instruct + CommitPackFT** (0.4.0) | `checkpoints/cot_best.pt` |
 | 4 | Ternary QAT | `uchi/flux/qat_train.py` | `train.bin` | `checkpoints/qat_best.pt` |
 
 **Final step:** `train_all.sh` copies the last successful phase
@@ -61,8 +61,10 @@ canonical model the Proposer loads.
 3. **CoT distillation** imitates *real* worked-solution reasoning traces
    (static teacher distillation — a small model can't bootstrap reasoning from
    self-play): GSM8K for math, and — as of 0.4.0 — OpenOrca for general
-   reasoning and Magicoder-OSS-Instruct for code-specific plan-then-code
-   reasoning (GSM8K alone only taught math CoT).
+   reasoning, Magicoder-OSS-Instruct for code-specific plan-then-code
+   reasoning, and CommitPackFT for reading an *existing* code change and
+   explaining it (GSM8K alone only taught math CoT; Magicoder only teaches
+   from-scratch generation, not reading a real diff).
 4. **Ternary QAT** (optional) quantizes weights to 1.58-bit for efficiency.
    Skippable; on a small model it can trade quality for size, so `cot_best.pt`
    is a valid full-precision final model.

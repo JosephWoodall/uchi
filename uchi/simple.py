@@ -323,13 +323,33 @@ class Core:
         except Exception as e:
             print(f"[-] Failed to learn: {e}")
 
-    def ask(self, question: str, callback=None, **data: Any) -> str:
+    def ask(
+        self,
+        question: str,
+        callback=None,
+        conversation_context: Optional[str] = None,
+        **data: Any,
+    ) -> str:
         """Ask the brain a question or invoke a tool skill.
 
         Natural-language questions route through the FLUX + Uchi verifier pipeline.
 
         Slash commands with ``**data`` keyword arguments invoke the
         corresponding analytical skill directly.
+
+        ``conversation_context`` (0.4.0 Item 17): an explicit, caller-supplied
+        conversation history string, formatted like
+        ``EpisodicMemory.get_context_string()``. When given, it's used
+        *instead of* this instance's own ``self.episodic_memory`` for this
+        call, and this call does not read from or write to
+        ``self.episodic_memory`` at all. This exists for callers managing
+        their own per-session history externally (the REST API's
+        ``/v1/chat/completions``, which receives the client's full message
+        array on every stateless HTTP call) — without it, every caller
+        sharing one ``Core`` instance (as the REST server does, via one
+        global router) would have their conversations mixed into the same
+        rolling history. Leave it ``None`` for the normal SDK/TUI case,
+        where one instance really is one ongoing conversation.
         """
         from .response_normalizer import normalize
         if question.startswith("/") and data:
@@ -349,7 +369,12 @@ class Core:
             # context (goal + compacted notes) if start_goal() is active.
             # If a HitL yield is pending (Item 10), this question IS the
             # human's answer to it — fold it in and clear the pending yield.
-            context = self.episodic_memory.get_context_string(n_turns=3)
+            # An explicit conversation_context (Item 17) overrides
+            # self.episodic_memory entirely for this call -- see this
+            # instance's own episodic_memory being shared across every
+            # caller of a single REST server as the reason this exists.
+            using_external_context = conversation_context is not None
+            context = conversation_context if using_external_context else self.episodic_memory.get_context_string(n_turns=3)
             goal_context = self.goal_state.context_string() if self.goal_state else ""
             pending_context = ""
             if self.pending_yield:
@@ -390,8 +415,12 @@ class Core:
                 self.pending_yield = clarifying
                 raw = format_yield(clarifying)
 
-            # Save to episodic memory
-            self.episodic_memory.add_interaction(question, raw)
+            # Save to episodic memory -- skipped when an external
+            # conversation_context was supplied, so a stateless caller
+            # managing its own history never writes into (or is mixed
+            # into) this instance's shared episodic memory.
+            if not using_external_context:
+                self.episodic_memory.add_interaction(question, raw)
 
         return normalize(raw)
 

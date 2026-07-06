@@ -174,6 +174,25 @@ class OpenAIChatResponse(BaseModel):
     usage: OpenAIUsage = OpenAIUsage()
 
 
+def _build_conversation_context(messages: List["OpenAIMessage"]) -> str:
+    """Format prior turns as conversation history, reusing EpisodicMemory's
+    own formatting (via a throwaway instance) rather than duplicating it.
+    Pairs up consecutive user/assistant messages; a dangling, unanswered
+    user message at the end (no assistant reply yet in *messages*) is
+    dropped, since get_context_string only ever renders complete turns.
+    """
+    from uchi.episodic_memory import EpisodicMemory
+    scratch = EpisodicMemory(max_history=max(1, len(messages)))
+    pending_user = None
+    for m in messages:
+        if m.role == "user":
+            pending_user = m.content
+        elif m.role == "assistant" and pending_user is not None:
+            scratch.add_interaction(pending_user, m.content)
+            pending_user = None
+    return scratch.get_context_string(n_turns=len(scratch.history))
+
+
 @app.post("/v1/chat/completions", response_model=OpenAIChatResponse)
 async def openai_chat_completions(request: OpenAIChatRequest):
     """OpenAI-compatible chat completions endpoint (0.4.0 Item 16.1).
@@ -182,18 +201,28 @@ async def openai_chat_completions(request: OpenAIChatRequest):
     frontends (Open-WebUI, etc.) with zero custom UI code. Streaming
     (``stream=True``) isn't implemented on this endpoint — see the SSE
     endpoint (Item 16.9) for streamed responses.
+
+    0.4.0 Item 17: the client's full ``messages`` history is threaded
+    through as conversation context — previously everything but the last
+    message was silently discarded. Built per-request from the client's
+    own supplied messages, never through ``_router.episodic_memory``:
+    ``_router`` is one global ``Core`` instance shared by every caller of
+    this server, so folding history through its shared memory would mix
+    different clients' conversations together.
     """
     if _router is None:
         raise HTTPException(status_code=503, detail="Uchi is still starting up")
 
-    user_messages = [m for m in request.messages if m.role == "user"]
-    if not user_messages:
+    user_indices = [i for i, m in enumerate(request.messages) if m.role == "user"]
+    if not user_indices:
         raise HTTPException(status_code=400, detail="At least one user message is required")
-    question = user_messages[-1].content
+    last_user_idx = user_indices[-1]
+    question = request.messages[last_user_idx].content
+    conversation_context = _build_conversation_context(request.messages[:last_user_idx])
 
     try:
         # ask() already normalizes its own output — don't double-normalize.
-        answer = _router.ask(question) or ""
+        answer = _router.ask(question, conversation_context=conversation_context) or ""
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

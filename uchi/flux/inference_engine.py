@@ -81,7 +81,8 @@ class InferenceEngine:
 
 
 def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = None,
-                      greedy: bool = True, temperature: float = 0.7):
+                      greedy: bool = True, temperature: float = 0.7,
+                      pruned_vocab: Optional[str] = None):
     """FLUX-as-Proposer seam for Uchi.
 
     Returns ``generate_fn(prompt: str, max_tokens: int) -> str`` that continues
@@ -92,6 +93,15 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
     Architecture is inferred from the checkpoint tensor shapes so it never drifts
     from the trained weights (vocab_size + d_model from ``embedding.weight``,
     ``n_layers`` by counting layer indices, ``d_state`` by trial load).
+
+    0.4.0 Item 0 (vocab pruning): if the checkpoint's inferred ``vocab_size``
+    doesn't match the full tokenizer's, this checkpoint was trained with a
+    pruned vocab (``train_v2.py``/``sft_train.py --pruned-vocab``) -- loading
+    it with the full tokenizer would produce out-of-range token IDs against
+    its smaller embedding table. Auto-detected and loaded from *pruned_vocab*
+    if given, else the known default path this repo's 0.4.0 retraining uses.
+    Raises with an actionable message rather than silently corrupting output
+    if neither tokenizer's size matches.
     """
     import os, re, torch
     from .model import HybridTSSM
@@ -112,6 +122,29 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
     n_layers = (max(layer_ids) + 1) if layer_ids else 20
 
     tokenizer = TikTokenHybridTokenizer()
+    if vocab_size != tokenizer.vocab_size:
+        default_pruned_path = os.path.join(here, "checkpoints", "pruned_vocab_32k.json")
+        candidate_path = pruned_vocab or default_pruned_path
+        if os.path.exists(candidate_path):
+            from .vocab_prune import load_pruned_tokenizer
+            pruned_tokenizer = load_pruned_tokenizer(candidate_path)
+            if pruned_tokenizer.vocab_size == vocab_size:
+                tokenizer = pruned_tokenizer
+            else:
+                raise RuntimeError(
+                    f"Checkpoint vocab_size ({vocab_size}) matches neither the "
+                    f"full tokenizer ({tokenizer.vocab_size}) nor the pruned "
+                    f"vocab at {candidate_path} ({pruned_tokenizer.vocab_size}). "
+                    f"Pass the correct pruned_vocab path explicitly."
+                )
+        else:
+            raise RuntimeError(
+                f"Checkpoint vocab_size ({vocab_size}) doesn't match the full "
+                f"tokenizer's ({tokenizer.vocab_size}), and no pruned vocab "
+                f"file was found at the default path ({candidate_path}). This "
+                f"checkpoint likely needs pruned_vocab specified explicitly."
+            )
+
     model = None
     for d_state in (64, 32, 16, 128):
         try:

@@ -94,14 +94,28 @@ class GenerateAndGround:
 
     # ── the loop ───────────────────────────────────────────────────────────────
     def answer(self, question: str, callback=None) -> str:
+        # A question that asserts nothing specific (no proper noun, no
+        # number -- "Hello!", "Thanks!", "How are you?") isn't a factual
+        # lookup in the first place. The two honesty gates below exist to
+        # catch nonsense/OOV questions and weak-evidence factual questions
+        # -- applied to a bare greeting, they were abstaining on it the
+        # same way they'd abstain on a genuine unanswerable question,
+        # because retrieval naturally can't find high-similarity matches
+        # for something that isn't a factual query. Gated on specificity:
+        # a real factual question with weak evidence still abstains
+        # exactly as before; a generic conversational one proceeds to
+        # candidate generation, where the oracle's own no-evidence
+        # relaxation (oracle.py) makes the final call.
+        question_is_specific = bool(self.oracle._specific_terms(question))
+
         # honesty gate 1: do we even know the question's concepts? (nonsense/OOV)
         if callback: callback("thinking", "Checking semantic vocabulary...")
-        if self._known_fraction(question) < self.min_known:
+        if question_is_specific and self._known_fraction(question) < self.min_known:
             return _ABSTAIN
 
         if callback: callback("thinking", f"Retrieving top {self.retrieve_k} memories...")
         evidence = self.index.retrieve(question, self.retrieve_k)
-        if (not evidence or evidence[0][1] < self.min_sim) and self.web_search_enabled:
+        if question_is_specific and (not evidence or evidence[0][1] < self.min_sim) and self.web_search_enabled:
             if callback: callback("thinking", "No local evidence — falling back to web search...")
             try:
                 from .web_search import perform_web_search
@@ -111,9 +125,18 @@ class GenerateAndGround:
             if web_text:
                 self.index.build_from_corpus(web_text)
                 evidence = self.index.retrieve(question, self.retrieve_k)
-        if not evidence or evidence[0][1] < self.min_sim:
+        if question_is_specific and (not evidence or evidence[0][1] < self.min_sim):
             return _ABSTAIN
-        ev_texts = [t for t, _ in evidence]
+        # Only carry forward evidence confident enough to actually mean
+        # something -- a weak/irrelevant match (below min_sim) shouldn't
+        # count as "evidence" for the oracle check either, or a generic
+        # reply would get strictly checked against irrelevant retrieved
+        # text instead of correctly hitting the oracle's no-evidence
+        # relaxation (this is what was happening for "Hello!": retrieval
+        # found real but irrelevant passages, so ev_texts was non-empty
+        # and the strict check applied to a candidate that never asserted
+        # anything those passages could support in the first place).
+        ev_texts = [t for t, sim in evidence if sim >= self.min_sim]
 
         # honesty gate 2: does the evidence actually ANSWER the question? (SQuAD-2.0
         # style unanswerability — topically relevant but no answer present)

@@ -83,6 +83,56 @@ running) — see "FLUX scale-up" below and `docs/training.md`.
   go stale as the API grows.
 
 ### Fixed
+- `build_generate_fn` (`uchi/flux/inference_engine.py`) unconditionally
+  loaded the full ~100K-token tokenizer regardless of the checkpoint's
+  actual vocab size — the same mismatch already fixed on the *training*
+  side (`sft_train.py --pruned-vocab`) was never fixed on the *inference*
+  side. A pruned-vocab checkpoint (0.4.0 Item 0 — Phase 1 already trained
+  with one) would have produced out-of-range token IDs the moment
+  `Core()` tried to actually use it, once promoted from its isolated
+  training directory to the default checkpoint path. Now auto-detects the
+  mismatch from the checkpoint's own inferred `vocab_size` (the same
+  "infer from tensor shapes" approach already used for `d_model`/
+  `n_layers`/`d_state`) and loads the matching pruned tokenizer, with an
+  explicit `pruned_vocab` override on `build_generate_fn`/
+  `FluxProposer.load` for anything other than the default path. Verified
+  against both the real, completed Phase 1 checkpoint (pruned, loads and
+  generates correctly) and the current production `flux_best.pt` (full
+  vocab, unchanged behavior).
+- `FactCheckOracle.is_grounded()` rejected every claim when no relevant
+  evidence was retrieved — including purely conversational replies that
+  never asserted anything checkable ("Hello! How can I help you today?"),
+  which got vetoed the same way a fabricated fact would, causing `ask()` to
+  abstain on a bare greeting. Now, when evidence is empty, only a claim's
+  *specific* content (proper nouns, numbers) needs support — a claim built
+  entirely from generic vocabulary has nothing checkable in it and is
+  emitted; a claim naming something specific with zero evidence is still
+  rejected exactly as before. The pronoun "I" is explicitly excluded from
+  the proper-noun check (always capitalized regardless of position, a
+  spelling convention rather than a specificity signal). Every relaxed-path
+  decision is logged (`oracle.relaxed_pass_log`) for future refinement.
+  Two upstream honesty gates in `generate_and_ground.py` (`_known_fraction`
+  and the retrieval-similarity check) had the same problem and are now
+  gated on whether the *question itself* asserts anything specific — a
+  real factual question with weak evidence still abstains exactly as
+  before; a generic conversational one proceeds to candidate generation,
+  where the oracle's relaxation makes the final call. `ev_texts` passed to
+  the proposer/oracle now excludes evidence below the similarity
+  threshold, so a topically-irrelevant-but-real match doesn't force the
+  strict check on a candidate that never asserted anything the retrieved
+  text could support in the first place. Covered by
+  `tests/test_oracle_no_evidence_relaxation.py`.
+- `/v1/chat/completions` accepted a full OpenAI-shaped `messages` array but
+  silently discarded everything except the last message. Fixed by threading
+  the prior turns through as conversation context. Separately, the REST
+  server's `_router` is one global `Core` instance shared by every caller
+  (constructed once in `lifespan()`) — reading/writing `self.episodic_memory`
+  for that per-request context would have mixed different clients'
+  conversations together. Fixed via a new `Core.ask(...,
+  conversation_context: str | None = None)` parameter that overrides
+  `self.episodic_memory` for that call only, without reading from or writing
+  to it — REST callers get correct per-request history with no
+  cross-contamination, SDK/TUI's single-instance session behavior unchanged.
 - `ask("/")` (bare slash, no command) raised an unhandled `IndexError` from
   slash-command parsing instead of a clean "unknown skill" message.
 - `_parse_kwargs` (tool-call argument parsing) silently dropped any
@@ -119,9 +169,18 @@ running) — see "FLUX scale-up" below and `docs/training.md`.
   reverted for measured memory-bandwidth reasons) via `torch.compile` over
   the whole loop. Measured 3.08× forward speedup on an RTX 5070.
 - **New training data**: UltraChat-200k (Phase 2, conversational tone),
-  OpenOrca and Magicoder-OSS-Instruct (Phase 3, general and code reasoning
-  CoT) — closing gaps where the prior data mix had zero natural dialogue
-  and math-only CoT.
+  OpenOrca, Magicoder-OSS-Instruct, and CommitPackFT (Phase 3, general,
+  code, and repo-level code-change reasoning CoT) — closing gaps where the
+  prior data mix had zero natural dialogue, math-only CoT, and no
+  understanding of *existing* code changes (only from-scratch generation).
+  CommitPackFT (originally scoped for 0.5.0, pulled forward since Phase 3
+  hadn't started training yet) pairs a real diff with a real, human-written
+  commit message; the `<|think|>` content is a real, computed fact about
+  the diff (lines added/removed), not a fabricated reasoning narrative —
+  the dataset has no separate reasoning-steps field the way GSM8K does.
+  Loaded via the raw per-language JSONL file directly, since
+  `bigcode/commitpackft`'s HF dataset-script loader was removed by a
+  `datasets` library version bump; the underlying data is unaffected.
 - Phase 1 (pretrain) complete: 64.0M params (32K vocab), val loss 5.82 →
   4.11 over 5,000 steps, no NaN/crash. Phase 2 (SFT) proof run validated
   the new tokenizer + data sources end-to-end; full run in progress.

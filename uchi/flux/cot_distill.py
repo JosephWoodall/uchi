@@ -180,18 +180,92 @@ def generate_magicoder_cot(num_examples):
     return examples
 
 
+def generate_commitpackft_cot(num_examples):
+    """Repo-level code-change reasoning CoT from CommitPackFT's Python
+    slice (originally scoped as 0.5.0 Item 6, pulled forward into 0.4.0
+    Phase 3 since it hadn't started training yet -- a real window to add
+    this before training begins rather than waiting for a separate
+    release just to get it).
+
+    CodeAlpaca (Phase 2) and Magicoder (above) both teach isolated,
+    from-scratch code generation -- neither teaches how to read an
+    EXISTING change and explain what it does and why, the skill
+    SWE-bench-style tasks (and later self-modification work) actually
+    need. Real before/after file contents and a real, human-written
+    commit message. CommitPackFT has no separate reasoning-steps field
+    the way GSM8K does, so rather than fabricate a narrated "thinking"
+    monologue (exactly what this file's own docstring principle warns
+    against), the <|think|> content here is a real, mechanically-computed
+    fact about the diff (lines added/removed) -- not invented reasoning,
+    just real data in a different shape. The <|assistant|> answer is the
+    actual commit message, never generated.
+
+    Loaded via the raw per-language JSONL file directly
+    (``bigcode/commitpackft``'s HF *dataset script* loader was removed by
+    a `datasets` library version bump; the underlying data files are
+    unaffected and load fine via ``load_dataset("json", data_files=...)``).
+
+    Note: each row is a single file's before/after, not a true multi-file
+    commit diff -- a real, useful proxy for "understand a code change,"
+    not literally cross-file/cross-repository reasoning.
+    """
+    import difflib
+    from datasets import load_dataset
+
+    examples = []
+    url = "https://huggingface.co/datasets/bigcode/commitpackft/resolve/main/data/python/data.jsonl"
+    try:
+        ds = load_dataset("json", data_files=url, split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load CommitPackFT teacher traces: {e}")
+        return []
+
+    for row in ds:
+        old = (row.get("old_contents") or "").strip()
+        new = (row.get("new_contents") or "").strip()
+        message = (row.get("message") or row.get("subject") or "").strip()
+        old_file = row.get("old_file") or "file.py"
+        if not old or not new or not message or old == new:
+            continue
+
+        diff_lines = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=old_file, tofile=old_file, lineterm="", n=2,
+        ))
+        if not diff_lines:
+            continue
+        diff_text = "\n".join(diff_lines)
+        if len(diff_text) > 1500:   # keep prompts a reasonable size, same spirit as other sources
+            continue
+
+        n_added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+        n_removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+
+        examples.append({
+            "question": f"What does the following code change do, and why was it made?\n\n{diff_text}",
+            "think": f"The diff to {old_file} changes {n_removed} line(s) and adds {n_added} line(s).",
+            "answer": message,
+        })
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real CommitPackFT teacher CoT traces.")
+    return examples
+
+
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
     random.seed(seed)
-    print("  Generating CoT examples from 3 real teacher-trace sources ...")
+    print("  Generating CoT examples from 4 real teacher-trace sources ...")
     # Each source gets its own independent share of max_examples (not a
     # shared cumulative counter — see the 0.4.0 fix in sft_train.py's
     # load_sft_examples for why a shared counter silently starves every
     # source after the first).
-    per_source = max(1, max_examples // 3)
+    per_source = max(1, max_examples // 4)
     examples = (
         generate_synthetic_cot(per_source)
         + generate_openorca_cot(per_source)
         + generate_magicoder_cot(per_source)
+        + generate_commitpackft_cot(per_source)
     )
     random.shuffle(examples)
     examples = examples[:max_examples]
