@@ -50,7 +50,7 @@ class GenerateAndGround:
                  decoder=None, proposer=None, predictor=None, answerability=None,
                  retrieve_k: int = 10, min_sim: float = 0.5,
                  min_known: float = 0.5, min_answerable: float = 0.5,
-                 web_search_enabled: bool = False) -> None:
+                 web_search_enabled: bool = False, task_config_cache=None) -> None:
         self.index = index
         self.oracle = oracle or FactCheckOracle()
         # `proposer` is the pluggable generator (decoder / FLUX / LLM); `decoder`
@@ -68,6 +68,13 @@ class GenerateAndGround:
         # search, learn what it finds, and retry retrieval once — before
         # abstaining, not instead of grounding.
         self.web_search_enabled = web_search_enabled
+        # Dynamic-N self-consistency voting (follow-on to Item 17): recalls
+        # a recommended vote count keyed by the question's structural shape
+        # (TaskConfigCache, ODUSP-backed), falling back to a complexity-
+        # score-derived baseline when unfitted or unconfident. None by
+        # default -- n_votes stays a fixed 3 unless this is supplied,
+        # zero behavior change for anyone not using it.
+        self.task_config_cache = task_config_cache
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _content(self, text: str) -> list[str]:
@@ -148,10 +155,27 @@ class GenerateAndGround:
             except Exception:
                 pass
 
+        # Dynamic-N: how many self-consistency votes this question actually
+        # gets, instead of a fixed 3. Baseline from the same complexity
+        # heuristic already used to gate swarm decomposition; refined by
+        # TaskConfigCache's recall if it has a confident one for this
+        # question's structural shape. This only changes how many
+        # candidates get generated -- every candidate still goes through
+        # the full, unchanged oracle cascade below, so this is a compute
+        # budget knob, not a correctness gate: it can move in either
+        # direction safely.
+        from .iq_router import estimate_complexity
+        complexity = estimate_complexity(question)
+        n_votes = 1 if complexity < 0.3 else (3 if complexity < 0.6 else 5)
+        if self.task_config_cache is not None:
+            recalled_n, conf = self.task_config_cache.recall_n(question)
+            if recalled_n is not None and conf >= 0.5:
+                n_votes = recalled_n
+
         # Try synthesis (neural decoder) first, then fall back to the grounded
         # extractive answer. We evaluate ALL candidates to perform Plural Voting (Simulation Engine).
         valid_candidates = []
-        for candidate in self._candidates(question, evidence, ev_texts, callback=callback):
+        for candidate in self._candidates(question, evidence, ev_texts, callback=callback, n_votes=n_votes):
             if not candidate or not candidate.strip():
                 continue
             if callback: callback("thinking", f"Oracle verifying candidate: '{candidate[:40]}...'")
@@ -159,13 +183,20 @@ class GenerateAndGround:
                 valid_candidates.append(candidate)
             else:
                 if callback: callback("prune", "Ungrounded claim pruned by Oracle.")
-                
+
         if valid_candidates:
             # Plural vote: pick the most frequent verified candidate (Self-Consistency)
             from collections import Counter
             counts = Counter(valid_candidates)
             best_candidate = counts.most_common(1)[0][0]
             if callback: callback("reinforce", f"Plural vote winner! (votes: {counts[best_candidate]}/{len(valid_candidates)}).")
+            if self.task_config_cache is not None:
+                # Retrospective, honest signal: unanimous agreement across
+                # every valid candidate suggests this was easy enough that
+                # fewer votes would likely have sufficed; any real
+                # disagreement means the full budget was genuinely used.
+                actual_n = 1 if len(set(valid_candidates)) == 1 else n_votes
+                self.task_config_cache.record_outcome(question, actual_n)
             return best_candidate
             
         # 3. Empirical Synthesis Loop (Fallback when text grounding fails)

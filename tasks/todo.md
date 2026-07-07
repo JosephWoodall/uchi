@@ -44,8 +44,9 @@ Phase 2  sft_best.pt
               ▼                                            │  code-change
 Phase 3  cot_best.pt                                       │  understanding)
               │
-              ▼  uchi/flux/qat_train.py   (ternary, CoT-preserving mix)
-Phase 4  qat_best.pt
+              ▼  uchi/flux/qat_train.py   (--pruned-vocab, ternary, CoT-preserving mix)
+Phase 4  qat_best.pt   [blocked: --data-bin needs a pruned-vocab re-tokenization
+                        first — see "Where things actually stand" below]
               │
               ▼  cp (train_all.sh's final step)
          flux_best.pt   ◄── canonical artifact Core() loads by default
@@ -129,6 +130,12 @@ Core.ask(question)
     │       ├─ ev_texts = only evidence that cleared min_sim (weak/irrelevant
     │       │   matches don't count as "evidence" for the oracle either)
     │       │
+    │       ├─ n_votes = dynamic, not a fixed 3: baseline from iq_router's
+    │       │     complexity score, refined by TaskConfigCache.recall_n()
+    │       │     if it has a confident recommendation for this question's
+    │       │     STRUCTURAL shape (comparison/multi-part/enumeration/length
+    │       │     -- not its exact text, which is what makes this recur
+    │       │     often enough to be useful, unlike claim-level memoization)
     │       ├─ FluxProposer.propose(question, ev_texts, think=True)
     │       │     → candidate text (n_votes candidates, reflection retries)
     │       │
@@ -182,18 +189,72 @@ Core.ask(question)
 ## Where things actually stand right now
 
 - Phase 1 (pretrain) — **done**. 64.0M params, pruned 32,018-token vocab.
-- Phase 2 (SFT) — **running now**, step ~250/742, healthy, no errors.
-  `nvidia-smi` confirms the GPU is fully committed to this.
-- Phase 3 (CoT), Phase 4 (QAT) — **not started**.
+- Phase 2 (SFT) — **done**. 743 steps, 787.6 min, val loss 3.42, PPL 30.5
+  (down from Phase 1's PPL 61.1 — a real improvement, not just more training).
+- Phase 3 (CoT) — proof run **succeeded**: all 4 sources loaded exactly
+  fairly (100 each), pruned-vocab tokenizer confirmed working, val loss
+  4.26/PPL 70.8 (a different, harder task shape than SFT, not a red flag).
+  **Full run now running** (default 10,000 examples, 4 epochs).
+- Phase 4 (QAT) — not started, and has a **real, newly-discovered blocker**
+  (see below) that needs resolving before it can launch.
 - Item 17 (verifier upgrade) — code, data pipeline, and tests **fully
   built and CPU-verified**; training **not yet run** (needs the GPU, which
-  Phase 2–4 has first).
+  Phase 3–4 has first).
+- **Dynamic-N self-consistency voting — done, active by default, no
+  training needed.** `uchi/task_config_cache.py`: ODUSP (`UniversalPredictor`)
+  recalls a recommended vote count keyed by a question's structural
+  signature (multi-part/comparison/enumeration/length), not its exact
+  text — this is a better fit for ODUSP's pattern-recall strength than the
+  original claim-memoization idea, since structural shapes recur across
+  completely different topics far more often than exact factual claims
+  do. Verified empirically before wiring it in (same discipline as the
+  numeric-plausibility rewrite): trained on a handful of examples, it
+  correctly recalled N=1 for a *never-seen* simple question and N=8 for a
+  *never-seen* complex/comparison question, confirming it generalizes on
+  structure rather than memorizing text. Wired into
+  `GenerateAndGround.answer()`, replacing the old hardcoded `n_votes=3`;
+  falls back to a complexity-score baseline (`iq_router.estimate_complexity`)
+  when unfitted or unconfident. Safe in both directions — unlike the
+  oracle's layered vetoes, a vote count is a compute-budget knob, not a
+  correctness gate, since every candidate still goes through the full,
+  unchanged oracle cascade regardless of how many were generated. Wired
+  into `Core.__init__` by default (needs no training, unlike the
+  entailment classifier). 11 new tests
+  (`test_task_config_cache.py`, `test_dynamic_n_voting.py`), 317 passing
+  overall.
+
+**Bugs found and fixed transitioning into Phase 3** (same class as the
+pruned-vocab fixes already made to `sft_train.py`/`build_generate_fn`
+earlier in this session, just not yet applied to Phases 3–4): both
+`cot_distill.py` and `qat_train.py` unconditionally used the full ~100K
+tokenizer regardless of the checkpoint's actual vocab — since Phase 2's
+`sft_best.pt` uses the pruned 32,018-token vocab, running Phase 3 without
+this fix would have corrupted or crashed training immediately on the first
+out-of-range embedding index. Both scripts now accept `--pruned-vocab`
+(same pattern as `sft_train.py`) and `--checkpoint-dir` (isolate
+proof/experimental runs from production checkpoints). Verified via
+`--help` and the full test suite (306 passing) before launching anything.
+
+**Real blocker found for Phase 4, not yet resolved**: `qat_train.py`
+requires `--data-bin`, a pre-tokenized memmap produced by
+`scripts/pretokenize.py` — which *also* has no `--pruned-vocab` support,
+and the `train.bin`/`val.bin` that already exist on disk (from July 2nd)
+were tokenized with the full vocab. Using them as-is for Phase 4's
+general-text-recovery data would hit the same out-of-range issue even with
+`qat_train.py`'s own fix in place. Needs either pruned-vocab support added
+to `pretokenize.py` and a fresh `.bin` re-tokenization, or another source
+of general-text-recovery data consistent with the pruned vocab. Not
+blocking Phase 3 — only needs solving once Phase 3 is done and Phase 4 is
+actually next.
 
 ## 1. Let training finish — no action, just don't interrupt it
 
-- [ ] Phase 2 (SFT) completes
+- [x] Phase 2 (SFT) completes
 - [ ] Phase 3 (CoT distillation) — now includes CommitPackFT as a 4th
-      fair-budgeted source alongside GSM8K/OpenOrca/Magicoder
+      fair-budgeted source alongside GSM8K/OpenOrca/Magicoder — proof run
+      passed cleanly, full run in progress
+- [ ] Resolve Phase 4's `--data-bin` pruned-vocab blocker (see above) before
+      attempting to launch it
 - [ ] Phase 4 (ternary QAT)
 
 ## 2. Promotion (manual step, not automatic)

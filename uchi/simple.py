@@ -162,12 +162,20 @@ class Core:
             None,
         )
         self.proposer = FluxProposer.load(checkpoint=best_ckpt) if best_ckpt else None
-        
+
+        # Dynamic-N self-consistency voting (follow-on to Item 17): unlike
+        # the entailment/numeric checkers above, this needs no training --
+        # it's ODUSP's existing trie, active from the first ask() call,
+        # learning purely from this instance's own usage over time.
+        from .task_config_cache import TaskConfigCache
+        self.task_config_cache = TaskConfigCache()
+
         self.pipeline = GenerateAndGround(
             index=self.index,
             oracle=self.oracle,
             proposer=self.proposer,
             web_search_enabled=self.web_search_enabled,
+            task_config_cache=self.task_config_cache,
         )
         
         # New: Episodic Memory

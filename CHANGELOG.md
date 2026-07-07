@@ -107,6 +107,18 @@ running) — see "FLUX scale-up" below and `docs/training.md`.
   go stale as the API grows.
 
 ### Fixed
+- Same pruned-vocab tokenizer mismatch as the entries below, found in two
+  more places while transitioning from Phase 2 to Phase 3: `cot_distill.py`
+  and `qat_train.py` both unconditionally used the full ~100K tokenizer
+  regardless of the base checkpoint's actual vocab. Since Phase 2's
+  `sft_best.pt` uses the pruned 32,018-token vocab, launching Phase 3
+  without this fix would have corrupted or crashed training on the first
+  out-of-range embedding index. Both now accept `--pruned-vocab` (same
+  pattern as `sft_train.py`) and `--checkpoint-dir`. `qat_train.py`'s
+  `--data-bin` requirement surfaced a further, not-yet-resolved blocker:
+  `pretokenize.py` also lacks pruned-vocab support, and the `.bin` files
+  already on disk were tokenized with the full vocab — Phase 4 needs this
+  resolved before it can launch (tracked in `tasks/todo.md`).
 - `build_generate_fn` (`uchi/flux/inference_engine.py`) unconditionally
   loaded the full ~100K-token tokenizer regardless of the checkpoint's
   actual vocab size — the same mismatch already fixed on the *training*
