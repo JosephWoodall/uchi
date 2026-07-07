@@ -14,7 +14,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Fetch premade-brain weights via Git LFS
       # Only uchi/data/*.pt — the test suite mocks out FluxProposer.load(), so
