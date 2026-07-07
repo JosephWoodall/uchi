@@ -277,17 +277,28 @@ out-of-range embedding index. Both scripts now accept `--pruned-vocab`
 proof/experimental runs from production checkpoints). Verified via
 `--help` and the full test suite (306 passing) before launching anything.
 
-**Real blocker found for Phase 4, not yet resolved**: `qat_train.py`
-requires `--data-bin`, a pre-tokenized memmap produced by
-`scripts/pretokenize.py` — which *also* has no `--pruned-vocab` support,
-and the `train.bin`/`val.bin` that already exist on disk (from July 2nd)
-were tokenized with the full vocab. Using them as-is for Phase 4's
-general-text-recovery data would hit the same out-of-range issue even with
-`qat_train.py`'s own fix in place. Needs either pruned-vocab support added
-to `pretokenize.py` and a fresh `.bin` re-tokenization, or another source
-of general-text-recovery data consistent with the pruned vocab. Not
-blocking Phase 3 — only needs solving once Phase 3 is done and Phase 4 is
-actually next.
+**Phase 4 blocker — fixed while Phase 3 was training (CPU/IO-only work,
+verified not to compete with the GPU or the training process's own CPU
+usage — 20 cores, load average had headroom).** `scripts/pretokenize.py`
+now accepts `--pruned-vocab` (same pattern as `sft_train.py`/
+`cot_distill.py`/`qat_train.py`): the existing fast batched Rust encode
+path (`enc.encode_ordinary_batch`) is unchanged for speed, with the
+pruned-vocab remap (`PrunedVocab.remap`) applied as a cheap post-hoc
+step on the returned ids, before the special-token shift. Verified, not
+assumed: smoke-tested both paths (pruned and unpruned) end-to-end,
+loaded the real output `.bin` files back and confirmed every token id
+is within the pruned vocab's actual range (`max 31940 < 32018`) —
+exactly the property that matters, since an out-of-range id is what
+crashes the embedding lookup. Unpruned path re-verified unchanged (max
+id 99988, full vocab). Full test suite: 317 passing.
+Real, full-scale re-tokenization (80M train / 1M val tokens, matching
+Phase 1's original scale) **launched in the background** while Phase 3
+trains, writing to a new `uchi/flux/data_pruned/` directory (not
+overwriting the existing full-vocab `.bin` files at `uchi/flux/data/`,
+in case anything else still references them) — log at
+`/tmp/pretokenize_pruned_full.log`. This means Phase 4 should have its
+`--data-bin` ready the moment Phase 3 finishes and Phase 4 is next,
+rather than needing this run started only then.
 
 ## 1. Let training finish — no action, just don't interrupt it
 
@@ -295,8 +306,11 @@ actually next.
 - [ ] Phase 3 (CoT distillation) — now includes CommitPackFT as a 4th
       fair-budgeted source alongside GSM8K/OpenOrca/Magicoder — proof run
       passed cleanly, full run in progress
-- [ ] Resolve Phase 4's `--data-bin` pruned-vocab blocker (see above) before
-      attempting to launch it
+- [x] Resolve Phase 4's `--data-bin` pruned-vocab blocker (see above) —
+      `pretokenize.py` fixed and verified; full re-tokenization running
+      in the background, log at `/tmp/pretokenize_pruned_full.log`
+- [ ] Confirm the background re-tokenization run finished cleanly before
+      pointing Phase 4 at `uchi/flux/data_pruned/`
 - [ ] Phase 4 (ternary QAT)
 
 ## 2. Promotion (manual step, not automatic)
