@@ -200,6 +200,48 @@ Core.ask(question)
 - Item 17 (verifier upgrade) — code, data pipeline, and tests **fully
   built and CPU-verified**; training **not yet run** (needs the GPU, which
   Phase 3–4 has first).
+- **Sentence-level MCTS verifier cascade (post-0.4.0 design) — scoring
+  rule pinned down, latency benchmark harness built and CPU-validated;
+  real GPU measurement blocked until Phase 3/4 free the GPU.**
+  Design lands as a generalization of dynamic-N voting: instead of one
+  flat round of N candidate answers, a PUCT tree search over
+  *complete-sentence* nodes (never partial tokens — the entailment
+  classifier is trained on complete MNLI/SNLI propositions, so scoring
+  a fragment is out of its distribution the same way a raw softmax
+  threshold is meaningless before calibration). **Scoring rule, pinned
+  down and encoded in the benchmark harness:** the verifier always
+  scores the *full accumulated path* `s_1..t`, never the isolated new
+  sentence — scoring the increment alone swaps the fragment mismatch
+  for a coreference mismatch ("It was built in 1889" has no antecedent
+  without the prior sentence).
+  `scripts/benchmark_mcts_latency.py` — exhaustive depth×branching tree
+  (no PUCT pruning yet; this is the safe worst-case upper bound to size
+  K against, since real PUCT only ever calls the proposer/verifier
+  *fewer* times than full expansion), forced to `device="cpu"`
+  explicitly so it can run safely while proposer training saturates the
+  GPU. Checked `nvidia-smi` before running anything on shared hardware:
+  100% GPU compute utilization from Phase 3, only 41% memory — meaning
+  no compute headroom for a concurrent GPU job even though there was
+  memory room, so this stayed CPU-only rather than risk slowing down
+  training. **CPU numbers (depth=3, branching=3, real Phase 2
+  `sft_best.pt` checkpoint, random-weight verifier of the real
+  production shape — architecture determines latency, not whether
+  weights are trained):** 39 nodes, proposer 39 calls / 58.1s total
+  (1.49s/call avg), verifier 39 calls / 3.35s total (86ms/call avg),
+  61.5s wall time. **Proposer cost dominates verifier cost by ~17x** —
+  the verifier is comparatively free; latency-reduction effort belongs
+  on proposer calls, not verifier calls. Candidate reductions to
+  evaluate once real GPU numbers are in: batch sibling proposer calls
+  (all `branching` children of a node share the same prefix — a single
+  batched forward pass instead of `branching` serial ones is the
+  highest-leverage lever, since GPUs specifically reward batched
+  parallel work over serial small calls), KV-cache reuse across the
+  shared prefix, non-uniform branching (wider at the root, narrower
+  deeper), and a real PUCT budget (K simulations, not full expansion)
+  in place of this benchmark's exhaustive baseline. **Next action**:
+  re-run `scripts/benchmark_mcts_latency.py --device cuda` the moment
+  Phase 3/4 finish and the GPU is free, before writing the PUCT loop
+  itself.
 - **Dynamic-N self-consistency voting — done, active by default, no
   training needed.** `uchi/task_config_cache.py`: ODUSP (`UniversalPredictor`)
   recalls a recommended vote count keyed by a question's structural
@@ -297,21 +339,217 @@ actually next.
       optimization against the verifier, or shared latent spaces (all
       explicitly rejected, not just deferred)
 
-## 5. Documentation — real updates once the model actually changes
+## 5. Sentence-level MCTS verifier cascade (post-0.4.0 design, sequenced after Item 4)
+
+Full design reference — everything needed to pick this back up without
+re-deriving it. Depends on Item 4 (verifier trained and validated) and
+real GPU latency numbers (blocked on Phase 3/4 finishing, see the
+"Where things actually stand" entry above for the CPU-benchmarked
+numbers already in hand). Generalizes the dynamic-N self-consistency
+voting already shipped: instead of one flat round of N candidate
+answers, a PUCT tree search over complete-sentence nodes, reusing the
+proposer and verifier exactly as trained — no new training objective,
+no shared weights, no gradient flow between them at any point.
+
+**One correction made before this got written down**: an earlier
+discussion of this design conflated two distinct, already-separate
+mechanisms under the name "ODUSP." Keeping them straight matters for
+whoever picks this up next:
+- `OODDetector` (`uchi/flux/verifier_model.py`) — Mahalanobis distance
+  over the entailment classifier's own pooled latent representation.
+  This is the actual, already-built OOD gate, already wired into
+  `EntailmentChecker.is_contradiction()`. **This is what prunes MCTS
+  branches below**, not ODUSP.
+- ODUSP / `UniversalPredictor` (via `uchi/task_config_cache.py`) — a
+  separate, trie-based sequence-credibility mechanism, currently used
+  *only* for dynamic-N vote-count recall. It plays no role in this
+  design as currently scoped. (A future idea, not yet built or
+  scoped: using ODUSP's sequence-prediction credibility as an
+  *additional*, complementary plausibility signal over the discrete
+  text path itself, alongside `OODDetector`'s latent-space check —
+  worth keeping distinct from this item if pursued.)
+
+### Architecture
+
+```
+                    [USER QUESTION] + [RETRIEVED EVIDENCE]
+                                   │
+                                   ▼
+   ┌───────────────────────────────────────────────────────────────────┐
+   │                    MetaUchi (orchestrator)                        │
+   │  1. K (simulation budget) = min(TaskConfigCache-recalled N,       │
+   │     hard ceiling from the real measured latency benchmark —       │
+   │     never an unmeasured "IQ-quotient" number)                     │
+   │  2. Strictly discrete text handoffs between Proposer and          │
+   │     Verifier -- no shared gradients, no shared embedding table    │
+   │                                                                    │
+   │  ┌───────────────────── PUCT loop, repeated up to K times ─────┐  │
+   │  │                                                              │  │
+   │  │   current path s_t = "The Eiffel Tower is in Paris."         │  │
+   │  │              │                                               │  │
+   │  │              ▼                                               │  │
+   │  │      FluxProposer.propose(...)  (unchanged, Cross-Entropy    │  │
+   │  │      trained) proposes candidate NEXT COMPLETE SENTENCES,    │  │
+   │  │      not tokens -- matches the verifier's own MNLI/SNLI      │  │
+   │  │      training distribution (complete propositions)           │  │
+   │  │              │                                               │  │
+   │  │     a1: "It is 330m tall."      a2: "It was built in 1999."  │  │
+   │  │              │                          │                    │  │
+   │  │      full path assembly:        full path assembly:          │  │
+   │  │      s_t ⊕ a1 (s_t and a1        s_t ⊕ a2                    │  │
+   │  │      concatenated -- NEVER                                   │  │
+   │  │      score a1 alone: no                                      │  │
+   │  │      antecedent for "It")                                    │  │
+   │  │              │                          │                    │  │
+   │  │              ▼                          ▼                    │  │
+   │  │      OODDetector.is_ood?         OODDetector.is_ood?          │  │
+   │  │        no  → continue             yes → Ω = -inf, PRUNED     │  │
+   │  │              │                                               │  │
+   │  │              ▼                                               │  │
+   │  │      EntailmentChecker scores s_t ⊕ a1 (full path) against    │  │
+   │  │      evidence -- TEMPERATURE-SCALED first (not yet built;     │  │
+   │  │      hard precondition, see below), giving a calibrated v     │  │
+   │  │              │                                               │  │
+   │  │              ▼                                               │  │
+   │  │      PUCT backup: update Q(s_t, a1) using v                  │  │
+   │  └───────────────────────────────────────────────────────────────┘ │
+   │  3. After K simulations: return the path with the highest visit  │
+   │     count N(s,a), not just the highest single v (standard        │
+   │     AlphaZero move-selection rule, more robust than argmax-v)     │
+   └────────────────────────────────┬──────────────────────────────────┘
+                                    ▼
+                     [FINAL, DISCRETE TEXT RESPONSE]
+```
+
+### The math, exactly as verified (no unresolved errors, unlike the
+### rejected continuous-latent-space version earlier this design cycle)
+
+```
+State s_t:  the accumulated text so far, complete sentences only,
+            never a partial token sequence.
+Action a:   one candidate next complete sentence.
+Transition: s_{t+1} = s_t ⊕ a   (concatenation)
+
+1. Proposer prior (unchanged training, Cross-Entropy):
+       P(a | s_t) = FluxProposer.propose(s_t, evidence)
+
+2. Verifier value -- SCORES THE FULL ACCUMULATED PATH, pinned down:
+       v(s_t ⊕ a) = 1 - P_contradiction(s_t ⊕ a | evidence)
+   Never v(a | evidence) alone -- that swaps the fragment-mismatch
+   problem for a coreference-mismatch problem (a later sentence's
+   pronouns have no antecedent without the accumulated prefix).
+   REQUIRES temperature scaling on a held-out set before v can safely
+   drive search -- in PUCT, v isn't just a threshold, it directly
+   drives which branches get exploited, so an uncalibrated,
+   overconfident classifier doesn't just misjudge one candidate, it
+   biases where the whole search commits its budget. Not yet built.
+
+3. OOD pruning mask (OODDetector, Mahalanobis distance, already built):
+       Ω(s) = 0     if OODDetector.distance(pooled(s)) <= threshold
+       Ω(s) = -inf  if OODDetector.distance(pooled(s)) >  threshold
+
+4. PUCT selection (which branch to expand next):
+       U(s,a) = Q(s,a) + c * P(a|s) * sqrt(N(s)) / (1 + N(s,a)) + Ω(s⊕a)
+   Q(s,a): exploitation (mean verifier score seen so far this branch)
+   c*P*sqrt(N(s))/(1+N(s,a)): exploration (proposer-favored, under-
+     visited branches), standard AlphaZero PUCT, correctly stated
+   Ω: hard prune -- an OOD branch is never explored, full stop
+
+5. Backup after a branch is scored (standard incremental mean):
+       Q_new(s,a) = [N(s,a)*Q_old(s,a) + v_final] / [N(s,a)+1]
+       N(s,a) <- N(s,a) + 1
+
+6. Budget K: clamped by the REAL measured latency benchmark
+   (scripts/benchmark_mcts_latency.py), not an unmeasured "IQ-quotient"
+   number. CPU numbers already in hand (see above): proposer cost
+   dominates verifier cost ~17x, so K should be tuned primarily against
+   proposer-call cost, and batching sibling proposer calls is the
+   highest-leverage latency lever once real GPU numbers are in.
+
+Honest final claim -- the one actually worth writing down, replacing
+every "mathematically guaranteed / impossible / structurally
+impossible" phrasing this design went through before landing here:
+  This structurally rules out continuous-space gibberish, because every
+  node is a complete sentence built from the proposer's real
+  vocabulary. It returns the path that empirically minimizes
+  contradiction probability under a specific, fallible, calibrated
+  classifier. That is a real, useful property. It is not a guarantee
+  of truth, and no phrasing of this design should claim it is.
+```
+
+### Residual risk, not a blocker but worth monitoring once this runs
+
+PUCT's exploitation term explicitly searches for whatever maximizes the
+verifier's score — structurally adjacent to the RL-reward-hacking risk
+rejected at the start of this whole design arc (training the proposer
+against a fixed verifier). It is not the same risk: RL training gets
+unbounded iterations to find and permanently bake an exploit into the
+proposer's weights; MCTS gets a bounded, per-query search budget from a
+fixed, frozen prior, and nothing found in one query's search persists
+into the next. Real but bounded, not equivalent. **Concrete test once
+live**: compare the flywheel's correction rate on MCTS-selected answers
+vs. flat-voted answers. A materially higher rate on MCTS answers is the
+number that tells you this risk is showing up in practice, not just in
+theory.
+
+### On OOD generalization and coverage vs. accuracy (accurate version)
+
+Neural classifiers generalize poorly outside their training
+distribution, and can be confidently wrong there rather than
+uncertain. `OODDetector` is the existing, deliberate answer to this: an
+MCTS branch whose accumulated path lands far from the classifier's
+training distribution gets pruned (`Ω = -inf`) rather than scored,
+regardless of how confident the classifier's raw output would have
+been. The real trade-off this creates: on a genuinely novel-domain
+question, most or all branches may get pruned as OOD, and the system
+abstains rather than answers — trading coverage for not confidently
+lying. `verifier_flywheel.py`'s exported corrections, folded into the
+next `verifier_train.py` run (already built, already the mechanism —
+see the training-time diagram above), is what pushes that boundary
+outward over time as `OODDetector` gets refit on an expanded training
+set. This bounds risk meaningfully; it does not make anything "100%
+safe" — the deterministic Stage 1 floor and the classifier itself,
+even on in-distribution input, both retain their own known, nonzero
+error rates. "Meaningfully safer, honestly bounded" is the accurate
+claim; "100% safe" is the same overclaim pattern this whole design
+cycle kept producing and kept getting corrected out of.
+
+### What's already done vs. still open
+
+- [x] Scoring rule pinned down (full accumulated path, never the
+      isolated increment) — encoded directly in
+      `scripts/benchmark_mcts_latency.py`'s `score_path()`
+- [x] Latency benchmark harness built, CPU-validated (real Phase 2
+      checkpoint, real production-shape verifier, `nvidia-smi`-checked
+      before running anything so it couldn't contend with proposer
+      training)
+- [ ] Real GPU latency numbers — blocked on Phase 3/4 finishing;
+      re-run `scripts/benchmark_mcts_latency.py --device cuda` the
+      moment the GPU is free
+- [ ] Temperature-scaling calibration on the entailment classifier —
+      hard precondition for `v` to safely drive PUCT search, not yet
+      built (this is Item 4's calibration work, needed here too)
+- [ ] The PUCT loop itself — not yet written; everything above is the
+      design this item exists to preserve until it's time to write it
+- [ ] Batched sibling proposer calls (or other latency reduction, if
+      the real GPU number requires it) — evaluate once real numbers
+      are in, not before
+
+## 6. Documentation — real updates once the model actually changes
 
 - [ ] README/docs currently describe FLUX as "~116M-class" throughout —
       that's v0.3.0. Update once the new (64M, pruned-vocab) model is
       validated and promoted, not before
 - [ ] Re-check the "How It Connects" diagram still matches reality
 
-## 6. Release readiness — one full pass, not the individual pieces checked ad hoc
+## 7. Release readiness — one full pass, not the individual pieces checked ad hoc
 
 - [ ] Run the full `.agents/skills/release_readiness/SKILL.md` checklist
       end-to-end against the finished, promoted model
 - [ ] Item 16 bonus objectives remain explicitly non-blocking — ship
       whatever fraction is done, don't gate on the rest
 
-## 7. Release commit
+## 8. Release commit
 
 - [ ] Prepare the release commit
 - [ ] **Do not push or merge to main without explicit confirmation** —
