@@ -605,13 +605,23 @@ suite: 353 passing.
       real MNLI / ~550K real SNLI pool than the first attempt's 66K
       each), 6 epochs (up from 2) — addressing the likely undertraining
       root cause behind 59% val accuracy and the failed adversarial
-      validation. Log `/tmp/verifier_full_v2.log`, persistent monitor
-      `b2lbzyo4s`. **Once done**: recalibrate the OOD threshold against
+      validation. Log `/tmp/verifier_full_v2.log`.
+      **Progress checked against `scripts/verifier_adversarial_validation.py`
+      as each epoch completes, not just at the end:**
+      - Epoch 2 (no OOD detector attached yet, pure classifier signal): 0/8 real contradictions caught.
+      - Epoch 3: **6/8 real contradictions caught (75%), 81.2% overall accuracy** — real,
+        substantial improvement. One new false positive appeared ("drug
+        reduced symptoms" incorrectly flagged) — less severe than a
+        missed contradiction given the additive-only design (costs an
+        unnecessary abstention, not a wrong acceptance), but worth
+        tracking across the remaining epochs.
+      - Epochs 1-3 pacing: ~4h25m, ~4h24m, ~5h01m — consistent, no
+        stalls (each independently confirmed via utime/network checks
+        when timing looked off).
+      **Once all 6 epochs done**: recalibrate the OOD threshold against
       real validation data (the reused default of 3.0 was confirmed
-      wrong), then re-run the same held-out adversarial validation set
-      (`scratchpad/verifier_adversarial_validation.py` from this
-      session, or recreate — same 16 cases, still held out) before any
-      promotion.
+      wrong on the first attempt), then re-run the same held-out
+      adversarial validation set before any promotion.
 - [ ] Once a retrained version actually passes: promote it back to
       `uchi/flux/checkpoints/verifier/verifier_best.pt` (`Core.__init__`
       already auto-detects it there — no code change needed) and watch
@@ -821,6 +831,33 @@ cycle kept producing and kept getting corrected out of.
 
 ## 6. Documentation — real updates once the model actually changes
 
+**Split into two genuinely different things, only one of which needs to
+wait**: performance claims (parameter count, benchmark numbers) depend on
+validated results and correctly stay blocked; architectural description
+(what components exist, how they interact) is just a factual account of
+what's built and doesn't depend on benchmark results at all — done now,
+GPU-independent, while the verifier retrains.
+
+- [x] **`docs/architecture.md` rewritten** to actually describe the
+      current system, not v0.3.0's. Added: the full verification cascade
+      (word-overlap floor → entailment classifier + OOD gate → numeric
+      plausibility → relational transitivity, explicit about the
+      additive-only property), dynamic-N self-consistency voting +
+      `TaskConfigCache`, proprioception (explicitly marked experimental
+      and NOT a verifier substitute), and `SwarmSynthesizer`'s real
+      decomposition behavior. **Found and fixed a real, separate
+      problem while doing this, not just staleness**: the old doc
+      described a "`ReasoningEngine`" producing "mathematically verified
+      steps" — verified directly against the codebase and confirmed
+      `ReasoningEngine` doesn't exist anywhere at all, not renamed, not
+      moved, just never real. Replaced with an accurate description of
+      what actually handles multi-step reasoning (`SwarmSynthesizer`
+      decomposition + FLUX's CoT-trained `think=True` path). Verified
+      `SwarmSynthesizer`'s decomposition-gating claim directly against
+      `swarm.py`/`iq_router.py` before writing it, not assumed.
+      Deliberately left the "~116M" parameter mentions untouched — that's
+      the performance-claim half, still correctly blocked on validated
+      benchmarks.
 - [ ] README/docs currently describe FLUX as "~116M-class" throughout —
       that's v0.3.0. Update once the new (64M, pruned-vocab) model is
       validated and promoted, not before
