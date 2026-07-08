@@ -50,7 +50,8 @@ class GenerateAndGround:
                  decoder=None, proposer=None, predictor=None, answerability=None,
                  retrieve_k: int = 10, min_sim: float = 0.5,
                  min_known: float = 0.5, min_answerable: float = 0.5,
-                 web_search_enabled: bool = False, task_config_cache=None) -> None:
+                 web_search_enabled: bool = False, task_config_cache=None,
+                 proprioception=None, proprioception_model=None, proprioception_tokenizer=None) -> None:
         self.index = index
         self.oracle = oracle or FactCheckOracle()
         # `proposer` is the pluggable generator (decoder / FLUX / LLM); `decoder`
@@ -75,6 +76,17 @@ class GenerateAndGround:
         # default -- n_votes stays a fixed 3 unless this is supplied,
         # zero behavior change for anyone not using it.
         self.task_config_cache = task_config_cache
+        # Proprioception (experimental, additive-only): FLUX's own sense of
+        # whether a question is familiar, checked BEFORE generation. Never
+        # blocks or reduces anything -- an "unfamiliar" verdict can only
+        # increase n_votes (spend more self-consistency compute), the same
+        # direction as scaling up for a hard question, never a reason to
+        # answer with LESS scrutiny. Requires all three of proprioception/
+        # proprioception_model/proprioception_tokenizer; None by default,
+        # zero behavior change for anyone not using it.
+        self.proprioception = proprioception
+        self.proprioception_model = proprioception_model
+        self.proprioception_tokenizer = proprioception_tokenizer
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _content(self, text: str) -> list[str]:
@@ -171,6 +183,22 @@ class GenerateAndGround:
             recalled_n, conf = self.task_config_cache.recall_n(question)
             if recalled_n is not None and conf >= 0.5:
                 n_votes = recalled_n
+
+        # Proprioception: if FLUX itself flags this question as unfamiliar
+        # (far from its own training distribution), that's a reason to
+        # spend MORE self-consistency votes, never fewer -- additive-only,
+        # same direction as every other signal that touches n_votes. This
+        # can only raise n_votes above whatever complexity/TaskConfigCache
+        # already decided, never lower it. Silently a no-op unless all
+        # three components (proprioception, model, tokenizer) are present.
+        if self.proprioception is not None and self.proprioception_model is not None:
+            try:
+                if self.proprioception.is_unfamiliar(
+                    self.proprioception_model, self.proprioception_tokenizer, question
+                ):
+                    n_votes = max(n_votes, 8)
+            except Exception:
+                pass  # fail open -- additive signal, never the sole gate
 
         # Try synthesis (neural decoder) first, then fall back to the grounded
         # extractive answer. We evaluate ALL candidates to perform Plural Voting (Simulation Engine).

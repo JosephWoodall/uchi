@@ -72,6 +72,7 @@ class FactCheckOracle:
         min_support: float = 0.5,
         entailment_checker=None,
         numeric_checker=None,
+        relational_checker=None,
     ) -> None:
         self.min_support = min_support
         # Audit trail for the no-evidence relaxation below -- every time it
@@ -89,6 +90,16 @@ class FactCheckOracle:
         # unchanged until something real is trained/fitted and passed in.
         self.entailment_checker = entailment_checker
         self.numeric_checker = numeric_checker
+        # Relational transitivity veto (0.4.0 follow-on): unlike the two
+        # above, this is pure deterministic code (uchi/relational_reasoning.py)
+        # needing no training or fitting -- catches a demonstrated gap the
+        # word-overlap check and the entailment classifier both miss: a
+        # claim like "C is taller than A" has identical term-overlap and
+        # surface consistency to the correct "A is taller than C" given
+        # evidence "A > B" and "B > C". None by default for constructor
+        # symmetry with the other two, but Core.__init__ wires in a real
+        # instance unconditionally since there's no readiness gate for it.
+        self.relational_checker = relational_checker
         # Audit trail for the two layers above, same reasoning as
         # relaxed_pass_log -- every additional veto they fire gets logged.
         self.layered_veto_log: list[dict] = []
@@ -200,5 +211,15 @@ class FactCheckOracle:
                         "timestamp": time.time(), "claim": claim, "layer": "numeric", "value": value,
                     })
                     return False
+
+        if self.relational_checker is not None:
+            try:
+                if self.relational_checker.is_contradicted(claim, evidence):
+                    self.layered_veto_log.append({
+                        "timestamp": time.time(), "claim": claim, "layer": "relational",
+                    })
+                    return False
+            except Exception:
+                pass  # fail open -- additive layer, never the sole gate
 
         return True

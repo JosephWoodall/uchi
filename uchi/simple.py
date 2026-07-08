@@ -141,7 +141,14 @@ class Core:
         if os.path.exists(verifier_ckpt):
             from .flux.verifier_model import EntailmentChecker
             entailment_checker = EntailmentChecker.load(verifier_ckpt)
-        self.oracle = FactCheckOracle(entailment_checker=entailment_checker)
+        # Relational transitivity veto: pure deterministic code, no
+        # training/fitting needed, so active from the first ask() call
+        # (unlike entailment_checker/numeric_checker above).
+        from .relational_reasoning import RelationalTransitivityChecker
+        self.oracle = FactCheckOracle(
+            entailment_checker=entailment_checker,
+            relational_checker=RelationalTransitivityChecker(),
+        )
 
         # 0.4.0 Item 17 flywheel: observes (never blocks) whether the next
         # user turn contradicts Uchi's own prior answer, using the same
@@ -170,12 +177,38 @@ class Core:
         from .task_config_cache import TaskConfigCache
         self.task_config_cache = TaskConfigCache()
 
+        # Proprioception (experimental, additive-only): FLUX's own sense of
+        # whether a question's topic/shape is familiar, fit offline via
+        # scripts/fit_proprioception.py -- NOT a substitute for the
+        # verifier (it never sees a generated claim, only the question
+        # beforehand; see tasks/proprioception_experiment.md for the full
+        # reasoning). Loads a second, standalone FLUX instance for hidden-
+        # state access since FluxProposer only exposes a generate_fn
+        # closure -- a real memory cost, only paid if the fitted artifact
+        # actually exists. Absent artifact or absent proposer -> silently
+        # inert, same graceful-degradation contract as everything else.
+        self.proprioception = None
+        self._proprioception_model = None
+        self._proprioception_tokenizer = None
+        proprioception_path = os.path.join(checkpoint_dir, "proprioception.pt")
+        if best_ckpt and os.path.exists(proprioception_path):
+            from .proprioception import FluxProprioception, load_flux_for_proprioception
+            self.proprioception = FluxProprioception.load(proprioception_path)
+            if self.proprioception is not None:
+                self._proprioception_model, self._proprioception_tokenizer = \
+                    load_flux_for_proprioception(best_ckpt)
+                if self._proprioception_model is None:
+                    self.proprioception = None  # fit exists but model failed to load -- stay inert, don't half-wire it
+
         self.pipeline = GenerateAndGround(
             index=self.index,
             oracle=self.oracle,
             proposer=self.proposer,
             web_search_enabled=self.web_search_enabled,
             task_config_cache=self.task_config_cache,
+            proprioception=self.proprioception,
+            proprioception_model=self._proprioception_model,
+            proprioception_tokenizer=self._proprioception_tokenizer,
         )
         
         # New: Episodic Memory

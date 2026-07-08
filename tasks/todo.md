@@ -45,8 +45,8 @@ Phase 2  sft_best.pt
 Phase 3  cot_best.pt                                       │  understanding)
               │
               ▼  uchi/flux/qat_train.py   (--pruned-vocab, ternary, CoT-preserving mix)
-Phase 4  qat_best.pt   [blocked: --data-bin needs a pruned-vocab re-tokenization
-                        first — see "Where things actually stand" below]
+Phase 4  qat_best.pt   [running — data-bin blocker resolved, see
+                        "Where things actually stand" below]
               │
               ▼  cp (train_all.sh's final step)
          flux_best.pt   ◄── canonical artifact Core() loads by default
@@ -89,12 +89,16 @@ from uchi import Uchi  →  MetaUchi(Core)         ◄── what users actually
                                           (entailment_checker + its .ood.pt gate);
                                           numeric_checker stays off until
                                           fit_numeric_plausibility_checker() is
-                                          explicitly called (real cost, opt-in)
+                                          explicitly called (real cost, opt-in);
+                                          relational_checker (Item 18) always on,
+                                          no training needed
                     3. FluxProposer    ← auto-detects flux_best.pt (→qat→cot→sft
                                           fallback order), tokenizer auto-matches
                                           pruned vs full vocab from the
                                           checkpoint's own embedding shape
-                    4. ToolRegistry, GoalState, EpisodicMemory, VerifierFlywheel
+                    4. TaskConfigCache ← always on, no training needed (ODUSP-
+                                          backed dynamic-N vote recall)
+                    5. ToolRegistry, GoalState, EpisodicMemory, VerifierFlywheel
                        (flywheel inert unless the same entailment_checker above
                        was actually loaded)
 
@@ -147,8 +151,11 @@ Core.ask(question)
     │       │            classifier's training distribution → treated as
     │       │            "no opinion", verdict falls back to step 1's result
     │       │     3. numeric_checker.is_plausible(number)? (if fitted)
-    │       │     — 2 and 3 can only turn a PASS into a REJECT, never the
-    │       │       reverse; if 1 already rejected, 2/3 are moot
+    │       │     4. relational_checker.is_contradicted(candidate, ev_texts)?
+    │       │          — deterministic transitive-relation veto (Item 18),
+    │       │            active unconditionally, no training/fitting needed
+    │       │     — 2, 3, and 4 can only turn a PASS into a REJECT, never
+    │       │       the reverse; if 1 already rejected, the rest are moot
     │       │
     │       ├─ Devil's Advocate critique (logical soundness, separate axis
     │       │   from grounding — same proposer, adversarial framing)
@@ -191,15 +198,73 @@ Core.ask(question)
 - Phase 1 (pretrain) — **done**. 64.0M params, pruned 32,018-token vocab.
 - Phase 2 (SFT) — **done**. 743 steps, 787.6 min, val loss 3.42, PPL 30.5
   (down from Phase 1's PPL 61.1 — a real improvement, not just more training).
-- Phase 3 (CoT) — proof run **succeeded**: all 4 sources loaded exactly
-  fairly (100 each), pruned-vocab tokenizer confirmed working, val loss
-  4.26/PPL 70.8 (a different, harder task shape than SFT, not a red flag).
-  **Full run now running** (default 10,000 examples, 4 epochs).
-- Phase 4 (QAT) — not started, and has a **real, newly-discovered blocker**
-  (see below) that needs resolving before it can launch.
-- Item 17 (verifier upgrade) — code, data pipeline, and tests **fully
-  built and CPU-verified**; training **not yet run** (needs the GPU, which
-  Phase 3–4 has first).
+- Phase 3 (CoT) — **done.** Proof run succeeded first (all 4 sources
+  loaded exactly fairly, pruned-vocab tokenizer confirmed working), then
+  the full run completed cleanly: 4/4 epochs, val loss 2.30, PPL 10.0 at
+  the final (best) epoch, monotonically improving epoch over epoch
+  (13.9 → 10.9 → 10.2 → 10.0) — no divergence, no red flags. Final
+  checkpoint: `uchi/flux/checkpoints/v040_phase3/cot_best.pt`.
+- Phase 4 (QAT) — **done. All four phases of 0.4.0's FLUX retraining are
+  now complete.** The `--data-bin` blocker was resolved while Phase 3 was
+  still training, so Phase 4 launched immediately once the GPU freed:
+  proof run (20 steps) succeeded first, then the full run (600 steps)
+  completed cleanly — final: CoT val loss 2.29 (PPL 9.9, best), text val
+  loss 4.72 (PPL 112.4). Checkpoints at
+  `uchi/flux/checkpoints/v040_phase4/` (`qat_00200.pt`, `qat_00400.pt`,
+  `qat_00600.pt`, `qat_best.pt`). GPU is now fully idle.
+  **Next real step is Section 2 (Promotion) below — not automatic, needs
+  a decision on when to copy the final artifact to the default path.**
+- Item 17 (verifier upgrade) — **training done.** Proof run first (300
+  examples, 1 epoch, GPU): confirmed all 3 sources load and fair-budget
+  correctly, no crashes, OOD detector fit succeeded. Full run
+  (`--max-examples 200000 --epochs 2`, matching `train_verifier.sh`'s
+  real parameters): 66,666 examples each from MNLI/SNLI/synthetic
+  multi-hop (fair-budgeted correctly), epoch 1 val acc 54.0%, epoch 2 val
+  acc 59.0% (best), OOD detector fit on 5,000 representations. Checkpoint
+  loads correctly via `EntailmentChecker.load()`, full suite still 346
+  passing. **Real, concrete finding, not a formality**: a quick sanity
+  check against the flagship motivating case from Item 17's own design
+  ("The Eiffel Tower is 330 meters tall" vs "...25 meters tall", same
+  evidence) came back `is_contradiction() == False` — **the freshly
+  trained verifier missed it.** Unsurprising at 59% val accuracy (barely
+  above the 33% random baseline for 3-way classification), but a concrete
+  signal that held-out adversarial validation (below) is doing real
+  work, not a checkbox — proceed to it before drawing any conclusion
+  about whether this classifier is usable.
+  **Not wired into the live oracle yet** — held-out adversarial
+  validation (exit criterion #7) is a hard gate that must pass first,
+  per Section 4 below.
+- **`verifier_train.py` gained a third, unconditional data source since
+  the entry above was written: synthetic multi-hop transitive examples**
+  (`generate_multihop_examples`, RuleTaker/ProofWriter-style), fair-budgeted
+  alongside MNLI/SNLI. Motivation: MNLI/SNLI are both single-premise —
+  neither teaches "combine two stated facts into a transitive conclusion"
+  as a skill at all, which is exactly the gap Item 18 (below) found and
+  closed deterministically. This is the corresponding neural-side fix,
+  discussed explicitly as the "smarter, neural approach" to semantic
+  comparison the user asked about, with the honest caveat that a small
+  from-scratch classifier trained on this won't match a frontier LLM's
+  reasoning reliability — it's a real improvement over zero multi-hop
+  training signal, not a solved problem.
+  **A real bug was found and fixed during development, caught by
+  cross-verification rather than trusted on sight**: the relation was
+  originally being re-picked on every `fact()` call instead of once per
+  generated example, so a premise pair could end up about two *unrelated*
+  attributes (e.g. "richer" for one fact, "higher" for the other) —
+  silently producing wrong contradiction labels, since transitivity
+  across unrelated attributes means nothing. Caught by checking the
+  generator's own output against `RelationalTransitivityChecker`
+  (Item 18) before trusting it, exactly the "verify, don't assume"
+  discipline used everywhere else this session. Fixed, then re-verified
+  with **zero mismatches across 1000+ generated examples**, restricted to
+  the vocabulary the deterministic checker can actually parse (the
+  generator deliberately uses a broader relation vocabulary than the
+  checker's hardcoded list, so the neural model sees variety the checker
+  doesn't know — comparing against words the checker *can* parse is the
+  fair, apples-to-apples validation).
+  **This debugging pass also found two real, independent gaps in
+  `relational_reasoning.py` itself** (Item 18), not just the generator —
+  see the Item 18 entry below.
 - **Sentence-level MCTS verifier cascade (post-0.4.0 design) — scoring
   rule pinned down, latency benchmark harness built and CPU-validated;
   real GPU measurement blocked until Phase 3/4 free the GPU.**
@@ -264,6 +329,62 @@ Core.ask(question)
   entailment classifier). 11 new tests
   (`test_task_config_cache.py`, `test_dynamic_n_voting.py`), 317 passing
   overall.
+- **Relational transitivity veto (0.4.0 Item 18) — done, active by
+  default, no training needed.** Closed a real gap, demonstrated
+  empirically before writing any code: given evidence "A is taller than
+  B" and "B is taller than C", `FactCheckOracle` accepted the valid
+  conclusion ("A is taller than C"), the reversed/wrong one ("C is
+  taller than A"), and outright nonsense ("A is taller than A") —
+  identically, all three, because word-overlap and the entailment
+  classifier both check surface consistency against evidence, not the
+  logical validity of a conclusion synthesized from combining premises.
+  Separately confirmed generation-side: FLUX at the current Phase
+  2/SFT-only checkpoint didn't even attempt the comparison when asked
+  directly, producing generic off-topic text instead — a second, distinct
+  gap from the verification-side one. `uchi/relational_reasoning.py`:
+  `RelationalTransitivityChecker`, pure deterministic pattern-matching +
+  per-relation transitive closure, explicitly narrow in scope (simple
+  comparative relations only — taller/shorter, older/younger,
+  before/after, etc. — not general logical-inference verification, which
+  is a much harder, open problem). Wired into `FactCheckOracle` as a
+  third additive-only veto layer and into `Core.__init__` unconditionally
+  (no training/fitting needed, unlike the entailment classifier). Fixed
+  the exact motivating scenario end-to-end (verified through the real
+  `Core()` instance, not just the isolated checker). Added as Item 18
+  in `tasks/0.4.0 Itemized Deliverables.md` with a new exit criterion (#8).
+  **Extended twice since the initial build:**
+  - **Numeric-attribute extraction** (`extract_attribute_value`): real
+    evidence is far more likely to state "Building A is 442 meters tall"
+    and "Building B is 330 meters tall" separately than to state an
+    explicit comparative sentence — the original comparative-sentence-only
+    version missed this, probably the more common real case. Now derives
+    comparative edges directly from pairs of bare numeric measurements on
+    the same attribute, composing into the *same* transitive-closure graph
+    as explicit comparative sentences (verified: a 3-entity chain mixing
+    one numeric-derived edge and one comparative-sentence-derived edge
+    resolves correctly).
+  - **Two regex gaps found and fixed** while cross-verifying the synthetic
+    multi-hop generator (above) against this checker: (1) a trailing
+    clause (e.g. ", based on the available data.") was getting swallowed
+    into the entity name, so "Building A" and "Building A, based on the
+    available data" failed to match as the same graph node — object
+    capture groups now stop at the first comma/terminal punctuation
+    instead of requiring end-of-string; (2) the "Compared to Y, X is
+    COMP." phrasing (no literal word "than" at all) wasn't recognized —
+    added `_COMPARED_TO_RE` alongside the existing `_COMPARATIVE_THAN_RE`.
+    Both are real, independent improvements to real-world coverage, not
+    just artifacts of testing — found because the verification step was
+    taken seriously rather than skipped.
+  - Hardcoded-word-list concern raised directly by the user ("I never want
+    to hardcode anything") — addressed honestly: the syntactic patterns
+    (regexes) are unavoidable for a deterministic system, but the semantic
+    knowledge (antonym pairs like taller/shorter) is currently a small,
+    manually-typed list. Proposed fix, not yet built: source a
+    comprehensive antonym table from WordNet once, offline, and ship it as
+    a static data file rather than a live NLTK dependency — deferred as
+    polish, not blocking, since it doesn't unblock anything else.
+  29 tests total across `test_relational_reasoning.py` (24, up from 14)
+  and the new `test_verifier_multihop.py` (5), 346 passing overall.
 
 **Bugs found and fixed transitioning into Phase 3** (same class as the
 pruned-vocab fixes already made to `sft_train.py`/`build_generate_fn`
@@ -300,27 +421,87 @@ in case anything else still references them) — log at
 `--data-bin` ready the moment Phase 3 finishes and Phase 4 is next,
 rather than needing this run started only then.
 
+**Proprioception (Approach 1) — corrected, re-validated, and integrated
+into the main pipeline.** Second validation pass with corrected
+methodology found a real problem in the first pilot: the reference set
+used a "Context:...Question:...Answer:" template that matches neither
+`_ANSWER` nor (more importantly) the real evidence-grounded generation
+path, which sends FLUX the raw question alone with no wrapper at all
+(confirmed directly in `propose()` — deliberate, already-documented
+behavior, not a bug). Rebuilt `uchi/proprioception.py` +
+`scripts/fit_proprioception.py` using real questions from FLUX's actual
+CoT training sources (GSM8K/OpenOrca/Magicoder/CommitPackFT, 480 fit +
+120 held-out for calibration), matching the exact raw-question shape.
+Result: clean ~4x separation (in-distribution ~50–60, genuinely OOD
+~201–228), calibrated threshold (123.30, from the 95th percentile of
+real held-out distances, not a reused default) sitting cleanly between
+them — a real, validated result, not just a promising lead.
+**Wired into `Core.__init__`/`GenerateAndGround` as an additive-only
+signal**: loads a second, standalone FLUX instance for hidden-state
+access (since `FluxProposer` only exposes a `generate_fn` closure, not
+the raw model — a real memory cost, only paid if the fitted artifact
+exists); an "unfamiliar" verdict can only raise `n_votes` to the max
+bucket, never lower it below whatever complexity/`TaskConfigCache`
+already decided. All three of proprioception/model/tokenizer must be
+present or it's silently inert — same graceful-degradation contract as
+every other optional component. 7 new tests
+(`tests/test_proprioception.py`), 353 passing overall.
+**Reconfirmed once more, explicitly, because this keeps needing
+restating**: this is a pre-generation, question-only gate. It never
+sees a generated claim, so it structurally cannot check factual
+correctness — the verifier remains required regardless of how well this
+performs. See `tasks/proprioception_experiment.md` for the full
+reasoning and the decisive test that established this.
+**[x] Fully verified end-to-end, not just in isolation**: saved artifact
+at `uchi/flux/checkpoints/proprioception.pt`; loaded through a real
+`Core()` instance (`proprioception`/`_proprioception_model` both
+populated); tested real, complete reference-shaped questions (correctly
+`unfamiliar=False`) against genuinely OOD input (correctly
+`unfamiliar=True`) through the live-loaded detector, not just the
+fitting script's own printed output. One false alarm caught and
+resolved during this check: an initial manual test used a truncated
+version of a CommitPackFT question (missing the diff text the real
+question always includes), which produced a different distance and
+looked like a bug — re-tested with the actual complete question text
+sampled from the same source and it matched expectations exactly. Full
+suite: 353 passing.
+
 ## 1. Let training finish — no action, just don't interrupt it
 
 - [x] Phase 2 (SFT) completes
-- [ ] Phase 3 (CoT distillation) — now includes CommitPackFT as a 4th
-      fair-budgeted source alongside GSM8K/OpenOrca/Magicoder — proof run
-      passed cleanly, full run in progress
+- [x] Phase 3 (CoT distillation) — done, 4/4 epochs, val loss 2.30/PPL 10.0,
+      included CommitPackFT as a 4th fair-budgeted source alongside
+      GSM8K/OpenOrca/Magicoder
 - [x] Resolve Phase 4's `--data-bin` pruned-vocab blocker (see above) —
-      `pretokenize.py` fixed and verified; full re-tokenization running
-      in the background, log at `/tmp/pretokenize_pruned_full.log`
-- [ ] Confirm the background re-tokenization run finished cleanly before
-      pointing Phase 4 at `uchi/flux/data_pruned/`
-- [ ] Phase 4 (ternary QAT)
+      `pretokenize.py` fixed and verified; full re-tokenization completed
+      cleanly (verified: real output token IDs within pruned vocab range)
+- [x] Confirm the background re-tokenization run finished cleanly before
+      pointing Phase 4 at `uchi/flux/data_pruned/` — confirmed
+- [x] Phase 4 (ternary QAT) — **done.** 600/600 steps, CoT val loss 2.29
+      (PPL 9.9, best), text val loss 4.72 (PPL 112.4). All four proposer
+      phases complete. GPU now fully idle.
 
 ## 2. Promotion (manual step, not automatic)
 
-- [ ] Copy the final artifact from the isolated `v040_phaseN/` directories
-      into the default `uchi/flux/checkpoints/` path — `Core()` only
-      searches the default path, so nothing happens on its own
-- [ ] Re-verify the inference-time pruned-vocab fix
-      (`build_generate_fn`/`EntailmentChecker.load`-style auto-detection)
-      against the real final artifact, not just Phase 1's intermediate one
+- [x] Copy the final artifact from the isolated `v040_phaseN/` directories
+      into the default `uchi/flux/checkpoints/` path. **Found before
+      promoting, not assumed away**: the default path already held a
+      full, live set of checkpoints from an earlier (Jul 2–4) attempt —
+      `flux_best.pt` there was the **full 100,300-token vocab**
+      architecture (pre-pruning), confirmed by directly inspecting
+      `embedding.weight`'s shape before touching anything. Backed up
+      (moved, not deleted) to `uchi/flux/checkpoints/pre_pruning_backup/`
+      rather than overwritten, so the promotion stays reversible. Promoted
+      the full new lineage for fallback-chain consistency, not just
+      `flux_best.pt` alone: `v040_phase2/sft_best.pt` → `sft_best.pt`,
+      `v040_phase3/cot_best.pt` → `cot_best.pt`, `v040_phase4/qat_best.pt`
+      → both `qat_best.pt` and `flux_best.pt`. Checksummed every copy
+      against its source before trusting it (all matched).
+- [x] Re-verify the inference-time pruned-vocab fix against the real
+      final artifact — confirmed `flux_best.pt`'s `embedding.weight` is
+      `[32018, 768]` (pruned, not `[100300, 768]`), then loaded a real
+      `Core()` instance and ran a live `ask()` end-to-end successfully.
+      Full test suite re-run after promotion: 346 passing, unaffected.
 
 ## 3. Benchmarking — real, unstarted work, not a formality
 
@@ -330,22 +511,111 @@ rather than needing this run started only then.
       entire session
 - [ ] Trustworthiness benchmark (SQuAD 2.0) on the new model — the real
       release gate per this project's own doctrine, not MMLU/SWE-bench
-- [ ] Resume the PyPI-vs-local-branch parity check — explicitly paused
-      mid-session when training started; never resumed
+- [x] Resume the PyPI-vs-local-branch parity check — **done, clean.**
+      Published `uchi-python` 0.3.0 matches local `pyproject.toml`'s
+      version. Downloaded the real wheel, compared file lists and diffs
+      against the local branch: **zero files present in the PyPI package
+      but missing locally** (nothing accidentally deleted/regressed), 26
+      new files locally not yet published — all recognizable as this
+      session's and the broader 0.4.0 cycle's real work (`verifier_model.py`,
+      `proprioception.py`, `relational_reasoning.py`, `task_config_cache.py`,
+      `meta.py`, `goal_state.py`, `tool_calling.py`, etc.). Diff'd the 51
+      shared files too: the largest changes (`simple.py` 412 lines,
+      `oracle.py` 172, `generate_and_ground.py` 114) all correspond
+      directly to documented work (layered vetoes, dynamic-N, proprioception
+      wiring) — purely additive/enhancing drift, not accidental. Also
+      confirmed the dev environment itself is clean: `uchi-python` is
+      **not** pip-installed in this venv at all; `import uchi` resolves
+      directly to the local branch's source — no risk that any testing
+      this session ran against a stale installed package instead of the
+      real, current code.
 
 ## 4. Verifier training (Item 17) — sequenced after Phase 4, same GPU
 
-- [ ] Run `scripts/train_verifier.sh` for real (MNLI+SNLI, ~200K examples)
-- [ ] Fit the OOD detector on the trained model's own latent space
-      (already wired into `verifier_train.py`, runs automatically at the
-      end of training)
-- [ ] Held-out adversarial validation (the "330m vs 500m" style test set)
-      — **hard gate**, exit criterion #7 in the deliverables doc. Nothing
-      below this line happens until it passes.
-- [ ] Once validated: flip it on (`Core.__init__` already auto-detects the
-      checkpoint at `uchi/flux/checkpoints/verifier/verifier_best.pt` —
-      no code change needed) and watch `oracle.layered_veto_log` closely
-      in real use before fully trusting it
+- [x] Run verifier training for real — **done**. 66,666 examples each
+      from MNLI/SNLI/synthetic multi-hop, epoch 1 val acc 54.0%, epoch 2
+      val acc 59.0% (best). `--flywheel-path` would make it a fourth
+      source once real corrected conversations exist.
+- [x] Fit the OOD detector on the trained model's own latent space —
+      done automatically at the end of training, fit on 5,000
+      representations, saved to `verifier_best.ood.pt`.
+- [ ] Temperature-scaling calibration on the trained classifier — needed
+      both as its own exit criterion and as a hard precondition for
+      Item 5's PUCT search (below) to safely use the classifier's score
+- [x] Held-out adversarial validation — **run, and it FAILED. Hard gate
+      not passed. Do not wire this into the live oracle.**
+      16 hand-built cases across numeric substitution, semantic negation,
+      and held-out multi-hop transitive chains — deliberately different
+      entities/topics than any training data, synthetic generator output,
+      or demo examples used this session. Result: **0 of 8 real
+      contradiction cases caught.** The "50% accuracy" is coincidental —
+      the classifier said "no contradiction" for literally every case,
+      which happened to be correct for the 8 true non-contradictions and
+      wrong for all 8 real contradictions.
+      **Root cause has two independent parts, both confirmed by
+      inspecting raw probabilities/distances directly, not guessed:**
+      1. The OOD gate fires on every single test case (distances
+         15.5–18.1 vs. threshold 3.0) — ordinary, in-domain sentences are
+         being treated as out-of-distribution and suppressed to "no
+         opinion." Same threshold-miscalibration pattern found in the
+         proprioception experiment's Approach 1, now confirmed in the
+         verifier's own freshly-fit detector too — the default threshold
+         doesn't transfer to a real fitted distribution and needs its
+         own calibration, not reuse.
+      2. **Even bypassing the OOD gate, the raw classifier is wrong**:
+         "Golden Gate Bridge spans 4,200 meters" (should score
+         contradiction highest) instead scores entailment=0.41 vs.
+         contradiction=0.30. Same pattern on two other spot-checked
+         cases. Not an OOD artifact — the classifier itself isn't yet
+         discriminating these adversarial cases correctly, consistent
+         with only 59% overall validation accuracy after 2 epochs.
+      **Consistent with the earlier warning sign**: a quick sanity check
+      right after training (330m vs. 25m Eiffel Tower case) already
+      missed the same way — this isn't a fluke of the specific test
+      cases chosen.
+      **Next steps, not yet done**: recalibrate the OOD threshold against
+      real validation data (cheap, should happen first, clearly wrong as
+      configured); separately, the classifier's own discriminative
+      accuracy likely needs more training (more epochs/examples) or
+      architecture attention before revisiting this gate — calibration
+      alone won't fix a classifier that ranks entailment above
+      contradiction on clear contradiction cases.
+      **Live safety action taken, not just noted**: `Core.__init__`
+      auto-detects any `verifier_best.pt` present at the default path
+      with no gate checking whether it's been validated — confirmed
+      directly that constructing `Core()` right after training completed
+      would have silently loaded this failed checkpoint into the live
+      oracle. Moved the checkpoint and its OOD detector aside to
+      `uchi/flux/checkpoints/verifier/failed_validation_v1/` (not
+      deleted — fully reversible) so `Core()` gracefully falls back to
+      `entailment_checker=None`, its own designed degradation path.
+      Re-verified: `Core()` now correctly shows `entailment_checker=None`,
+      `ask()` still works, full suite still 346 passing.
+- [x] Found and fixed the actual root cause of the ~3-hour first run:
+      `load_verifier_examples()` tokenized every premise and hypothesis
+      one at a time via `tokenizer.encode_text()` — 2×N individual
+      tiktoken calls for N examples. Batched via `encode_ordinary_batch`
+      (same fast Rust path `pretokenize.py` already uses), reassembling
+      special-token wrapping and padding after. Verified correct (proof
+      run, 3,000 examples, ~2 minutes total including HF streaming +
+      training — dramatically faster) before trusting it, full suite
+      still 346 passing.
+- [~] Retraining now in progress with the fix: 600,000 examples (200K
+      each MNLI/SNLI/synthetic multi-hop — using far more of the ~390K
+      real MNLI / ~550K real SNLI pool than the first attempt's 66K
+      each), 6 epochs (up from 2) — addressing the likely undertraining
+      root cause behind 59% val accuracy and the failed adversarial
+      validation. Log `/tmp/verifier_full_v2.log`, persistent monitor
+      `b2lbzyo4s`. **Once done**: recalibrate the OOD threshold against
+      real validation data (the reused default of 3.0 was confirmed
+      wrong), then re-run the same held-out adversarial validation set
+      (`scratchpad/verifier_adversarial_validation.py` from this
+      session, or recreate — same 16 cases, still held out) before any
+      promotion.
+- [ ] Once a retrained version actually passes: promote it back to
+      `uchi/flux/checkpoints/verifier/verifier_best.pt` (`Core.__init__`
+      already auto-detects it there — no code change needed) and watch
+      `oracle.layered_veto_log` closely in real use before fully trusting it
 - [ ] Only after the verifier has a real production track record: revisit
       verifier-as-tool (0.7.0-adjacent, pulled forward if it still makes
       sense) and the rejection-filter proposer-training idea — **not**

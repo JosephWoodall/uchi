@@ -111,30 +111,121 @@ def generate_snli_examples(num_examples):
     return examples
 
 
+# ==============================================================================
+# Synthetic multi-hop transitive examples (not from any external dataset --
+# generated here because MNLI/SNLI are both single-premise, and neither
+# teaches "combine two stated facts into a transitive conclusion" as a
+# skill at all. Demonstrated gap: an entailment classifier trained only on
+# single-premise NLI has no reason to learn this, and the deterministic
+# RelationalTransitivityChecker (uchi/relational_reasoning.py) only covers
+# phrasings its regexes recognize -- this is the broader-but-less-certain
+# neural fallback layer for the cases that checker can't parse.
+# ==============================================================================
+_MULTIHOP_ENTITIES = [
+    "Alice", "Bob", "Carol", "David", "Emma", "Frank", "Grace", "Henry",
+    "Ivy", "Jack", "Karen", "Liam", "Mia", "Noah", "Olivia", "Peter",
+    "Building A", "Building B", "Building C", "Building D",
+    "the red car", "the blue car", "the green car", "the black car",
+    "Mount Everest", "K2", "Denali", "Kilimanjaro",
+    "Project Alpha", "Project Beta", "Project Gamma", "Project Delta",
+]
+# (positive_word, negative_word) -- same relation, opposite direction.
+# Deliberately more entries than uchi/relational_reasoning.py's hardcoded
+# _KNOWN_COMPARATIVES: the model is meant to LEARN the antonym-equivalence
+# (e.g. "shorter" and "taller" describe the same relation) from varied
+# examples, not need it hand-mapped the way the deterministic checker does.
+_MULTIHOP_RELATIONS = [
+    ("taller", "shorter"), ("older", "younger"), ("faster", "slower"),
+    ("heavier", "lighter"), ("bigger", "smaller"), ("richer", "poorer"),
+    ("stronger", "weaker"), ("higher", "lower"), ("more expensive", "cheaper"),
+    ("earlier", "later"), ("wider", "narrower"), ("hotter", "colder"),
+]
+_MULTIHOP_TEMPLATES = [
+    "{subj} is {comp} than {obj}.",
+    "{subj} is {comp} than {obj}, based on the available data.",
+    "Compared to {obj}, {subj} is {comp}.",
+]
+
+
+def generate_multihop_examples(num_examples, seed=1337):
+    """Synthetic multi-premise transitive-chain examples (RuleTaker/
+    ProofWriter-style), balanced three ways: a valid transitive conclusion
+    (entailment), the reversed/contradictory conclusion (contradiction),
+    and a question about an entity outside the stated chain (neutral --
+    insufficient information, not a guess). Each fact is phrased with
+    either its positive or negative comparative word at random (e.g. "B is
+    shorter than A" as well as "A is taller than B" for the same
+    underlying fact) specifically so the model has to learn these describe
+    the same relation, rather than only ever seeing one direction.
+    """
+    rng = random.Random(seed)  # fixed, independent of the caller's global seed
+    examples = []
+
+    for i in range(num_examples):
+        a, b, c, d = rng.sample(_MULTIHOP_ENTITIES, 4)
+        # One relation per EXAMPLE, not per fact() call -- both premises and
+        # the hypothesis must be about the same attribute for transitivity
+        # to mean anything at all. Picking a fresh relation per call (the
+        # original bug here, caught by cross-checking against
+        # RelationalTransitivityChecker before trusting this) silently
+        # produced premises about unrelated attributes -- e.g. "richer" for
+        # a-vs-b and "higher" for b-vs-c -- making the derived "contradiction"
+        # label simply wrong, not just unverifiable.
+        comp_pos, comp_neg = rng.choice(_MULTIHOP_RELATIONS)
+
+        def fact(higher, lower, use_positive_word):
+            if use_positive_word:
+                comp, s, o = comp_pos, higher, lower
+            else:
+                comp, s, o = comp_neg, lower, higher
+            return rng.choice(_MULTIHOP_TEMPLATES).format(subj=s, comp=comp, obj=o)
+
+        # Ground truth by construction: a > b > c on this example's relation.
+        # d never appears in either premise.
+        premise = fact(a, b, rng.choice([True, False])) + " " + fact(b, c, rng.choice([True, False]))
+
+        case = i % 3
+        if case == 0:
+            hypothesis, label = fact(a, c, rng.choice([True, False])), 0   # valid -> entailment
+        elif case == 1:
+            hypothesis, label = fact(c, a, rng.choice([True, False])), 2   # reversed -> contradiction
+        else:
+            hypothesis, label = fact(a, d, rng.choice([True, False])), 1   # unconnected -> neutral
+
+        examples.append({"premise": premise, "hypothesis": hypothesis, "label": label})
+
+    print(f"  [+] Generated {len(examples)} synthetic multi-hop transitive examples.")
+    return examples
+
+
 def load_verifier_examples(tokenizer, max_seq_len, max_examples, seed=42, flywheel_path=None):
-    """Load + tokenize MNLI+SNLI (+ flywheel corrections, if any exist),
-    fair-budgeted across all sources present. flywheel_path is optional
-    real, verified data exported by uchi/verifier_flywheel.py from actual
-    observed user corrections -- empty/nonexistent on a first run (no
-    conversations have happened yet), naturally growing over time. Same
-    independent-per-source-share discipline as every other data source
+    """Load + tokenize MNLI+SNLI+synthetic-multihop (+ flywheel corrections,
+    if any exist), fair-budgeted across all sources present. flywheel_path
+    is optional real, verified data exported by uchi/verifier_flywheel.py
+    from actual observed user corrections -- empty/nonexistent on a first
+    run (no conversations have happened yet), naturally growing over time.
+    Same independent-per-source-share discipline as every other data source
     this session -- a real source with zero rows just contributes zero,
     it never silently starves the others.
     """
     random.seed(seed)
-    sources = [generate_mnli_examples, generate_snli_examples]
-    n_sources = 2
+    n_sources = 3  # MNLI, SNLI, synthetic multi-hop
     flywheel_examples = []
     if flywheel_path:
         from uchi.verifier_flywheel import load_flywheel_examples
-        n_sources = 3
+        n_sources = 4
         per_source_estimate = max(1, max_examples // n_sources)
         flywheel_examples = load_flywheel_examples(flywheel_path, num_examples=per_source_estimate)
         print(f"  [+] Loaded {len(flywheel_examples)} real flywheel-corrected examples.")
 
-    print(f"  Generating entailment examples from {n_sources} real source(s) ...")
+    print(f"  Generating entailment examples from {n_sources} source(s) ...")
     per_source = max(1, max_examples // n_sources)
-    examples = generate_mnli_examples(per_source) + generate_snli_examples(per_source) + flywheel_examples
+    examples = (
+        generate_mnli_examples(per_source)
+        + generate_snli_examples(per_source)
+        + generate_multihop_examples(per_source)
+        + flywheel_examples
+    )
     random.shuffle(examples)
     examples = examples[:max_examples]
     print(f"  Total entailment examples: {len(examples):,}")
@@ -145,13 +236,32 @@ def load_verifier_examples(tokenizer, max_seq_len, max_examples, seed=42, flywhe
     user_id = tokenizer.encode_special("<|user|>")
     pad_id = tokenizer.pad_token_id
 
+    # Batch-tokenize all premises and all hypotheses in two calls total,
+    # not 2*len(examples) individual tokenizer.encode_text() calls -- the
+    # per-example loop was the actual bottleneck behind the ~3-hour first
+    # training run (confirmed: encode_text() calls tiktoken's encoder one
+    # example at a time). encode_ordinary_batch releases the GIL and uses
+    # all cores in Rust, same fast path pretokenize.py already relies on.
+    # Safe here specifically because MNLI/SNLI/synthetic premise-hypothesis
+    # text is ordinary sentences -- encode_text()'s allowed_special="all"
+    # only matters if the text contains literal special-token substrings,
+    # which real NLI sentences don't.
+    raw_enc = tokenizer._enc if hasattr(tokenizer, "_enc") else tokenizer._base._enc
+    shift = tokenizer.n_special
+    premise_texts = [ex["premise"] for ex in examples]
+    hyp_texts = [ex["hypothesis"] for ex in examples]
+    premise_batches = raw_enc.encode_ordinary_batch(premise_texts)
+    hyp_batches = raw_enc.encode_ordinary_batch(hyp_texts)
+
+    def _remap(ids):
+        if hasattr(tokenizer, "_pruned"):
+            return tokenizer._pruned.remap(ids)
+        return ids
+
     dropped_too_long = 0
-    for ex in examples:
-        # Premise (evidence) wrapped in the existing <|context|>/<|/context|>
-        # markers, hypothesis (claim) after <|user|> -- no new special tokens,
-        # reusing what the shared tokenizer already has.
-        premise_ids = [context_open] + tokenizer.encode_text(ex["premise"]) + [context_close]
-        hyp_ids = [user_id] + tokenizer.encode_text(ex["hypothesis"])
+    for ex, premise_raw, hyp_raw in zip(examples, premise_batches, hyp_batches):
+        premise_ids = [context_open] + [t + shift for t in _remap(premise_raw)] + [context_close]
+        hyp_ids = [user_id] + [t + shift for t in _remap(hyp_raw)]
         full_ids = premise_ids + hyp_ids
 
         if len(full_ids) > max_seq_len:
