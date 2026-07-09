@@ -296,6 +296,16 @@ def main():
                         help="Pre-tokenized train .bin (GPU-bound fast path; skips streaming)")
     parser.add_argument("--val-bin", type=str, default=None,
                         help="Pre-tokenized val .bin (defaults to --data-bin if omitted)")
+    parser.add_argument("--pruned-vocab", type=str, default=None,
+                        help="0.4.0 Item 0: path to a PrunedVocab JSON (e.g. "
+                             "uchi/flux/checkpoints/pruned_vocab_32k.json) built by "
+                             "scripts/build_pruned_vocab.py. When set, trains with the "
+                             "compact vocab instead of the full ~100K cl100k_base vocab.")
+    parser.add_argument("--checkpoint-dir", type=str, default=DEFAULTS["checkpoint_dir"],
+                        help="Where to write ckpt_best.pt/ckpt_latest.pt/ckpt_final.pt. "
+                             "Defaults to the shared checkpoints dir — override this for "
+                             "proof/experimental runs so they don't overwrite production "
+                             "checkpoints.")
     args = parser.parse_args()
 
     # Derived config
@@ -309,7 +319,7 @@ def main():
     # Warmup must scale with the horizon: a fixed 2000-step warmup on a 4000-step
     # run spends half of training warming up. Cap at 10% of max_steps.
     warmup = min(DEFAULTS["warmup_steps"], max(50, max_steps // 10))
-    ckpt_dir = DEFAULTS["checkpoint_dir"]
+    ckpt_dir = args.checkpoint_dir
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
@@ -330,8 +340,13 @@ def main():
 
     # ── Tokenizer ──
     from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
-    tokenizer = TikTokenHybridTokenizer()
-    print(f"  Vocab size:   {tokenizer.vocab_size:,}")
+    if args.pruned_vocab:
+        from uchi.flux.vocab_prune import load_pruned_tokenizer
+        tokenizer = load_pruned_tokenizer(args.pruned_vocab)
+        print(f"  Vocab size:   {tokenizer.vocab_size:,} (pruned, from {args.pruned_vocab})")
+    else:
+        tokenizer = TikTokenHybridTokenizer()
+        print(f"  Vocab size:   {tokenizer.vocab_size:,} (full cl100k_base)")
 
     # ── Model ──
     from uchi.flux.model import HybridTSSM

@@ -90,16 +90,35 @@ def main():
     parser.add_argument("--cot-frac", type=float, default=DEFAULTS["cot_frac"],
                         help="Probability a macro-step trains on CoT data vs general text")
     parser.add_argument("--cot-examples", type=int, default=DEFAULTS["cot_examples"])
+    parser.add_argument("--pruned-vocab", type=str, default=None,
+                         help="Path to the same PrunedVocab JSON the Phase 3 --base checkpoint "
+                              "was trained with. REQUIRED if --base was trained with a pruned "
+                              "vocab -- encoding with the full ~100K cl100k_base tokenizer "
+                              "against a smaller embedding table produces out-of-range token IDs. "
+                              "NOTE: --data-bin must ALSO have been pre-tokenized with this same "
+                              "pruned vocab -- a .bin file tokenized with the full vocab will "
+                              "produce the same out-of-range IDs for the general-text-recovery "
+                              "portion of this phase even if this flag is set correctly.")
+    parser.add_argument("--checkpoint-dir", type=str, default=DEFAULTS["checkpoint_dir"],
+                         help="Where to write qat_*.pt. Defaults to the shared checkpoints dir -- "
+                              "override for proof/experimental runs so they don't overwrite "
+                              "production checkpoints.")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if use_bf16 else torch.float16
 
-    from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
     from uchi.flux.model import HybridTSSM
 
-    tokenizer = TikTokenHybridTokenizer()
+    if args.pruned_vocab:
+        from uchi.flux.vocab_prune import load_pruned_tokenizer
+        tokenizer = load_pruned_tokenizer(args.pruned_vocab)
+        print(f"  Tokenizer:    pruned, vocab_size={tokenizer.vocab_size:,} (from {args.pruned_vocab})")
+    else:
+        from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
+        tokenizer = TikTokenHybridTokenizer()
+        print(f"  Tokenizer:    full cl100k_base, vocab_size={tokenizer.vocab_size:,}")
 
     print("=" * 72)
     print("FLUX Phase 4 — Ternary QAT (mixed CoT + general-text recovery)")
@@ -220,7 +239,7 @@ def main():
         avg = total_loss / max(n, 1)
         return avg, math.exp(min(avg, 20.0))
 
-    ckpt_dir = DEFAULTS["checkpoint_dir"]
+    ckpt_dir = args.checkpoint_dir
     os.makedirs(ckpt_dir, exist_ok=True)
     model.train()
     best_cot_val = float("inf")

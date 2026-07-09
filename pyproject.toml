@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uchi-python"
-version = "0.3.0"
-description = "A grounded, no-LLM assistant that verifies factual answers and abstains rather than confabulate."
+version = "0.4.0"
+description = "A grounded, no-LLM AI engine that verifies factual answers, abstains rather than confabulating, and can act — tool calling and sandboxed execution on a verified-answer core."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -70,7 +70,7 @@ include = ["uchi*"]
 # upload cap (confirmed: publish failed with "File too large"). The premade
 # brain is fetched on first Uchi() construction instead — see
 # uchi/brain_fetch.py — and cached locally, so `pip install` stays small.
-uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/.gitkeep"]
+uchi = ["py.typed", "persona.txt", "data/*.uchi", "data/.gitkeep", "skills/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

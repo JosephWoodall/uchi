@@ -36,7 +36,7 @@ answer only from the verified sub-answers.
 
 ## The Honest Claim
 
-The guarantee is about **trust, not raw power**. FLUX (a small ~116M model)
+The guarantee is about **trust, not raw power**. FLUX (a small ~64M model)
 proposes chains of thought; Uchi verifies each step and abstains — naming the
 failing step — the moment one cannot be verified. So the system never asserts an
 unverified conclusion. It does **not** mean FLUX solves hard reasoning

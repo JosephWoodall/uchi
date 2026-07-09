@@ -34,3 +34,21 @@ replay.db
 uchi/flux/checkpoints/*.pt
 !uchi/flux/checkpoints/flux_best.pt
 uchi/flux/data/*.bin
+uchi/flux/data_pruned/
+
+# Verifier per-epoch snapshots and backups stay local, same reasoning —
+# verifier_best.pt/.ood.pt are the shipped exception (see .gitattributes).
+uchi/flux/checkpoints/verifier/*.pt
+!uchi/flux/checkpoints/verifier/verifier_best.pt
+!uchi/flux/checkpoints/verifier/verifier_best.ood.pt
+uchi/flux/checkpoints/verifier/pre_epoch5_promotion_backup/
+uchi/flux/checkpoints/failed_validation_v1/
+uchi/flux/checkpoints/verifier/failed_validation_v1/
+uchi/flux/checkpoints/pre_pruning_backup/
+uchi/flux/checkpoints/proof_run_0.4.0/
+uchi/flux/checkpoints/v040_phase1/
+uchi/flux/checkpoints/v040_phase2/
+uchi/flux/checkpoints/v040_phase2_proof/
+uchi/flux/checkpoints/v040_phase3/
+uchi/flux/checkpoints/v040_phase3_proof/
+uchi/flux/checkpoints/v040_phase4/

@@ -96,11 +96,181 @@ def generate_synthetic_cot(num_examples):
     print(f"  [+] Loaded {len(examples)} real GSM8K teacher CoT traces.")
     return examples
 
+
+def _split_think_answer(response: str):
+    """Split a real response into (reasoning, final_answer): the last
+    sentence is the answer, everything before it is the reasoning trace.
+    A simple heuristic, not perfect — but it splits an existing real
+    response rather than fabricating one, same principle as GSM8K's
+    '####' split above. Used for sources (OpenOrca, Magicoder) that don't
+    ship a pre-separated reasoning/answer field the way GSM8K does.
+    """
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", response.strip()) if s.strip()]
+    if not sentences:
+        return "", ""
+    if len(sentences) == 1:
+        return sentences[0], sentences[0]
+    return " ".join(sentences[:-1]), sentences[-1]
+
+
+def generate_openorca_cot(num_examples):
+    """General step-by-step reasoning CoT from OpenOrca (0.4.0 Item 0).
+
+    GSM8K alone only teaches math CoT. Items 3/4/6 (scratchpad, tool
+    calling, self-healing loop) need FLUX to reason step-by-step about
+    arbitrary problems, not just arithmetic. Real GPT-4-generated
+    responses, split into reasoning/answer via _split_think_answer —
+    still an actual teacher trace, not a fabricated one.
+    """
+    from datasets import load_dataset
+
+    examples = []
+    try:
+        ds = load_dataset("Open-Orca/OpenOrca", split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load OpenOrca teacher traces: {e}")
+        return []
+
+    for row in ds:
+        question = row.get("question", "").strip()
+        response = row.get("response", "").strip()
+        if not question or not response:
+            continue
+        think, answer = _split_think_answer(response)
+        if not think or not answer:
+            continue
+        examples.append({"question": question, "think": think, "answer": answer})
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real OpenOrca teacher CoT traces.")
+    return examples
+
+
+def generate_magicoder_cot(num_examples):
+    """Code-specific reasoning CoT from Magicoder-OSS-Instruct (0.4.0 Item 0).
+
+    GSM8K/OpenOrca teach math/general reasoning; neither teaches
+    plan-then-code structure, which is exactly what the empirical
+    synthesis loop (Items 3/6) needs FLUX to do well. Real solutions from
+    real OSS-derived problems, not fabricated.
+    """
+    from datasets import load_dataset
+
+    examples = []
+    try:
+        ds = load_dataset("ise-uiuc/Magicoder-OSS-Instruct-75K", split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load Magicoder teacher traces: {e}")
+        return []
+
+    for row in ds:
+        problem = row.get("problem", "").strip()
+        solution = row.get("solution", "").strip()
+        if not problem or not solution:
+            continue
+        think, answer = _split_think_answer(solution)
+        if not think or not answer:
+            continue
+        examples.append({"question": problem, "think": think, "answer": answer})
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real Magicoder teacher CoT traces.")
+    return examples
+
+
+def generate_commitpackft_cot(num_examples):
+    """Repo-level code-change reasoning CoT from CommitPackFT's Python
+    slice (originally scoped as 0.5.0 Item 6, pulled forward into 0.4.0
+    Phase 3 since it hadn't started training yet -- a real window to add
+    this before training begins rather than waiting for a separate
+    release just to get it).
+
+    CodeAlpaca (Phase 2) and Magicoder (above) both teach isolated,
+    from-scratch code generation -- neither teaches how to read an
+    EXISTING change and explain what it does and why, the skill
+    SWE-bench-style tasks (and later self-modification work) actually
+    need. Real before/after file contents and a real, human-written
+    commit message. CommitPackFT has no separate reasoning-steps field
+    the way GSM8K does, so rather than fabricate a narrated "thinking"
+    monologue (exactly what this file's own docstring principle warns
+    against), the <|think|> content here is a real, mechanically-computed
+    fact about the diff (lines added/removed) -- not invented reasoning,
+    just real data in a different shape. The <|assistant|> answer is the
+    actual commit message, never generated.
+
+    Loaded via the raw per-language JSONL file directly
+    (``bigcode/commitpackft``'s HF *dataset script* loader was removed by
+    a `datasets` library version bump; the underlying data files are
+    unaffected and load fine via ``load_dataset("json", data_files=...)``).
+
+    Note: each row is a single file's before/after, not a true multi-file
+    commit diff -- a real, useful proxy for "understand a code change,"
+    not literally cross-file/cross-repository reasoning.
+    """
+    import difflib
+    from datasets import load_dataset
+
+    examples = []
+    url = "https://huggingface.co/datasets/bigcode/commitpackft/resolve/main/data/python/data.jsonl"
+    try:
+        ds = load_dataset("json", data_files=url, split="train", streaming=True)
+    except Exception as e:
+        print(f"  [!] Failed to load CommitPackFT teacher traces: {e}")
+        return []
+
+    for row in ds:
+        old = (row.get("old_contents") or "").strip()
+        new = (row.get("new_contents") or "").strip()
+        message = (row.get("message") or row.get("subject") or "").strip()
+        old_file = row.get("old_file") or "file.py"
+        if not old or not new or not message or old == new:
+            continue
+
+        diff_lines = list(difflib.unified_diff(
+            old.splitlines(), new.splitlines(),
+            fromfile=old_file, tofile=old_file, lineterm="", n=2,
+        ))
+        if not diff_lines:
+            continue
+        diff_text = "\n".join(diff_lines)
+        if len(diff_text) > 1500:   # keep prompts a reasonable size, same spirit as other sources
+            continue
+
+        n_added = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+        n_removed = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+
+        examples.append({
+            "question": f"What does the following code change do, and why was it made?\n\n{diff_text}",
+            "think": f"The diff to {old_file} changes {n_removed} line(s) and adds {n_added} line(s).",
+            "answer": message,
+        })
+        if len(examples) >= num_examples:
+            break
+
+    print(f"  [+] Loaded {len(examples)} real CommitPackFT teacher CoT traces.")
+    return examples
+
+
 def load_cot_examples(tokenizer, max_seq_len, max_examples, seed=42):
     random.seed(seed)
-    print("  Generating synthetic CoT examples ...")
-    examples = generate_synthetic_cot(max_examples)
-    
+    print("  Generating CoT examples from 4 real teacher-trace sources ...")
+    # Each source gets its own independent share of max_examples (not a
+    # shared cumulative counter — see the 0.4.0 fix in sft_train.py's
+    # load_sft_examples for why a shared counter silently starves every
+    # source after the first).
+    per_source = max(1, max_examples // 4)
+    examples = (
+        generate_synthetic_cot(per_source)
+        + generate_openorca_cot(per_source)
+        + generate_magicoder_cot(per_source)
+        + generate_commitpackft_cot(per_source)
+    )
+    random.shuffle(examples)
+    examples = examples[:max_examples]
+    print(f"  Total CoT examples: {len(examples):,}")
+
     formatted = []
     user_id = tokenizer.encode_special("<|user|>")
     asst_id = tokenizer.encode_special("<|assistant|>")
@@ -163,6 +333,15 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--seq-len", type=int, default=DEFAULTS["max_seq_len"])
     parser.add_argument("--max-examples", type=int, default=DEFAULTS["max_examples"])
+    parser.add_argument("--pruned-vocab", type=str, default=None,
+                         help="Path to the same PrunedVocab JSON the Phase 2 --base checkpoint "
+                              "was trained with. REQUIRED if --base was trained with a pruned "
+                              "vocab -- encoding with the full ~100K cl100k_base tokenizer "
+                              "against a smaller embedding table produces out-of-range token IDs.")
+    parser.add_argument("--checkpoint-dir", type=str, default=DEFAULTS["checkpoint_dir"],
+                         help="Where to write cot_epoch*.pt/cot_best.pt. Defaults to the shared "
+                              "checkpoints dir -- override for proof/experimental runs so they "
+                              "don't overwrite production checkpoints.")
     parser.add_argument("--no-compile", action="store_true")
     args = parser.parse_args()
 
@@ -170,10 +349,16 @@ def main():
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if use_bf16 else torch.float16
 
-    from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
     from uchi.flux.model import HybridTSSM
 
-    tokenizer = TikTokenHybridTokenizer()
+    if args.pruned_vocab:
+        from uchi.flux.vocab_prune import load_pruned_tokenizer
+        tokenizer = load_pruned_tokenizer(args.pruned_vocab)
+        print(f"  Tokenizer:    pruned, vocab_size={tokenizer.vocab_size:,} (from {args.pruned_vocab})")
+    else:
+        from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
+        tokenizer = TikTokenHybridTokenizer()
+        print(f"  Tokenizer:    full cl100k_base, vocab_size={tokenizer.vocab_size:,}")
 
     print("=" * 72)
     print("FLUX Phase 3 — Chain-of-Thought Distillation")
@@ -285,7 +470,7 @@ def main():
         model.train()
         return total_loss / max(n_batches, 1)
 
-    ckpt_dir = DEFAULTS["checkpoint_dir"]
+    ckpt_dir = args.checkpoint_dir
     os.makedirs(ckpt_dir, exist_ok=True)
     model.train()
     best_val = float("inf")

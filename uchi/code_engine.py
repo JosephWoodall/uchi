@@ -21,7 +21,12 @@ HOLE_PATTERN = re.compile(r'\?\?HOLE:([^?]+)\?\?')
 
 
 class REPLOracle:
-    """Stateless compile-time verification. Returns (passed, reward)."""
+    """Stateless compile-time verification and skill-shaped execution.
+
+    Canonical implementation — do not redefine this class elsewhere.
+    ``uchi/procedural_memory.py`` imports it from here rather than keeping
+    its own copy.
+    """
 
     def verify(self, code: str, timeout: float = 3.0) -> Tuple[bool, float]:
         """Syntax parse + py_compile check. Returns (passed, reward)."""
@@ -53,6 +58,44 @@ class REPLOracle:
             except OSError:
                 pass
 
+    def execute(self, code: str, timeout: float = 3.0) -> Tuple[bool, str]:
+        """Run *code* and return (success, stdout/stderr).
+
+        Skill-shaped convention: if *code* defines ``def run():``, it is
+        called and its result printed. Used by the empirical-synthesis
+        fallback in ``generate_and_ground.py`` and by
+        ``ProceduralMemory``. For unconstrained arbitrary-code execution
+        (no ``run()`` requirement), use ``uchi/scratchpad.py`` instead.
+        """
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(code)
+            f.write(
+                "\n\nif __name__ == '__main__':\n"
+                "    try:\n"
+                "        print(run())\n"
+                "    except Exception as e:\n"
+                "        print('Error:', e)\n"
+            )
+            path = f.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, path],
+                capture_output=True, timeout=timeout, text=True,
+            )
+            if result.returncode == 0:
+                return True, result.stdout.strip()
+            return False, result.stderr.strip() or result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            return False, "TimeoutExpired"
+        except Exception as e:
+            return False, str(e)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
 
 class CodeEngine:
     """
@@ -67,6 +110,11 @@ class CodeEngine:
         self.predictor = predictor
         self.n_workers = n_workers
         self.oracle = REPLOracle()
+        # 0.4.0 Item 6: negative pathway penalty — a candidate identical to
+        # one that already failed verification is skipped rather than
+        # re-verified, so retrying can't reproduce the exact same failure.
+        from .loop_guard import LoopGuard
+        self.loop_guard = LoopGuard()
 
     def generate_code(
         self,
@@ -95,11 +143,18 @@ class CodeEngine:
         if not results:
             return self._synthesize_hole(seed_tokens), 0.0, False
 
-        # Best score first → REPL oracle vets each candidate
+        # Best score first → REPL oracle vets each candidate. Skip any
+        # candidate identical to one that already failed (Item 6) instead
+        # of re-verifying it — forces a structurally different candidate
+        # to win on retry rather than looping on the same failing code.
         for code_str, score in sorted(results, key=lambda x: -x[1]):
+            if self.loop_guard.is_penalized(code_str):
+                continue
             passed, reward = self.oracle.verify(code_str)
             if passed:
+                self.loop_guard.record_success(code_str)
                 return code_str, reward, True
+            self.loop_guard.record_failure(code_str)
 
         # None passed — return best candidate, possibly with holes
         best_code, best_score = max(results, key=lambda x: x[1])

@@ -49,7 +49,9 @@ class GenerateAndGround:
     def __init__(self, index: SemanticIndex, oracle: Optional[FactCheckOracle] = None,
                  decoder=None, proposer=None, predictor=None, answerability=None,
                  retrieve_k: int = 10, min_sim: float = 0.5,
-                 min_known: float = 0.5, min_answerable: float = 0.5) -> None:
+                 min_known: float = 0.5, min_answerable: float = 0.5,
+                 web_search_enabled: bool = False, task_config_cache=None,
+                 proprioception=None, proprioception_model=None, proprioception_tokenizer=None) -> None:
         self.index = index
         self.oracle = oracle or FactCheckOracle()
         # `proposer` is the pluggable generator (decoder / FLUX / LLM); `decoder`
@@ -62,6 +64,29 @@ class GenerateAndGround:
         self.min_sim = min_sim
         self.min_known = min_known
         self.min_answerable = min_answerable
+        # 0.4.0 Item 16.2 ("Lazy" World Knowledge): when local evidence
+        # retrieval comes up empty, silently fall back to a live web
+        # search, learn what it finds, and retry retrieval once — before
+        # abstaining, not instead of grounding.
+        self.web_search_enabled = web_search_enabled
+        # Dynamic-N self-consistency voting (follow-on to Item 17): recalls
+        # a recommended vote count keyed by the question's structural shape
+        # (TaskConfigCache, ODUSP-backed), falling back to a complexity-
+        # score-derived baseline when unfitted or unconfident. None by
+        # default -- n_votes stays a fixed 3 unless this is supplied,
+        # zero behavior change for anyone not using it.
+        self.task_config_cache = task_config_cache
+        # Proprioception (experimental, additive-only): FLUX's own sense of
+        # whether a question is familiar, checked BEFORE generation. Never
+        # blocks or reduces anything -- an "unfamiliar" verdict can only
+        # increase n_votes (spend more self-consistency compute), the same
+        # direction as scaling up for a hard question, never a reason to
+        # answer with LESS scrutiny. Requires all three of proprioception/
+        # proprioception_model/proprioception_tokenizer; None by default,
+        # zero behavior change for anyone not using it.
+        self.proprioception = proprioception
+        self.proprioception_model = proprioception_model
+        self.proprioception_tokenizer = proprioception_tokenizer
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _content(self, text: str) -> list[str]:
@@ -88,16 +113,49 @@ class GenerateAndGround:
 
     # ── the loop ───────────────────────────────────────────────────────────────
     def answer(self, question: str, callback=None) -> str:
+        # A question that asserts nothing specific (no proper noun, no
+        # number -- "Hello!", "Thanks!", "How are you?") isn't a factual
+        # lookup in the first place. The two honesty gates below exist to
+        # catch nonsense/OOV questions and weak-evidence factual questions
+        # -- applied to a bare greeting, they were abstaining on it the
+        # same way they'd abstain on a genuine unanswerable question,
+        # because retrieval naturally can't find high-similarity matches
+        # for something that isn't a factual query. Gated on specificity:
+        # a real factual question with weak evidence still abstains
+        # exactly as before; a generic conversational one proceeds to
+        # candidate generation, where the oracle's own no-evidence
+        # relaxation (oracle.py) makes the final call.
+        question_is_specific = bool(self.oracle._specific_terms(question))
+
         # honesty gate 1: do we even know the question's concepts? (nonsense/OOV)
         if callback: callback("thinking", "Checking semantic vocabulary...")
-        if self._known_fraction(question) < self.min_known:
+        if question_is_specific and self._known_fraction(question) < self.min_known:
             return _ABSTAIN
 
         if callback: callback("thinking", f"Retrieving top {self.retrieve_k} memories...")
         evidence = self.index.retrieve(question, self.retrieve_k)
-        if not evidence or evidence[0][1] < self.min_sim:
+        if question_is_specific and (not evidence or evidence[0][1] < self.min_sim) and self.web_search_enabled:
+            if callback: callback("thinking", "No local evidence — falling back to web search...")
+            try:
+                from .web_search import perform_web_search
+                web_text = perform_web_search(question)
+            except Exception:
+                web_text = ""
+            if web_text:
+                self.index.build_from_corpus(web_text)
+                evidence = self.index.retrieve(question, self.retrieve_k)
+        if question_is_specific and (not evidence or evidence[0][1] < self.min_sim):
             return _ABSTAIN
-        ev_texts = [t for t, _ in evidence]
+        # Only carry forward evidence confident enough to actually mean
+        # something -- a weak/irrelevant match (below min_sim) shouldn't
+        # count as "evidence" for the oracle check either, or a generic
+        # reply would get strictly checked against irrelevant retrieved
+        # text instead of correctly hitting the oracle's no-evidence
+        # relaxation (this is what was happening for "Hello!": retrieval
+        # found real but irrelevant passages, so ev_texts was non-empty
+        # and the strict check applied to a candidate that never asserted
+        # anything those passages could support in the first place).
+        ev_texts = [t for t, sim in evidence if sim >= self.min_sim]
 
         # honesty gate 2: does the evidence actually ANSWER the question? (SQuAD-2.0
         # style unanswerability — topically relevant but no answer present)
@@ -109,10 +167,43 @@ class GenerateAndGround:
             except Exception:
                 pass
 
+        # Dynamic-N: how many self-consistency votes this question actually
+        # gets, instead of a fixed 3. Baseline from the same complexity
+        # heuristic already used to gate swarm decomposition; refined by
+        # TaskConfigCache's recall if it has a confident one for this
+        # question's structural shape. This only changes how many
+        # candidates get generated -- every candidate still goes through
+        # the full, unchanged oracle cascade below, so this is a compute
+        # budget knob, not a correctness gate: it can move in either
+        # direction safely.
+        from .iq_router import estimate_complexity
+        complexity = estimate_complexity(question)
+        n_votes = 1 if complexity < 0.3 else (3 if complexity < 0.6 else 5)
+        if self.task_config_cache is not None:
+            recalled_n, conf = self.task_config_cache.recall_n(question)
+            if recalled_n is not None and conf >= 0.5:
+                n_votes = recalled_n
+
+        # Proprioception: if FLUX itself flags this question as unfamiliar
+        # (far from its own training distribution), that's a reason to
+        # spend MORE self-consistency votes, never fewer -- additive-only,
+        # same direction as every other signal that touches n_votes. This
+        # can only raise n_votes above whatever complexity/TaskConfigCache
+        # already decided, never lower it. Silently a no-op unless all
+        # three components (proprioception, model, tokenizer) are present.
+        if self.proprioception is not None and self.proprioception_model is not None:
+            try:
+                if self.proprioception.is_unfamiliar(
+                    self.proprioception_model, self.proprioception_tokenizer, question
+                ):
+                    n_votes = max(n_votes, 8)
+            except Exception:
+                pass  # fail open -- additive signal, never the sole gate
+
         # Try synthesis (neural decoder) first, then fall back to the grounded
         # extractive answer. We evaluate ALL candidates to perform Plural Voting (Simulation Engine).
         valid_candidates = []
-        for candidate in self._candidates(question, evidence, ev_texts, callback=callback):
+        for candidate in self._candidates(question, evidence, ev_texts, callback=callback, n_votes=n_votes):
             if not candidate or not candidate.strip():
                 continue
             if callback: callback("thinking", f"Oracle verifying candidate: '{candidate[:40]}...'")
@@ -120,13 +211,20 @@ class GenerateAndGround:
                 valid_candidates.append(candidate)
             else:
                 if callback: callback("prune", "Ungrounded claim pruned by Oracle.")
-                
+
         if valid_candidates:
             # Plural vote: pick the most frequent verified candidate (Self-Consistency)
             from collections import Counter
             counts = Counter(valid_candidates)
             best_candidate = counts.most_common(1)[0][0]
             if callback: callback("reinforce", f"Plural vote winner! (votes: {counts[best_candidate]}/{len(valid_candidates)}).")
+            if self.task_config_cache is not None:
+                # Retrospective, honest signal: unanimous agreement across
+                # every valid candidate suggests this was easy enough that
+                # fewer votes would likely have sufficed; any real
+                # disagreement means the full budget was genuinely used.
+                actual_n = 1 if len(set(valid_candidates)) == 1 else n_votes
+                self.task_config_cache.record_outcome(question, actual_n)
             return best_candidate
             
         # 3. Empirical Synthesis Loop (Fallback when text grounding fails)
@@ -138,7 +236,7 @@ class GenerateAndGround:
                                 f"the logic and constraints of the problem before returning the final result.\n"
                                 f"Question: {question}\n\nOnly output the Python code.")
                                 
-            from .procedural_memory import REPLOracle
+            from .code_engine import REPLOracle
             repl = REPLOracle()
             
             for attempt in range(2 + 1):

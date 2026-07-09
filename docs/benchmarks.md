@@ -4,7 +4,7 @@ The FLUX (Proposer) + Uchi (Verifier) architecture is measured on two very
 different things, and it is important not to conflate them.
 
 !!! warning "Read this first"
-    FLUX is a **small (~116M-parameter) from-scratch model**. On raw capability
+    FLUX is a **small (~64M-parameter) from-scratch model**. On raw capability
     benchmarks it stays **near baseline** — MMLU near random (~25%), SWE-bench and
     ARC-Challenge low — and no amount of engineering changes that at this scale;
     it is a property of model size and training budget. We track these numbers as

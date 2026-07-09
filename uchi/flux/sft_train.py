@@ -69,8 +69,23 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
     random.seed(seed)
     examples = []
 
+    # 0.4.0 fix: each source used to share ONE cumulative `len(examples)`
+    # break check. SQuAD alone reaches max_examples before exhausting its
+    # pool, so every source loaded after it broke on its very first
+    # iteration (added ~1 example, then saw the shared counter already at
+    # the cap). CodeAlpaca's higher threshold (1.5x) was a prior partial
+    # workaround for this same symptom, not a fix. Give each source its
+    # own independent budget instead; the final shuffle+truncate below
+    # still enforces the overall max_examples total.
+    def _per_source_cap(n_sources):
+        return max(1, max_examples // n_sources)
+
+    n_sources = 4
+    cap = _per_source_cap(n_sources)
+
     # ── SQuAD 2.0 (extractive QA with context) ──
     print("  Loading SQuAD ...")
+    n = 0
     try:
         ds = load_dataset("rajpurkar/squad_v2", split="train")
         for row in ds:
@@ -88,13 +103,16 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
                 "context": context,
                 "answer": answer,
             })
-            if len(examples) >= max_examples:
+            n += 1
+            if n >= cap:
                 break
     except Exception as e:
         print(f"    [!] SQuAD load failed: {e}")
+    print(f"    got {n} from SQuAD")
 
     # ── Dolly-15K (instruction following) ──
     print("  Loading Dolly-15K ...")
+    n = 0
     try:
         ds = load_dataset("databricks/databricks-dolly-15k", split="train")
         for row in ds:
@@ -109,13 +127,16 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
                 "context": context if context else "",
                 "answer": response[:500],  # cap answer length
             })
-            if len(examples) >= max_examples:
+            n += 1
+            if n >= cap:
                 break
     except Exception as e:
         print(f"    [!] Dolly load failed: {e}")
+    print(f"    got {n} from Dolly")
 
     # ── CodeAlpaca (Code Instruction Following) ──
     print("  Loading CodeAlpaca_20K ...")
+    n = 0
     try:
         ds = load_dataset("HuggingFaceH4/CodeAlpaca_20K", split="train")
         for row in ds:
@@ -127,17 +148,54 @@ def load_sft_examples(tokenizer, max_seq_len, max_examples, seed=42):
                     "context": "",
                     "answer": response[:800],
                 })
-            if len(examples) >= max_examples * 1.5:  # Over-sample to balance
+                n += 1
+            if n >= cap:
                 break
     except Exception as e:
         print(f"    [!] CodeAlpaca load failed: {e}")
+    print(f"    got {n} from CodeAlpaca")
+
+    # ── UltraChat-200K (0.4.0 Item 0: natural conversational rhythm) ──
+    # SQuAD/Dolly/CodeAlpaca are all single-shot instruction-answering; none
+    # teach natural chat tone, which is exactly why live-tested FLUX output
+    # reads stiff/disjointed rather than conversational. Flattened to the
+    # same (question, context, answer) shape as the other sources here —
+    # first user turn as question, first assistant turn as answer — rather
+    # than proper multi-turn, to avoid touching the tokenization/loss-mask
+    # loop below in this pass. train_sft split, already filtered for quality.
+    print("  Loading UltraChat-200K ...")
+    n = 0
+    try:
+        ds = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
+        for row in ds:
+            messages = row.get("messages", [])
+            user_turns = [m["content"] for m in messages if m.get("role") == "user"]
+            asst_turns = [m["content"] for m in messages if m.get("role") == "assistant"]
+            if not user_turns or not asst_turns:
+                continue
+            question = user_turns[0].strip()
+            answer = asst_turns[0].strip()
+            if not question or not answer:
+                continue
+            examples.append({
+                "question": question[:800],
+                "context": "",
+                "answer": answer[:500],
+            })
+            n += 1
+            if n >= cap:
+                break
+    except Exception as e:
+        print(f"    [!] UltraChat load failed: {e}")
+    print(f"    got {n} from UltraChat")
 
     # NOTE: A prior MMLU block was removed here. It injected the gold answer into
     # the <|context|> ("research indicates that {answer_text}") and trained the
     # model to copy it — a shortcut that does not exist at eval time, so it taught
     # nothing transferable. It also loaded cais/mmlu's TEST split, contaminating a
     # benchmark we report. SFT teaches grounded answering-from-context (SQuAD),
-    # instruction-following (Dolly), and code (CodeAlpaca) — no benchmark leakage.
+    # instruction-following (Dolly), code (CodeAlpaca), and conversational tone
+    # (UltraChat) — no benchmark leakage.
 
     random.shuffle(examples)
     examples = examples[:max_examples]
@@ -215,6 +273,16 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=DEFAULTS["grad_accum_steps"])
     parser.add_argument("--max-examples", type=int, default=DEFAULTS["max_examples"])
     parser.add_argument("--no-compile", action="store_true")
+    parser.add_argument("--pruned-vocab", type=str, default=None,
+                        help="0.4.0 Item 0: path to the same PrunedVocab JSON the Phase 1 "
+                             "--base checkpoint was trained with. REQUIRED if --base was "
+                             "trained with a pruned vocab -- encoding with the full ~100K "
+                             "cl100k_base tokenizer against a smaller embedding table would "
+                             "produce out-of-range token IDs.")
+    parser.add_argument("--checkpoint-dir", type=str, default=DEFAULTS["checkpoint_dir"],
+                        help="Where to write sft_epoch*.pt/sft_best.pt. Defaults to the "
+                             "shared checkpoints dir -- override for proof/experimental "
+                             "runs so they don't overwrite production checkpoints.")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -225,7 +293,13 @@ def main():
     from uchi.flux.tokenizer_v2 import TikTokenHybridTokenizer
     from uchi.flux.model import HybridTSSM
 
-    tokenizer = TikTokenHybridTokenizer()
+    if args.pruned_vocab:
+        from uchi.flux.vocab_prune import load_pruned_tokenizer
+        tokenizer = load_pruned_tokenizer(args.pruned_vocab)
+        print(f"  Tokenizer:    pruned, vocab_size={tokenizer.vocab_size:,} (from {args.pruned_vocab})")
+    else:
+        tokenizer = TikTokenHybridTokenizer()
+        print(f"  Tokenizer:    full cl100k_base, vocab_size={tokenizer.vocab_size:,}")
 
     print("=" * 72)
     print("FLUX Phase 2 — Supervised Fine-Tuning")
@@ -341,7 +415,7 @@ def main():
         return total_loss / max(n_batches, 1)
 
     # ── Training ──
-    ckpt_dir = DEFAULTS["checkpoint_dir"]
+    ckpt_dir = args.checkpoint_dir
     os.makedirs(ckpt_dir, exist_ok=True)
     model.train()
     best_val = float("inf")

@@ -136,13 +136,20 @@ class FluxProposer:
         return cls(generate_fn, **kw)
 
     @classmethod
-    def load(cls, checkpoint: Optional[str] = None):
+    def load(cls, checkpoint: Optional[str] = None, pruned_vocab: Optional[str] = None):
         """Load FLUX from the vendored `uchi.flux` package (the model now lives in
         this repo). Returns None if the checkpoint/deps are missing, so the loader
-        degrades gracefully to the decoder."""
+        degrades gracefully to the decoder.
+
+        *pruned_vocab* overrides the pruned-vocab tokenizer file
+        ``build_generate_fn`` auto-detects when a checkpoint's vocab_size
+        doesn't match the full tokenizer's (0.4.0 Item 0) -- pass it
+        explicitly only if a checkpoint used a pruned vocab other than the
+        one at the default path.
+        """
         try:
             from uchi.flux import build_generate_fn
-            return cls(build_generate_fn(checkpoint=checkpoint))
+            return cls(build_generate_fn(checkpoint=checkpoint, pruned_vocab=pruned_vocab))
         except Exception:
             return None
 

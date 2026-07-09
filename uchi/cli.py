@@ -126,7 +126,7 @@ def print_help():
 def main():
     parser = argparse.ArgumentParser(
         prog="uchi",
-        description="Uchi v0.3.0 — The Empirical Synthesis Engine. "
+        description="Uchi v0.4.0 — The Empirical Synthesis Engine. "
                     "Run the interactive dashboard or the REST API server.",
     )
     parser.add_argument("command", nargs="?", default="tui", choices=["tui", "serve"],

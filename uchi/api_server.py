@@ -1,7 +1,12 @@
+import json
+import time
+import uuid
 from contextlib import asynccontextmanager
+from typing import List
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from uchi.simple import Uchi
+from uchi.simple import Core
 import logging
 
 _router = None
@@ -10,7 +15,7 @@ _router = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _router
-    _router = Uchi()
+    _router = Core()
     yield
     if _router is not None:
         pass
@@ -113,6 +118,125 @@ async def ask_endpoint(request: AskRequest):
         traceback.print_exc()
         logging.error(f"API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ask/stream")
+async def ask_stream_endpoint(request: AskRequest):
+    """SSE endpoint streaming Uchi's Observable Monologue (0.4.0 Item
+    16.9): ``thought`` events as the pipeline actually produces them,
+    followed by one final ``speech`` event — Thought-vs-Speech
+    separation over Server-Sent Events, masking perceived latency by
+    showing the user what Uchi is doing rather than a blank wait.
+    """
+    if _router is None:
+        raise HTTPException(status_code=503, detail="Uchi is still starting up")
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    def event_generator():
+        from uchi.streaming import stream_ask
+        for event in stream_ask(_router, request.query.strip()):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OpenAIChatRequest(BaseModel):
+    model: str = "uchi"
+    messages: List[OpenAIMessage]
+    stream: bool = False
+    temperature: float = 0.0
+
+
+class OpenAIChoice(BaseModel):
+    index: int
+    message: OpenAIMessage
+    finish_reason: str = "stop"
+
+
+class OpenAIUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class OpenAIChatResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: List[OpenAIChoice]
+    usage: OpenAIUsage = OpenAIUsage()
+
+
+def _build_conversation_context(messages: List["OpenAIMessage"]) -> str:
+    """Format prior turns as conversation history, reusing EpisodicMemory's
+    own formatting (via a throwaway instance) rather than duplicating it.
+    Pairs up consecutive user/assistant messages; a dangling, unanswered
+    user message at the end (no assistant reply yet in *messages*) is
+    dropped, since get_context_string only ever renders complete turns.
+    """
+    from uchi.episodic_memory import EpisodicMemory
+    scratch = EpisodicMemory(max_history=max(1, len(messages)))
+    pending_user = None
+    for m in messages:
+        if m.role == "user":
+            pending_user = m.content
+        elif m.role == "assistant" and pending_user is not None:
+            scratch.add_interaction(pending_user, m.content)
+            pending_user = None
+    return scratch.get_context_string(n_turns=len(scratch.history))
+
+
+@app.post("/v1/chat/completions", response_model=OpenAIChatResponse)
+async def openai_chat_completions(request: OpenAIChatRequest):
+    """OpenAI-compatible chat completions endpoint (0.4.0 Item 16.1).
+
+    Lets Uchi plug directly into off-the-shelf OpenAI-API-compatible
+    frontends (Open-WebUI, etc.) with zero custom UI code. Streaming
+    (``stream=True``) isn't implemented on this endpoint — see the SSE
+    endpoint (Item 16.9) for streamed responses.
+
+    0.4.0 Item 17: the client's full ``messages`` history is threaded
+    through as conversation context — previously everything but the last
+    message was silently discarded. Built per-request from the client's
+    own supplied messages, never through ``_router.episodic_memory``:
+    ``_router`` is one global ``Core`` instance shared by every caller of
+    this server, so folding history through its shared memory would mix
+    different clients' conversations together.
+    """
+    if _router is None:
+        raise HTTPException(status_code=503, detail="Uchi is still starting up")
+
+    user_indices = [i for i, m in enumerate(request.messages) if m.role == "user"]
+    if not user_indices:
+        raise HTTPException(status_code=400, detail="At least one user message is required")
+    last_user_idx = user_indices[-1]
+    question = request.messages[last_user_idx].content
+    conversation_context = _build_conversation_context(request.messages[:last_user_idx])
+
+    try:
+        # ask() already normalizes its own output — don't double-normalize.
+        answer = _router.ask(question, conversation_context=conversation_context) or ""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return OpenAIChatResponse(
+        id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
+        created=int(time.time()),
+        model=request.model,
+        choices=[OpenAIChoice(index=0, message=OpenAIMessage(role="assistant", content=answer))],
+        usage=OpenAIUsage(
+            prompt_tokens=len(question.split()),
+            completion_tokens=len(answer.split()),
+            total_tokens=len(question.split()) + len(answer.split()),
+        ),
+    )
 
 
 @app.get("/health")

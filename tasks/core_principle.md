@@ -1,74 +1,93 @@
 # This Repo's North Star
 
-**One sentence:** Uchi is a phenomenal recall machine — a credibility-weighted
-context trie — fused with a grounded reasoner: a 256D vector-symbolic manifold
-that synthesizes answers to out-of-distribution questions it has never seen, by
-reasoning *forward from evidence retrieved from its own brain*, never inventing
-facts that aren't grounded there.
+**One sentence:** Uchi separates the capacity to generate plausible text (a
+small, from-scratch neural proposer) from the authority to assert it as true
+(an independent, auditable, strictly additive verification cascade) — bound
+together by a fully deterministic recall/credibility mechanism (ODUSP) and a
+factual-grounding requirement enforced by retrieval, so the system can
+synthesize novel answers without ever asserting a claim it cannot trace to
+evidence.
 
 ## The Core Intuition
 
-Two capabilities, one system, no LLM:
+Three components, cleanly separated by construction, not by convention:
 
-1. **Recall (the trie).** CTW-style multi-order blending over a prefix trie,
-   credibility-updated by MWU. When the answer has been seen, exact-match
-   retrieval returns it with calibrated confidence. This is already excellent
-   and must be preserved untouched.
+1. **ODUSP — the deterministic floor.** A credibility-weighted context trie
+   (CTW-style multi-order blending, MWU credibility updates). Exact/near
+   recall when it has seen something like this before, with calibrated
+   confidence that degrades automatically for patterns that stop predicting
+   reliably. Reused this session for a second purpose beyond recall —
+   recommending how much self-consistency compute a question's structural
+   shape warrants — without changing the trie mechanism itself.
 
-2. **Grounded generalization (the manifold).** When the trie backs off — i.e.
-   the question is out of distribution — the system must not collapse to a prior
-   (random) or free-generate (confabulate). Instead it: (a) encodes the query
-   into the 256D manifold, (b) retrieves the nearest *real* brain facts, (c)
-   binds query⊗evidence via HRR, and (d) lets the SSM policy/value heads
-   synthesize an answer **constrained to that retrieved evidence**. If no
-   evidence grounds an answer, Uchi abstains rather than invents.
+2. **FLUX — the proposer, never trusted alone.** A from-scratch SSM/attention
+   hybrid (`HybridTSSM`), trained via standard next-token cross-entropy
+   across four phases (pretrain → SFT → CoT → QAT). It generates candidate
+   answers. It is never the thing that decides whether an answer is true.
 
-The leash is the point: generalization is only trustworthy because every
-synthesized token is anchored to something actually in the brain. Reasoning
-forward from grounded evidence ≠ hallucination.
+3. **The verification cascade — the authority, layered additively.** A
+   deterministic word-overlap gate is the floor; an entailment classifier
+   and a numeric-plausibility check sit on top as strictly additive vetoes —
+   either can turn a pass into a reject, neither can turn a rejection into an
+   acceptance. This is the one non-negotiable invariant defended against
+   every proposed shortcut this project has considered: shared embeddings,
+   joint training, RL-tuning the proposer against the verifier's reward, and
+   a shared continuous latent space were all explored and rejected
+   specifically because each one would let the generator and its judge share
+   a failure mode.
 
-## What Changed From v0.3.0 (and why)
+If nothing retrieved grounds an answer, Uchi abstains. That is the leash:
+synthesis is trustworthy only because it's checked by something structurally
+incapable of agreeing with the proposer for the proposer's own reasons.
 
-The prior North Star claimed the trie "generates by extrapolation." The code
-proved it does pure exact-n-gram retrieval with backoff — no semantic
-extrapolation exists (`use_similarity_fallback=False` everywhere;
-`semantic_index.py` never wired in). That is why MMLU sat at 22.5% ≈ random on
-OOD questions. We reject the old assumption. The SSM is promoted from
-confidence-scaffold to **grounded co-generator**, governed by trie credibility:
-deep trie match → trie answers; trie backoff → retrieval-grounded SSM synthesis.
+## What Changed From the Prior North Star
+
+The previous version of this document (dated June 30) described a "256D
+vector-symbolic manifold" performing HRR/circular-convolution binding of
+query⊗evidence, and SSM "policy/value heads." None of that exists anywhere
+in the current codebase — verified by grepping `uchi/` for HRR, circular
+convolution, policy/value heads, and VSA: zero matches. It described a
+design direction that was apparently superseded before this document was
+updated to match. The actual architecture that's been built, defended, and
+adversarially stress-tested since is the proposer/oracle/ODUSP separation
+above — simpler than what the old document claimed, and considerably more
+tested (the "500m vs 330m" false-accept case that motivated the entailment
+classifier, the shared-latent-space/Langevin-dynamics debate, the
+reward-hacking analysis for a designed-but-unbuilt MCTS verifier cascade).
 
 ## State-of-the-Art Grounding
 
-- **CTW** — Willems et al. 1995. The recall trie (unchanged).
-- **MWU** — Arora, Hazan, Kale 2012. Credibility = depth-selection regret bound.
-- **kNN-LM** — Khandelwal et al. 2020. Interpolate parametric model with a
-  datastore, weighted by retrieval confidence. Uchi inverts the usual default:
-  trie (datastore) dominates in-distribution; SSM (parametric) takes over on
-  backoff. The mixing weight λ is a function of trie credibility / match depth.
-- **HRR / VSA** — Plate 1995. Circular-convolution binding of query⊗evidence;
-  enables grounded analogical synthesis (King−Man+Woman≈Queen) with zero
-  representational cost.
-- **Hard-negative contrastive learning** — the manifold learns to separate a
-  correct answer from its distractors (InfoNCE with option-level negatives).
-- **MCTS / UCB1** — Kocsis & Szepesvári 2006. Deliberation over candidates.
+- **CTW** — Willems, Shtarkov, Tjalkens 1995. ODUSP's recall mechanism,
+  unchanged.
+- **MWU** — Arora, Hazan, Kale 2012. ODUSP's credibility-update rule — a
+  regret-bounded depth-selection scheme, not a heuristic.
+- **NLI-based factual consistency checking** — Honovich et al. 2022
+  ("TRUE"), and the broader retrieval-augmented-generation-with-verification
+  line (Lewis et al. 2020). The entailment classifier's actual job: catching
+  semantic contradictions no word-overlap check can see.
+- **Mahalanobis OOD detection** — Lee et al. 2018. Gates the entailment
+  veto: an out-of-distribution input's classifier judgment is treated as "no
+  opinion," never trusted outright.
+- **Conservative/additive ensembling** — "any layer can reject, none can
+  override a rejection" is a precision-first ensemble design, not a novel
+  mechanism, chosen because a hallucination that slips through costs more
+  than an unnecessary abstention.
 
 ## Why This Beats Alternatives
 
-| Alternative | Why Rejected |
-|-------------|--------------|
-| Transformer LLM | 100B+ params, opaque, confabulates, GPU clusters |
-| Pure trie (v0.3.0) | Exact-match only → random on OOD; cannot synthesize |
-| Free parametric SSM generator | Confabulates; not grounded in the brain |
-| KNN retrieval alone | No synthesis; answer must exist verbatim |
-
-Uchi is the only design that recalls verbatim when it can AND synthesizes
-grounded answers when it can't — online, deterministic-where-possible, no GPU,
-and constitutionally unable to assert facts it cannot retrieve.
+| Alternative | Why rejected |
+|---|---|
+| Frontier pretrained LLM | Explicit, standing constraint: no LLMs. Also opaque and unauditable. |
+| End-to-end neural verifier, no deterministic floor | A network can be confidently wrong; nothing bounds it. First idea considered this project's verifier-upgrade work, rejected first. |
+| Joint/shared-weight proposer+verifier training, or a shared latent space | Reintroduces correlated failure modes — explored at length (frozen shared embeddings, Langevin dynamics over a joint space) and rejected each time for the same underlying reason. |
+| RL-tuning the proposer against the verifier's reward | Unbounded iterations to find and permanently bake in a verifier blind spot — the textbook reward-hacking failure mode. |
 
 ## Drift Check
 
-Every change must answer: **Does this improve grounded generalization without
-letting the system assert anything it cannot trace back to brain content?** A
-change that lets the SSM emit ungrounded tokens (confabulation) violates the
-North Star. A change that improves recall, retrieval quality, manifold
-discrimination, or the grounding/abstention gate aligns with it.
+Every change must answer: **does this preserve the separation between what
+generates and what has authority to assert truth?** A change that lets the
+verifier's agreement resurrect a deterministic rejection, or lets the
+proposer and verifier share weights, gradients, or a latent space, violates
+the North Star regardless of how it's framed. A change that adds a new,
+independent signal — another veto layer, a faster recall path, a cheaper
+search over already-verified candidates — aligns with it.

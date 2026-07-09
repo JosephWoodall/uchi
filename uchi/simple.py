@@ -1,12 +1,15 @@
-"""Uchi — single import, everything discoverable.
+"""Core — the raw single-instance Uchi engine.
 
-The ``Uchi`` class is the canonical public interface for the Uchi library.
-Import once, access everything: the generative brain, the sequence predictor,
-all analytical tools, and persistent brain state.
+``Core`` is the lightweight, single-instance engine: the generative brain, the
+sequence predictor, all analytical tools, and persistent brain state, with no
+orchestration layered on top. Most users should import ``Uchi`` from the top
+of the package instead (``from uchi import Uchi``), which wraps ``Core`` in
+the ``MetaUchi`` facade (see ``uchi/meta.py``). Import ``Core`` directly only
+if you want the raw, un-orchestrated node.
 
-    from uchi import Uchi
+    from uchi import Core
 
-    u = Uchi()
+    u = Core()
     u.learn("Q3 revenue was $4.2M, up 23% YoY.")
     print(u.ask("What was Q3 revenue growth?"))
 
@@ -15,18 +18,18 @@ Compounding analysis — the core value proposition
 ``ask()`` always returns a plain string.
 ``learn()`` always accepts a plain string.
 This means the output of any analysis is immediately learnable by any other
-``Uchi`` instance. Knowledge compounds across instances without any glue code:
+``Core`` instance. Knowledge compounds across instances without any glue code:
 
     # Instance 1: run classification on your dataset
-    u1 = Uchi()
+    u1 = Core()
     report = u1.ask("/classify", X=X_train, y=y_train)
 
     # Instance 2: treat that report as learned knowledge
-    u2 = Uchi()
+    u2 = Core()
     u2.learn(report)
     u2.ask("What accuracy did we achieve and what does it imply for Q4?")
 
-Each ``ask()`` result can feed the next ``learn()``. Pipelines of Uchi
+Each ``ask()`` result can feed the next ``learn()``. Pipelines of Core
 instances build compounding analytical context without any external
 orchestration layer.
 """
@@ -36,13 +39,18 @@ from __future__ import annotations
 import gzip
 import os
 import pickle
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .goal_state import GoalState
 
 
-class Uchi:
-    """Single entry-point for the Uchi toolkit.
+class Core:
+    """The raw, single-instance Uchi engine.
 
-    One import. Everything discoverable. Outputs always compound.
+    One import. Everything discoverable. Outputs always compound. This is
+    the unorchestrated node ``MetaUchi`` wraps by default — use it directly
+    only when you want lightweight, raw trie access with no facade on top.
 
     Parameters
     ----------
@@ -57,7 +65,7 @@ class Uchi:
     --------
     Knowledge & Q&A:
 
-        u = Uchi()
+        u = Core()
         u.learn("The boiling point of water is 100°C at sea level.")
         u.ask("At what temperature does water boil?")
 
@@ -67,7 +75,7 @@ class Uchi:
         u.ingest("report.pdf")               # requires pip install pdfminer.six
         u.ingest("events.csv", col="notes")  # specific CSV column
         # chainable
-        u = Uchi().ingest("docs/").ingest("data.csv").ingest("report.md")
+        u = Core().ingest("docs/").ingest("data.csv").ingest("report.md")
 
     Analytical tools via slash commands:
 
@@ -83,14 +91,9 @@ class Uchi:
         u.predictor.train(["a", "b", "c", "d"])
         u.predictor.predict_next(["b", "c"])   # → "d"
 
-    Toggle web search at any time:
-
-        u.web_search = True   # live web sourcing on knowledge gaps
-        u.web_search = False  # back to fully offline
-
     Escape hatch for power users:
 
-        u.router   # the underlying OmniRouter
+        u.pipeline   # the underlying GenerateAndGround pipeline
     """
 
     _DEFAULT_BRAIN = os.path.join(os.path.dirname(__file__), "data", "brain.uchi")
@@ -99,6 +102,8 @@ class Uchi:
         self,
         brain_path: Optional[str] = None,
         web_search: bool = False,
+        allowed_paths: Optional[list] = None,
+        denied_paths: Optional[list] = None,
     ) -> None:
         from .retrieval import SemanticIndex
         from .oracle import FactCheckOracle
@@ -107,7 +112,12 @@ class Uchi:
         from .skill_registry import SkillRegistry
 
         self.web_search_enabled = web_search
-        
+
+        # New: Enterprise Data Silos (0.4.0 Item 16.5) — application-layer
+        # allow/deny list enforced on ingest(). Inert unless configured.
+        from .data_silo import DataSilo
+        self.data_silo = DataSilo(allowed_paths=allowed_paths, denied_paths=denied_paths)
+
         # New Uchi Architecture Components
         from .brain_fetch import get_embeddings_path
         embed_path = get_embeddings_path()   # bundled -> cached -> download -> None
@@ -117,8 +127,35 @@ class Uchi:
             import numpy as np
             self.index = SemanticIndex({}, np.zeros((1, 1), dtype=np.float32))
             
-        self.oracle = FactCheckOracle()
-        
+        # 0.4.0 Item 17: entailment_checker defaults to None (unchanged
+        # oracle behavior) until a verifier checkpoint actually exists,
+        # auto-detected the same way the proposer's checkpoint is below.
+        # numeric_checker is NOT auto-fitted here -- fitting scans every
+        # passage in the index (130K+ in the premade brain), which is real,
+        # measurable cost that shouldn't be paid on every Core() startup
+        # without being asked for. See fit_numeric_plausibility_checker().
+        verifier_ckpt = os.path.join(
+            os.path.dirname(__file__), "flux", "checkpoints", "verifier", "verifier_best.pt"
+        )
+        entailment_checker = None
+        if os.path.exists(verifier_ckpt):
+            from .flux.verifier_model import EntailmentChecker
+            entailment_checker = EntailmentChecker.load(verifier_ckpt)
+        # Relational transitivity veto: pure deterministic code, no
+        # training/fitting needed, so active from the first ask() call
+        # (unlike entailment_checker/numeric_checker above).
+        from .relational_reasoning import RelationalTransitivityChecker
+        self.oracle = FactCheckOracle(
+            entailment_checker=entailment_checker,
+            relational_checker=RelationalTransitivityChecker(),
+        )
+
+        # 0.4.0 Item 17 flywheel: observes (never blocks) whether the next
+        # user turn contradicts Uchi's own prior answer, using the same
+        # entailment_checker above -- inert until one is actually loaded.
+        from .verifier_flywheel import VerifierFlywheel
+        self.verifier_flywheel = VerifierFlywheel(entailment_checker=entailment_checker)
+
         # Load the trained FLUX checkpoint (the Proposer). flux_best.pt is the
         # canonical artifact produced by scripts/train_all.sh; the per-phase
         # checkpoints are fallbacks in pipeline order. If none exist, the proposer
@@ -132,11 +169,46 @@ class Uchi:
             None,
         )
         self.proposer = FluxProposer.load(checkpoint=best_ckpt) if best_ckpt else None
-        
+
+        # Dynamic-N self-consistency voting (follow-on to Item 17): unlike
+        # the entailment/numeric checkers above, this needs no training --
+        # it's ODUSP's existing trie, active from the first ask() call,
+        # learning purely from this instance's own usage over time.
+        from .task_config_cache import TaskConfigCache
+        self.task_config_cache = TaskConfigCache()
+
+        # Proprioception (experimental, additive-only): FLUX's own sense of
+        # whether a question's topic/shape is familiar, fit offline via
+        # scripts/fit_proprioception.py -- NOT a substitute for the
+        # verifier (it never sees a generated claim, only the question
+        # beforehand; see tasks/proprioception_experiment.md for the full
+        # reasoning). Loads a second, standalone FLUX instance for hidden-
+        # state access since FluxProposer only exposes a generate_fn
+        # closure -- a real memory cost, only paid if the fitted artifact
+        # actually exists. Absent artifact or absent proposer -> silently
+        # inert, same graceful-degradation contract as everything else.
+        self.proprioception = None
+        self._proprioception_model = None
+        self._proprioception_tokenizer = None
+        proprioception_path = os.path.join(checkpoint_dir, "proprioception.pt")
+        if best_ckpt and os.path.exists(proprioception_path):
+            from .proprioception import FluxProprioception, load_flux_for_proprioception
+            self.proprioception = FluxProprioception.load(proprioception_path)
+            if self.proprioception is not None:
+                self._proprioception_model, self._proprioception_tokenizer = \
+                    load_flux_for_proprioception(best_ckpt)
+                if self._proprioception_model is None:
+                    self.proprioception = None  # fit exists but model failed to load -- stay inert, don't half-wire it
+
         self.pipeline = GenerateAndGround(
             index=self.index,
             oracle=self.oracle,
-            proposer=self.proposer
+            proposer=self.proposer,
+            web_search_enabled=self.web_search_enabled,
+            task_config_cache=self.task_config_cache,
+            proprioception=self.proprioception,
+            proprioception_model=self._proprioception_model,
+            proprioception_tokenizer=self._proprioception_tokenizer,
         )
         
         # New: Episodic Memory
@@ -154,8 +226,143 @@ class Uchi:
         from .swarm import SwarmSynthesizer
         self.swarm = SwarmSynthesizer(self.pipeline)
 
+        # New: Tool Calling (0.4.0 Item 4) — filesystem ops + Python scratchpad
+        # + (0.4.0 Item 11) web search, gated by the web_search flag above.
+        from .tool_calling import default_registry
+        self.tools = default_registry(enable_web_search=self.web_search_enabled)
+
+        # New: Goal State (0.4.0 Item 5) — set via start_goal(); inert by
+        # default so single-shot ask() calls are unaffected.
+        self.goal_state = None
+
+        # New: HitL Yielding (0.4.0 Item 10) — set when ask() pauses on a
+        # <|yield_to_user|> or an auto-escalated loop-guard block; the next
+        # ask() call is treated as the human's answer to it.
+        self.pending_yield = None
+
+        # New: Infinite Session Memory (0.4.0 Item 16.4) — auto-ingest any
+        # remembered user preferences from a prior session.
+        from .user_profile import load_profile
+        profile_text = load_profile()
+        if profile_text.strip():
+            self.learn(profile_text)
+
         # Advanced SDK sequence predictor (trie), constructed lazily on first use.
         self._predictor = None
+
+    def start_goal(self, goal: str) -> "GoalState":
+        """Begin tracking a multi-step task under *goal*.
+
+        While active, every tool call dispatched during ``ask()`` is
+        recorded into the returned ``GoalState`` and compacted once the
+        raw log grows past the threshold; ``goal_state.context_string()``
+        is folded into subsequent ``ask()`` calls so the task never loses
+        the original intent, however many steps it takes.
+        """
+        from .goal_state import GoalState
+        self.goal_state = GoalState(goal=goal)
+        return self.goal_state
+
+    def end_goal(self) -> None:
+        """Stop tracking the active goal (subsequent ask() calls stop
+        injecting goal context / recording tool calls into it)."""
+        self.goal_state = None
+
+    def learn_tools(self, path: str) -> list:
+        """Parse *path* and register every top-level Python function as a
+        tool callable via ``<|tool_call|>`` — no source changes to Uchi
+        itself required. Each function's docstring and signature are also
+        ingested into the knowledge index, so they're discoverable the
+        same way any other learned fact is.
+        """
+        from .tool_learning import learn_tools as _learn_tools
+        learned = _learn_tools(path, self.tools)
+        for t in learned:
+            self.learn(t.as_knowledge())
+        return learned
+
+    def checkpoint(self, path: str) -> None:
+        """Save the active task state (goal state, tool log, loop-guard
+        penalties, pending HitL yield, episodic memory) to *path* so it
+        can be restored later with ``resume()``. Model weights and the
+        semantic index aren't re-serialized — they're already
+        reproducible from the ``brain.uchi`` file and FLUX checkpoint
+        this instance was constructed from.
+        """
+        from .checkpoint import save
+        save(self, path)
+
+    def resume(self, path: str) -> None:
+        """Restore task state saved by ``checkpoint(path)`` onto this
+        instance, in place — picks a paused task back up where it left
+        off rather than starting over."""
+        from .checkpoint import load_into
+        load_into(self, path)
+
+    def distill_and_learn(self):
+        """On task success, extract the active goal state's successful
+        tool-call sequence (errors and dead-ends were never recorded in
+        it to begin with) and compile it into a reusable Macro (0.4.0
+        Item 13): registered as a fast-path tool so a similar goal next
+        time replays it in one call instead of reasoning step-by-step,
+        ingested into the knowledge index so its existence is
+        permanently discoverable, and persisted to ``.uchi/macros/`` so
+        it survives across sessions. Returns the ``Macro``, or ``None``
+        if there's no active goal or nothing successful was recorded.
+        """
+        if self.goal_state is None:
+            return None
+        from .macro import distill, register_macro_tool, save_macro
+        macro = distill(self.goal_state)
+        if macro is None:
+            return None
+        register_macro_tool(macro, self.tools)
+        self.learn(macro.as_knowledge())
+        save_macro(macro)
+        return macro
+
+    def export_skill(self, name: str, out_dir: str = ".") -> str:
+        """Export skill *name* as a shareable ``<name>.uchi_skill`` file
+        (0.4.0 Item 16.3) — the community-sharing half of Procedural
+        Memory. Same markdown+frontmatter format skills already use, so
+        nothing new to parse on the receiving end."""
+        from .skill_sharing import export_skill as _export_skill
+        return _export_skill(name, out_dir=out_dir)
+
+    def import_skill(self, path: str) -> Any:
+        """Import a ``.uchi_skill`` file (validated with the same
+        frontmatter parser used for built-in skills) and reload the
+        skill registry so it's usable immediately on this instance."""
+        from .skill_sharing import import_skill as _import_skill
+        skill = _import_skill(path)
+        self.skills.reload()
+        return skill
+
+    def remember_preference(self, text: str) -> None:
+        """Persist a user preference to ``.uchi/user_profile.md`` (0.4.0
+        Item 16.4) and learn it immediately in this session too — future
+        ``Core()`` instances auto-ingest it on startup, giving
+        cross-session memory with no vector database required."""
+        from .user_profile import remember_preference as _remember
+        _remember(text)
+        self.learn(text)
+
+    def fit_numeric_plausibility_checker(self, min_facts: int = 50) -> bool:
+        """Fit the oracle's numeric-plausibility veto layer (0.4.0 Item 17)
+        on real numbers pulled from this instance's own ingested passages.
+
+        Opt-in rather than automatic at construction time: scanning every
+        passage in the index (130K+ in the premade brain) is real,
+        measurable cost that shouldn't be paid on every ``Core()`` startup
+        without being asked for. Returns whether fitting actually happened
+        (False if there weren't enough real numeric facts yet).
+        """
+        from .numeric_plausibility import NumericPlausibilityChecker
+        checker = NumericPlausibilityChecker(min_facts=min_facts)
+        if checker.fit_from_passages(self.index.passages):
+            self.oracle.numeric_checker = checker
+            return True
+        return False
 
     @property
     def predictor(self):
@@ -194,46 +401,161 @@ class Uchi:
         except Exception as e:
             print(f"[-] Failed to learn: {e}")
 
-    def ask(self, question: str, callback=None, **data: Any) -> str:
+    def ask(
+        self,
+        question: str,
+        callback=None,
+        conversation_context: Optional[str] = None,
+        **data: Any,
+    ) -> str:
         """Ask the brain a question or invoke a tool skill.
 
         Natural-language questions route through the FLUX + Uchi verifier pipeline.
 
         Slash commands with ``**data`` keyword arguments invoke the
         corresponding analytical skill directly.
+
+        ``conversation_context`` (0.4.0 Item 17): an explicit, caller-supplied
+        conversation history string, formatted like
+        ``EpisodicMemory.get_context_string()``. When given, it's used
+        *instead of* this instance's own ``self.episodic_memory`` for this
+        call, and this call does not read from or write to
+        ``self.episodic_memory`` at all. This exists for callers managing
+        their own per-session history externally (the REST API's
+        ``/v1/chat/completions``, which receives the client's full message
+        array on every stateless HTTP call) — without it, every caller
+        sharing one ``Core`` instance (as the REST server does, via one
+        global router) would have their conversations mixed into the same
+        rolling history. Leave it ``None`` for the normal SDK/TUI case,
+        where one instance really is one ongoing conversation.
         """
         from .response_normalizer import normalize
         if question.startswith("/") and data:
             parts = question.lstrip("/").split(None, 1)
-            cmd = parts[0].lower()
+            # A bare "/" (or "/" plus only whitespace) leaves parts empty --
+            # lstrip("/") strips it to "", and "".split(None, 1) is [].
+            cmd = parts[0].lower() if parts else ""
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, data_kwargs=data, callback=callback) or ""
         elif question.startswith("/"):
             parts = question.lstrip("/").split(None, 1)
-            cmd = parts[0].lower()
+            cmd = parts[0].lower() if parts else ""
             extra_args = parts[1] if len(parts) > 1 else ""
             raw = self.skills.dispatch(cmd, extra_args, callback=callback) or ""
         else:
-            # Inject episodic memory context
-            context = self.episodic_memory.get_context_string(n_turns=3)
-            augmented_question = f"{context}\n\nQuestion: {question}" if context else question
-            
+            # Inject episodic memory context, plus the active goal state's
+            # context (goal + compacted notes) if start_goal() is active.
+            # If a HitL yield is pending (Item 10), this question IS the
+            # human's answer to it — fold it in and clear the pending yield.
+            # An explicit conversation_context (Item 17) overrides
+            # self.episodic_memory entirely for this call -- see this
+            # instance's own episodic_memory being shared across every
+            # caller of a single REST server as the reason this exists.
+            using_external_context = conversation_context is not None
+            context = conversation_context if using_external_context else self.episodic_memory.get_context_string(n_turns=3)
+            goal_context = self.goal_state.context_string() if self.goal_state else ""
+            pending_context = ""
+            if self.pending_yield:
+                pending_context = f"Uchi previously asked: {self.pending_yield!r}\nHuman answered: {question}"
+                self.pending_yield = None
+            combined_context = "\n\n".join(c for c in (pending_context, goal_context, context) if c)
+            augmented_question = f"{combined_context}\n\nQuestion: {question}" if combined_context else question
+
             # Route to Swarm by default
             raw = self.swarm.answer(augmented_question, callback=callback) or ""
-            
-            # Save to episodic memory
-            self.episodic_memory.add_interaction(question, raw)
-            
+
+            # Dispatch any <|tool_call_async|> calls concurrently first
+            # (Item 7), then any remaining sequential <|tool_call|> calls
+            # (Item 4), splicing results back before it's saved/returned.
+            # Recorded into the active goal state (if any) so long tasks
+            # compact instead of losing the plot.
+            from .tool_calling import run_async_tool_calls, run_with_tools
+            log_before = len(self.tools.log)
+            raw = run_async_tool_calls(raw, self.tools, goal_state=self.goal_state)
+            raw = run_with_tools(raw, self.tools, goal_state=self.goal_state)
+            new_entries = self.tools.log[log_before:]
+
+            # HitL Yielding (Item 10): an explicit <|yield_to_user|> marker,
+            # or a tool call auto-escalated because the loop guard (Item 6)
+            # blocked an exact repeat of a prior failure, pauses the
+            # response instead of returning it as a normal answer.
+            from .hitl import format_yield, is_blocked_by_loop_guard, parse_yield
+            explicit_yield = parse_yield(raw)
+            blocked = next((e for e in new_entries if is_blocked_by_loop_guard(e)), None)
+            if explicit_yield is not None:
+                self.pending_yield = explicit_yield.question
+                raw = format_yield(explicit_yield.question)
+            elif blocked is not None:
+                clarifying = (
+                    f"The '{blocked.name}' tool keeps failing with the same arguments "
+                    f"({blocked.args}). How would you like me to proceed?"
+                )
+                self.pending_yield = clarifying
+                raw = format_yield(clarifying)
+
+            # Save to episodic memory -- skipped when an external
+            # conversation_context was supplied, so a stateless caller
+            # managing its own history never writes into (or is mixed
+            # into) this instance's shared episodic memory.
+            if not using_external_context:
+                # 0.4.0 Item 17 flywheel: before this turn overwrites the
+                # history, check whether IT looks like a correction of the
+                # PRIOR turn's answer. Purely observational -- never blocks
+                # or alters this or the prior answer, just records a real,
+                # confirmed signal for later verifier retraining. No-op
+                # when no entailment checker is loaded.
+                if self.verifier_flywheel.is_active and self.episodic_memory.history:
+                    last_turn = self.episodic_memory.history[-1]
+                    self.verifier_flywheel.check_for_correction(
+                        last_turn["user"], last_turn["uchi"], question,
+                    )
+                self.episodic_memory.add_interaction(question, raw)
+
         return normalize(raw)
 
-    def ingest(self, path: str, col: Optional[str] = None) -> "Uchi":
+    def ask_friendly(self, question: str, callback=None, **data: Any) -> str:
+        """Like ``ask()``, but the final answer is rewritten in a warm,
+        conversational tone (0.4.0 Item 16.6) — verified against the
+        original dry answer with the same ``FactCheckOracle`` used
+        everywhere else in the pipeline, so the tone pass cannot
+        introduce a claim that wasn't already there. Falls back to the
+        original dry answer if the rewrite isn't grounded, the proposer
+        is unavailable, or it fails for any reason.
+        """
+        answer = self.ask(question, callback=callback, **data)
+        from .front_desk import friendly_tone_pass
+        return friendly_tone_pass(answer, self.proposer, self.oracle)
+
+    def ask_stream(self, question: str, **data: Any):
+        """Stream ``ask()``'s internal progress in real time (0.4.0 Item
+        16.9): yields ``{"type": "thought", "stage": ..., "message": ...}``
+        events as the pipeline actually produces them (Observable
+        Monologue), followed by one final ``{"type": "speech", "content":
+        ...}`` event with the answer — genuine Thought-vs-Speech
+        separation, not string-chunking after the fact.
+        """
+        from .streaming import stream_ask
+        yield from stream_ask(self, question, **data)
+
+    def export_telemetry(self, out_path: Optional[str] = None) -> list:
+        """Export the current tool-call trace as OpenTelemetry-shaped
+        spans (0.4.0 Item 16.8) — the same ``ToolRegistry.log`` the Glass
+        Brain (Item 14) renders, in a format most observability
+        pipelines (Datadog, Grafana Loki, LangSmith) can ingest directly
+        as structured logs. Appends JSON Lines to *out_path* if given;
+        always returns the span dicts.
+        """
+        from .observability import export_spans
+        return export_spans(self.tools.log, out_path=out_path)
+
+    def ingest(self, path: str, col: Optional[str] = None) -> "Core":
         """Load files or directories into the brain.
 
         Walks *path* recursively if it is a directory. Each file is read,
         converted to text, and streamed through ``learn()``. Returns ``self``
         so calls can be chained::
 
-            u = Uchi().ingest("docs/").ingest("reports/").ingest("events.csv")
+            u = Core().ingest("docs/").ingest("reports/").ingest("events.csv")
 
         Supported formats
         -----------------
@@ -254,9 +576,17 @@ class Uchi:
         col : str, optional
             For CSV files: the column name whose values are fed into the
             brain. When *None* every text-valued cell is concatenated.
+
+        Raises
+        ------
+        DataSiloViolation
+            If this instance was constructed with ``allowed_paths`` /
+            ``denied_paths`` (0.4.0 Item 16.5) and *path* falls outside
+            them.
         """
         import os
         path = os.path.expanduser(str(path))
+        self.data_silo.check(path)
         if os.path.isdir(path):
             for root, _, files in os.walk(path):
                 for fname in sorted(files):
