@@ -92,21 +92,106 @@ upstream dependency at all — they start in parallel, today.
       that compose: source streams a `{"repo": ...}`-shaped record,
       the decontamination gate filters it, downstream tokenization
       (`scripts/pretokenize.py`-style) consumes the filtered JSONL.
-      **Remaining, not code**: no full-scale corpus has actually been
-      pulled and written to disk yet — that's a compute/storage/time-bound
-      execution step (get the HF token authenticated, then run the CLIs
-      at real scale), not a design or implementation gap.
+      **Pulled to disk (2026-07-09)**: `.uchi/corpus/swe_gym_full.jsonl`
+      (all 2,438 curated SWE-Gym instances, 0 excluded) +
+      `.uchi/corpus/stack_v2_sample.jsonl` (14,991/15,000 files kept, 9
+      excluded by decontamination, **13,959 unique repos** — broad, not
+      concentrated — ~18.8M tokens, 77MB, real ~27min wall-clock).
+      User's explicit scope call: "a good representative sample, not the
+      full dataset" — this is that, not literally the full Stack v2/all
+      of SWE-Gym-Raw. Sufficient to start Item 2; not "pull more" unless a
+      future need specifically calls for it.
 
 ## 2. Model Compaction + Context Extension (Item 2) — depends on 1
 
-- [ ] Train from scratch on Item 1's decontaminated corpus.
-- [ ] Micro-benchmark attention FLOPs/memory at 512/1024/2048 tokens vs.
-      current 256 — pick max_seq_len where attention cost stays
-      subdominant to checkpointed SSM scan cost. Arithmetic, not a
-      research phase.
-- [ ] Re-initialize HiPPO A_fast/A_slow timescales proportional to the new
+- [ ] Train from scratch on Item 1's decontaminated corpus — **corpus
+      tokenized, training about to launch at a reduced scope**.
+      `scripts/pretokenize_0_5_0.py` mixed Item 1's local pull (~23.3M
+      tokens: 14,991 Stack v2 files + 2,438 SWE-Gym issue/diff pairs, both
+      already decontaminated) with FineWeb-Edu up to an 80M-token budget
+      (matching 0.4.0's Phase 1 scale), interleaved not block-concatenated.
+      Refactored `scripts/pretokenize.py`'s `build_bin` to accept a
+      pluggable `text_stream` so this didn't duplicate the tokenize/write
+      logic. **Run for real**: `uchi/flux/data_0_5_0/{train,val}.bin`,
+      80M/1M tokens, both verified (correct token counts, valid uint32
+      memmap).
+      **Two real, unexpected findings from launch smoke-testing, both
+      fixed in `train_v2.py`, not just discovered**:
+      (1) OOM at `micro_batch=2, seq_len=1024` with the *full* 12-layer
+      model — the seq_len benchmark's isolated single-layer measurements
+      didn't capture whole-model memory pressure. Fixed by running with
+      `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (the OOM error's
+      own suggestion) rather than dropping to `micro_batch=1` (confirmed
+      working but ~40% slower).
+      (2) **A pre-existing 10× throughput-logging bug**: `tok_per_sec`
+      always multiplied token count by `log_interval` (10), but the very
+      first log line (step 0) only spans 1 real step, not 10 — so every
+      run's first printed rate was ~10× inflated (a "7,655 tok/s" step 0
+      reading was actually ~744 tok/s once measured honestly). Fixed by
+      tracking `steps_since_log` explicitly instead of assuming
+      `log_interval` always applies. This changed the real plan: original
+      scope (matching 0.4.0's ~491M total training tokens) would have
+      taken **~7.6 days** at the corrected ~750 tok/s, not the
+      hours-to-a-day originally estimated. Also found: **seq_len barely
+      affects this** (805 tok/s at 512 vs 744 at 1024, not the
+      near-2× you'd expect) — something closer to fixed per-step/
+      per-layer overhead (likely the sequential Python-loop scan's
+      kernel-launch cost under gradient checkpointing) dominates over
+      seq_len-scaling cost in this range, consistent with the seq_len
+      benchmark's own finding that the SSM scan (not attention) is what
+      dominates. User's call given this: keep seq_len=1024 (the context-
+      extension goal), scope down to **~20M tokens (~305 steps, ~7-8hrs)**
+      instead of a full 80M-token epoch (~30hrs) or the original ~7.6-day
+      plan. Added `--eval-interval`/`--checkpoint-interval` CLI overrides
+      to `train_v2.py` (previously hardcoded at 500/5000 — silently never
+      firing on any run shorter than that, meaning no `ckpt_best.pt` and
+      no mid-run validation signal) so this shorter run actually produces
+      periodic checkpoints and a monitorable val-loss curve.
+      **Launched** (2026-07-09, detached/nohup, survives independent of
+      any session): 305 steps, ~20M tokens, `--eval-interval 50
+      --checkpoint-interval 100`, checkpoints to
+      `uchi/flux/checkpoints/v050_phase1/` (not the shared production
+      `checkpoints/` dir — won't touch `flux_best.pt`). Log:
+      `.uchi/corpus/train_0_5_0_phase1.log`. Non-regression checkpoint
+      (next bullet) runs once this finishes.
+- [x] Micro-benchmark attention FLOPs/memory at 512/1024/2048 tokens vs.
+      current 256 — `scripts/benchmark_seq_len.py`, real hardware (RTX
+      5070), the actual `AttentionBlock`/`TSSMBlock` classes at the real
+      checkpoint's shape (d_model=768, 12 layers, 3 attention/9 SSM),
+      under the same `torch.utils.checkpoint` gradient-checkpointing path
+      training uses — not a theoretical FLOPs formula. **Result: attention
+      never gets close to dominant** at any tested seq_len (1.6% share at
+      256, 2.1% at 1024) — the checkpointed SSM scan's per-layer cost
+      dwarfs attention's throughout the range that fits in 12GB VRAM at
+      batch=4 (2048 OOMs outright). Recommendation: **1024** is the
+      largest candidate that both fits in memory and keeps attention
+      subdominant — 2048 needs a smaller batch or grad accumulation to
+      even test, separate from the attn-vs-ssm question.
+      **Real, unresolved finding surfaced by this benchmark, worth
+      flagging before Item 2's actual training run**: `ssm.py`'s
+      documented `UCHI_FUSE_SSM_SCAN=1` (torch.compile-fused scan, profiled
+      3.08× *forward-only* speedup in that module's own docstring)
+      measured **slower**, not faster, once wrapped in the same gradient
+      checkpointing training actually uses (88.92ms vs 63.71ms unfused at
+      256; 1055ms vs 294ms at 1024) — checkpointing recomputes the forward
+      during backward, and that recompute path likely isn't hitting
+      torch.compile's cached graph, paying a large compile-scale cost on
+      every step instead of once. Not investigated further here (out of
+      this bullet's "arithmetic, not a research phase" scope) — training
+      should default `UCHI_FUSE_SSM_SCAN` **off** until this is understood,
+      contrary to what the flag's own docstring would suggest.
+- [x] Re-initialize HiPPO A_fast/A_slow timescales proportional to the new
       max_seq_len (current 2–10 / 10–34 horizons are tuned for 256 tokens,
-      do not just reuse them).
+      do not just reuse them) — `SSMCell`/`TSSMBlock`/`HybridTSSM` gained
+      optional `a_fast_range`/`a_slow_range` constructor params (default
+      unchanged, `(0.0,2.0)`/`(2.0,3.5)`, so every existing caller and
+      loading an old checkpoint is unaffected). `train_v2.py` computes
+      them automatically from `--seq-len` (`scale = seq_len/256`,
+      `fast=(0, 2*scale)`, `slow=(2*scale, 3.5*scale)`) — keeps the SSM
+      state horizon covering the same ~13% fraction of context regardless
+      of seq_len. At seq_len=1024: fast≈(0,8), slow≈(8,14). Smoke-tested:
+      real forward pass with custom ranges, and default-unchanged
+      construction both verified working.
 - [ ] **Non-regression checkpoint**: MMLU/ARC/retrieval-accuracy suite
       against this model before it becomes the base for Items 6 and 8.
 

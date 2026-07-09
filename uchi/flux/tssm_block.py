@@ -4,15 +4,17 @@ from .ssm import SSMCell
 from .bitnet import BitLinear
 
 class TSSMBlock(nn.Module):
-    def __init__(self, d_model, d_state=32):
+    def __init__(self, d_model, d_state=32, a_fast_range=(0.0, 2.0), a_slow_range=(2.0, 3.5)):
         super().__init__()
         self.d_model = d_model
-        
+
         # In projection (using BitLinear)
         self.in_proj = BitLinear(d_model, d_model * 2, bias=False)
-        
-        # State Space Model cell
-        self.ssm = SSMCell(d_model, d_state)
+
+        # State Space Model cell -- a_fast_range/a_slow_range pass through to
+        # SSMCell's HiPPO init (see its docstring: default is tuned for
+        # max_seq_len=256, scale proportionally for a different context length).
+        self.ssm = SSMCell(d_model, d_state, a_fast_range=a_fast_range, a_slow_range=a_slow_range)
         
         # Out projection (using BitLinear)
         self.out_proj = BitLinear(d_model, d_model, bias=False)

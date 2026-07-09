@@ -20,7 +20,8 @@ class DualHead(nn.Module):
 
 
 class HybridTSSM(nn.Module):
-    def __init__(self, vocab_size, syntax_vocab_size, d_model=128, n_layers=20, d_state=32):
+    def __init__(self, vocab_size, syntax_vocab_size, d_model=128, n_layers=20, d_state=32,
+                 a_fast_range=(0.0, 2.0), a_slow_range=(2.0, 3.5)):
         super().__init__()
         # Full-rank embedding (Gap 2 fix: removes vocab→128→d_model rank bottleneck).
         # std=0.02 matches GPT-2 init — default Normal(0,1) gives logit σ≈32 which
@@ -31,8 +32,12 @@ class HybridTSSM(nn.Module):
         # Hybrid SSM+attention: every 4th layer is attention (i % 4 == 3)
         # Gap 3 fix: 5/20 = 25% attention density vs prior 3/20 = 15%
         # Positions: 3, 7, 11, 15, 19 — better long-range recall coverage
+        # a_fast_range/a_slow_range: TSSMBlock's HiPPO init, defaults tuned for
+        # max_seq_len=256 (see SSMCell's docstring) -- pass ranges scaled to a
+        # different max_seq_len when training at one (0.5.0 Item 2).
         self.layers = nn.ModuleList([
-            AttentionBlock(d_model, n_heads=8) if i % 4 == 3 else TSSMBlock(d_model, d_state)
+            AttentionBlock(d_model, n_heads=8) if i % 4 == 3
+            else TSSMBlock(d_model, d_state, a_fast_range=a_fast_range, a_slow_range=a_slow_range)
             for i in range(n_layers)
         ])
         self.norm_f = nn.LayerNorm(d_model)

@@ -58,9 +58,16 @@ def _text_stream(split_skip=0, split_take=None):
         yield row["text"]
 
 
-def build_bin(out_path, n_tokens, tok, split_skip=0, split_take=None, batch_docs=512,
-              pruned_vocab=None):
+def build_bin(out_path, n_tokens, tok, text_stream=None, split_skip=0, split_take=None,
+              batch_docs=512, pruned_vocab=None):
     """Tokenize until n_tokens are written to out_path as a uint32 memmap.
+
+    *text_stream*, if given, is any iterable of document strings -- lets a
+    caller (e.g. 0.5.0's ``pretokenize_0_5_0.py``, mixing in Item 1's local
+    corpus alongside FineWeb-Edu) supply its own source without duplicating
+    the tokenize/write logic here. Defaults to this module's own
+    ``_text_stream(split_skip, split_take)`` (FineWeb-Edu) for backward
+    compatibility with existing callers that don't pass one.
 
     *pruned_vocab*, if given (a `vocab_prune.PrunedVocab`), remaps each raw
     cl100k_base id through `old_to_new` (falling back to the UNK slot 0)
@@ -76,6 +83,9 @@ def build_bin(out_path, n_tokens, tok, split_skip=0, split_take=None, batch_docs
     eos = tok.eos_token_id
     shift = tok.n_special
     enc = tok._enc                                # raw tiktoken (batch, multithreaded)
+
+    if text_stream is None:
+        text_stream = _text_stream(split_skip, split_take)
 
     arr = np.memmap(out_path, dtype=np.uint32, mode="w+", shape=(n_tokens,))
     written = 0
@@ -101,7 +111,7 @@ def build_bin(out_path, n_tokens, tok, split_skip=0, split_take=None, batch_docs
                 arr[written] = eos
                 written += 1
 
-    for text in _text_stream(split_skip, split_take):
+    for text in text_stream:
         if not text or not text.strip():
             continue
         buf_texts.append(text)

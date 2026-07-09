@@ -160,7 +160,7 @@ class SSMCell(nn.Module):
     bandwidth pressure on the sequential scan.
     """
 
-    def __init__(self, d_model, d_state=32):
+    def __init__(self, d_model, d_state=32, a_fast_range=(0.0, 2.0), a_slow_range=(2.0, 3.5)):
         super().__init__()
         self.d_model = d_model
         self.d_state = d_state
@@ -170,12 +170,21 @@ class SSMCell(nn.Module):
         # Model drove A to -5 (softplus saturation, sigmoid_grad=0.007) within 100 steps
         # to get any memory, destroying all timescale structure and freezing parameters.
         #
-        # New ranges keep sigmoid_grad >= 0.05 (learnable) and bar_A in useful range:
+        # Default ranges (a_fast_range=(0,2.0), a_slow_range=(2.0,3.5)) keep
+        # sigmoid_grad >= 0.05 (learnable) and bar_A in useful range, TUNED FOR
+        # max_seq_len=256:
         #   fast: A in [0, -2.0] -> bar_A in [0.57, 0.90], horizon 2-10 steps
         #   slow: A in [-2.0, -3.5] -> bar_A in [0.90, 0.97], horizon 10-34 steps
-        # Long-range context (>34 steps) is handled by the 5 attention layers.
-        fast_init = -torch.linspace(0.0, 2.0, d_state).unsqueeze(0).expand(d_model, -1)
-        slow_init = -torch.linspace(2.0, 3.5, d_state).unsqueeze(0).expand(d_model, -1)
+        # Long-range context (beyond the slow horizon) is handled by the
+        # attention layers. 0.5.0 Item 2: a checkpoint trained at a
+        # different max_seq_len should pass ranges scaled proportionally
+        # (e.g. train_v2.py computes fast/slow ranges from --seq-len) --
+        # reusing the 256-token ranges at 1024 tokens would leave the SSM
+        # state horizon covering under 3% of the context instead of the
+        # ~13% it was tuned for, pushing far more long-range burden onto
+        # the attention layers than they were sized for.
+        fast_init = -torch.linspace(a_fast_range[0], a_fast_range[1], d_state).unsqueeze(0).expand(d_model, -1)
+        slow_init = -torch.linspace(a_slow_range[0], a_slow_range[1], d_state).unsqueeze(0).expand(d_model, -1)
         self.A_fast = nn.Parameter(fast_init.clone())
         self.A_slow = nn.Parameter(slow_init.clone())
 

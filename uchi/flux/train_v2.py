@@ -306,6 +306,14 @@ def main():
                              "Defaults to the shared checkpoints dir — override this for "
                              "proof/experimental runs so they don't overwrite production "
                              "checkpoints.")
+    parser.add_argument("--eval-interval", type=int, default=DEFAULTS["eval_interval"],
+                        help="Validate every N steps. DEFAULTS' 500 silently never fires "
+                             "(no ckpt_best.pt, no mid-run val-loss signal) on a run shorter "
+                             "than that -- lower this for a short run you want to monitor.")
+    parser.add_argument("--checkpoint-interval", type=int, default=DEFAULTS["checkpoint_interval"],
+                        help="Save a periodic checkpoint every N steps (independent of "
+                             "ckpt_best.pt/ckpt_final.pt). Same 'silently never fires on a "
+                             "short run' caveat as --eval-interval.")
     args = parser.parse_args()
 
     # Derived config
@@ -349,6 +357,19 @@ def main():
         print(f"  Vocab size:   {tokenizer.vocab_size:,} (full cl100k_base)")
 
     # ── Model ──
+    # 0.5.0 Item 2: HiPPO A_fast/A_slow ranges scaled proportionally to
+    # --seq-len (SSMCell's default ranges are tuned for max_seq_len=256 --
+    # see its docstring). Keeps the SSM state horizon covering the same
+    # ~13% fraction of context regardless of seq_len, instead of covering
+    # a shrinking fraction as seq_len grows past what 256-token tuning
+    # ever accounted for.
+    seq_len_scale = seq_len / 256.0
+    a_fast_range = (0.0, 2.0 * seq_len_scale)
+    a_slow_range = (2.0 * seq_len_scale, 3.5 * seq_len_scale)
+    if seq_len_scale != 1.0:
+        print(f"  HiPPO ranges: fast={a_fast_range}, slow={a_slow_range} "
+              f"(scaled {seq_len_scale:.2f}x from the 256-token default)")
+
     from uchi.flux.model import HybridTSSM
     model = HybridTSSM(
         vocab_size=tokenizer.vocab_size,
@@ -356,6 +377,8 @@ def main():
         d_model=args.d_model,
         n_layers=args.n_layers,
         d_state=args.d_state,
+        a_fast_range=a_fast_range,
+        a_slow_range=a_slow_range,
     )
     # Phase 1: ternary OFF — prove convergence in full precision first
     model.set_quantization(False)
@@ -418,6 +441,7 @@ def main():
     ema_loss = None
     ema_alpha = 0.02  # smoothing factor for logging
     t0 = time.time()
+    steps_since_log = 0
     step = start_step
 
     print(f"\n  Starting training from step {step} ...\n")
@@ -460,15 +484,27 @@ def main():
             ema_loss = loss_accum
         else:
             ema_loss = ema_alpha * loss_accum + (1.0 - ema_alpha) * ema_loss
+        steps_since_log += 1
 
         # ── Logging ──
         if step % DEFAULTS["log_interval"] == 0:
             t1 = time.time()
             dt = t1 - t0
             t0 = t1
-            # dt spans log_interval optimizer steps, so count all their tokens
-            # (prior code divided ONE step's tokens by ten steps' time → 10× low).
-            tok_per_sec = (eff_batch * seq_len * DEFAULTS["log_interval"]) / max(dt, 1e-6)
+            # dt spans `steps_since_log` optimizer steps, not always
+            # log_interval -- the first log line (step==0) only spans ONE
+            # step (t0 was set right before the loop started), not
+            # log_interval of them. Hardcoding log_interval here inflated
+            # that first printed tok/s by ~log_interval× (found live,
+            # 0.5.0 Item 2: a run that looked like it was doing ~7,500
+            # tok/s at step 0 was actually doing ~750 tok/s once step 10's
+            # honestly-timed number came in -- same "divide by the wrong
+            # step count" bug class the comment above used to warn about,
+            # just the mirror-image mistake). Every log line AFTER the
+            # first really does span exactly log_interval steps, so this
+            # only changes step 0's number, not steady-state ones.
+            tok_per_sec = (eff_batch * seq_len * steps_since_log) / max(dt, 1e-6)
+            steps_since_log = 0
             ppl = math.exp(min(ema_loss, 20.0))
             print(
                 f"  Step {step:05d}/{max_steps} │ "
@@ -480,7 +516,7 @@ def main():
             )
 
         # ── Validation ──
-        if step > 0 and step % DEFAULTS["eval_interval"] == 0:
+        if step > 0 and step % args.eval_interval == 0:
             val_loss, val_ppl = evaluate(
                 model, val_iter,
                 DEFAULTS["eval_steps"], device, dtype, amp_ctx,
@@ -500,7 +536,7 @@ def main():
                 )
 
         # ── Periodic checkpoint ──
-        if step > 0 and step % DEFAULTS["checkpoint_interval"] == 0:
+        if step > 0 and step % args.checkpoint_interval == 0:
             save_checkpoint(
                 raw_model, optimizer, step, best_val_loss,
                 os.path.join(ckpt_dir, "ckpt_latest.pt"),
