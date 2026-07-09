@@ -503,14 +503,18 @@ suite: 353 passing.
       `Core()` instance and ran a live `ask()` end-to-end successfully.
       Full test suite re-run after promotion: 346 passing, unaffected.
 
-## 3. Benchmarking — real, unstarted work, not a formality
+## 3. Benchmarking — DEFERRED TO 0.5.0, out of scope for this release
 
-- [ ] Zero-regression vs. v0.3.0 (MMLU/SWE-bench through `MetaUchi`) —
-      named 0.4.0 exit criterion, never run
-- [ ] Web Navigation Baseline — named exit criterion, never run this
-      entire session
-- [ ] Trustworthiness benchmark (SQuAD 2.0) on the new model — the real
-      release gate per this project's own doctrine, not MMLU/SWE-bench
+**Explicit user decision, not an oversight**: benchmark scores are not a
+gate for this release. Full stop — do not run these, do not treat them
+as blocking anything below, do not revisit this without the user
+raising it again. Revisit as real work in the 0.5.0 cycle instead.
+
+- [~] ~~Zero-regression vs. v0.3.0 (MMLU/SWE-bench through `MetaUchi`)~~
+      — deferred to 0.5.0
+- [~] ~~Web Navigation Baseline~~ — deferred to 0.5.0
+- [~] ~~Trustworthiness benchmark (SQuAD 2.0) on the new model~~ —
+      deferred to 0.5.0
 - [x] Resume the PyPI-vs-local-branch parity check — **done, clean.**
       Published `uchi-python` 0.3.0 matches local `pyproject.toml`'s
       version. Downloaded the real wheel, compared file lists and diffs
@@ -615,8 +619,20 @@ suite: 353 passing.
         missed contradiction given the additive-only design (costs an
         unnecessary abstention, not a wrong acceptance), but worth
         tracking across the remaining epochs.
-      - Epochs 1-3 pacing: ~4h25m, ~4h24m, ~5h01m — consistent, no
-        stalls (each independently confirmed via utime/network checks
+      - Epoch 4: **regressed — 4/8 real contradictions caught (50%), 75%
+        overall accuracy**, even though `verifier_best.pt` improved by
+        the training script's own validation-loss metric (which is
+        computed on held-out MNLI/SNLI/multihop, not this adversarial
+        set). The epoch-3 false positive ("drug reduced symptoms") is
+        now correctly resolved, but two previously-correct catches
+        (population figure, battery duration) are now missed. Real,
+        non-monotonic finding, not an error in the check — "best by
+        validation loss" doesn't guarantee "best on the specific hard
+        cases this validation set targets." Not a reason to stop early;
+        2 epochs remain and epoch 3 already showed real improvement is
+        possible.
+      - Epochs 1-4 pacing: ~4h25m, ~4h24m, ~5h01m, ~5h00m — consistent,
+        no stalls (each independently confirmed via utime/network checks
         when timing looked off).
       **Once all 6 epochs done**: recalibrate the OOD threshold against
       real validation data (the reused default of 3.0 was confirmed
@@ -831,12 +847,13 @@ cycle kept producing and kept getting corrected out of.
 
 ## 6. Documentation — real updates once the model actually changes
 
-**Split into two genuinely different things, only one of which needs to
-wait**: performance claims (parameter count, benchmark numbers) depend on
-validated results and correctly stay blocked; architectural description
-(what components exist, how they interact) is just a factual account of
-what's built and doesn't depend on benchmark results at all — done now,
-GPU-independent, while the verifier retrains.
+**Benchmarking is now out of scope for this release (see Section 3) —
+this changes what the "~116M" update is blocked on.** Parameter count is
+a factual property of the checkpoint, not a benchmark-derived claim; it
+only needs the model to actually be the promoted, live default (already
+true) and the verifier to pass its own validation (still in progress) —
+it does NOT need zero-regression numbers that aren't being collected
+this cycle.
 
 - [x] **`docs/architecture.md` rewritten** to actually describe the
       current system, not v0.3.0's. Added: the full verification cascade
@@ -855,22 +872,31 @@ GPU-independent, while the verifier retrains.
       decomposition + FLUX's CoT-trained `think=True` path). Verified
       `SwarmSynthesizer`'s decomposition-gating claim directly against
       `swarm.py`/`iq_router.py` before writing it, not assumed.
-      Deliberately left the "~116M" parameter mentions untouched — that's
-      the performance-claim half, still correctly blocked on validated
-      benchmarks.
+      Deliberately left the "~116M" parameter mentions untouched at the
+      time — see below for why that's now unblocked.
 - [ ] README/docs currently describe FLUX as "~116M-class" throughout —
-      that's v0.3.0. Update once the new (64M, pruned-vocab) model is
-      validated and promoted, not before
+      that's v0.3.0. **Update once the verifier passes validation**, not
+      once benchmarks pass (there are none this cycle) — this is a
+      factual parameter-count correction (64M, pruned-vocab), not a
+      performance claim
 - [ ] Re-check the "How It Connects" diagram still matches reality
 
-## 7. Release readiness — one full pass, not the individual pieces checked ad hoc
+## 7. Release readiness — DEFERRED TO 0.5.0, out of scope for this release
 
-- [ ] Run the full `.agents/skills/release_readiness/SKILL.md` checklist
-      end-to-end against the finished, promoted model
+**Explicit user decision, not an oversight.** Do not run the full
+release-readiness checklist for this release; revisit in 0.5.0.
+
+- [~] ~~Run the full `.agents/skills/release_readiness/SKILL.md` checklist~~
+      — deferred to 0.5.0
 - [ ] Item 16 bonus objectives remain explicitly non-blocking — ship
       whatever fraction is done, don't gate on the rest
 
 ## 8. Release commit
+
+**Real gate for this release, now that benchmarking and full release
+readiness are deferred**: verifier passes its own adversarial
+validation + full test suite passes + documentation accurate. That's
+it — not zero-regression numbers, not the full readiness checklist.
 
 - [ ] Prepare the release commit
 - [ ] **Do not push or merge to main without explicit confirmation** —
