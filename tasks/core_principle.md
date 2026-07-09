@@ -82,6 +82,23 @@ reward-hacking analysis for a designed-but-unbuilt MCTS verifier cascade).
 | Joint/shared-weight proposer+verifier training, or a shared latent space | Reintroduces correlated failure modes — explored at length (frozen shared embeddings, Langevin dynamics over a joint space) and rejected each time for the same underlying reason. |
 | RL-tuning the proposer against the verifier's reward | Unbounded iterations to find and permanently bake in a verifier blind spot — the textbook reward-hacking failure mode. |
 
+## 0.5.0 Clarification: Execution-Verified Self-Play Is Not the Rejected RL Path
+
+0.5.0's Item 6 trains FLUX with GRPO against a reward signal — on its face,
+the same shape as the "RL-tuning the proposer against the verifier's
+reward" row rejected above. It is not the same thing. The rejected
+alternative was tuning FLUX against the **oracle cascade's opinion** — a
+judgment call by a network/heuristic stack that can itself be gamed,
+producing exactly the shared-failure-mode problem this document exists to
+prevent. Item 6's reward is a sandboxed test suite actually passing or
+failing — ground truth external to any model in this system, not an
+opinion any component here renders. Optimizing against real execution
+outcomes doesn't let the proposer learn the verifier's blind spots, because
+there is no verifier in that loop to have blind spots. The invariant holds:
+FLUX still never decides its own output is true — the sandbox's pass/fail
+is not FLUX's judgment, and the oracle cascade downstream still checks
+everything independently regardless of what Item 6 trained on.
+
 ## Drift Check
 
 Every change must answer: **does this preserve the separation between what
