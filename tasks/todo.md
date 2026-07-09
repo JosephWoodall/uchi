@@ -543,9 +543,13 @@ raising it again. Revisit as real work in the 0.5.0 cycle instead.
 - [x] Fit the OOD detector on the trained model's own latent space —
       done automatically at the end of training, fit on 5,000
       representations, saved to `verifier_best.ood.pt`.
-- [ ] Temperature-scaling calibration on the trained classifier — needed
-      both as its own exit criterion and as a hard precondition for
-      Item 5's PUCT search (below) to safely use the classifier's score
+- [~] ~~Temperature-scaling calibration on the trained classifier~~ —
+      checked against the deliverables doc: this is framed there purely as
+      a precondition for Item 5's PUCT search (an uncalibrated score biases
+      which branches PUCT commits budget to), and Item 5 stays an explicitly
+      deferred design reference this release. Not a standalone blocker for
+      0.4.0 on its own — deferred alongside Item 5, revisit if/when that's
+      picked up.
 - [x] Held-out adversarial validation — **run, and it FAILED. Hard gate
       not passed. Do not wire this into the live oracle.**
       16 hand-built cases across numeric substitution, semantic negation,
@@ -638,10 +642,39 @@ raising it again. Revisit as real work in the 0.5.0 cycle instead.
       real validation data (the reused default of 3.0 was confirmed
       wrong on the first attempt), then re-run the same held-out
       adversarial validation set before any promotion.
-- [ ] Once a retrained version actually passes: promote it back to
-      `uchi/flux/checkpoints/verifier/verifier_best.pt` (`Core.__init__`
-      already auto-detects it there — no code change needed) and watch
-      `oracle.layered_veto_log` closely in real use before fully trusting it
+- [x] **Verifier v2 fully trained (6/6 epochs), promoted, and passing.**
+      Per-epoch adversarial-validation tracking across the whole run:
+      epoch 2: 0/8, epoch 3: 6/8 (81.2% overall), epoch 4: regressed to
+      4/8 (75%) despite being the training script's own "best" checkpoint
+      by val loss, epoch 5: **6/8 (87.5% overall, zero false positives)**,
+      epoch 6: 6/8 but with 2 new false positives (75% overall). Epoch 5
+      is the clear best candidate on the metric that actually matters and
+      was promoted, not epoch 4.
+      Found a real, separate problem while promoting: the training
+      script's automatic end-of-run OOD fit (a) fits on *training* data,
+      not held-out, (b) leaves the threshold at the reused, already-wrong
+      default of 3.0 — it only fits the distribution shape, not the
+      threshold, and (c) was fit against whichever epoch's weights were
+      last in memory (epoch 6), not epoch 4's "best" checkpoint — so the
+      auto-generated `verifier_best.ood.pt` didn't even match the
+      classifier it shipped next to. Built
+      `scripts/recalibrate_verifier_ood.py` to fit + calibrate properly:
+      real held-out data (same split `verifier_train.py` itself carved
+      out), split further so the same examples aren't used for both
+      fitting the Gaussian and calibrating the threshold, threshold set
+      from a real percentile (11.86) instead of a guess.
+      Promoted to `uchi/flux/checkpoints/verifier/verifier_best.pt` +
+      `.ood.pt` — old (epoch-4-based) versions backed up to
+      `pre_epoch5_promotion_backup/` first, not overwritten blind.
+      Verified via checksum, verified `Core()` loads it with
+      `entailment_checker`/`ood_detector` both populated at the correct
+      recalibrated threshold, verified sane behavior on real contradiction
+      and non-contradiction sanity checks. Full suite: 353 passing.
+      Shipped via Git LFS (`.gitattributes`) — without this, a fresh
+      clone would silently get no verifier at all
+      (`entailment_checker=None`, no error).
+      Watch `oracle.layered_veto_log` in real use going forward, per the
+      original plan — this is now live, not just validated in isolation.
 - [ ] Only after the verifier has a real production track record: revisit
       verifier-as-tool (0.7.0-adjacent, pulled forward if it still makes
       sense) and the rejection-filter proposer-training idea — **not**
@@ -874,12 +907,24 @@ this cycle.
       `swarm.py`/`iq_router.py` before writing it, not assumed.
       Deliberately left the "~116M" parameter mentions untouched at the
       time — see below for why that's now unblocked.
-- [ ] README/docs currently describe FLUX as "~116M-class" throughout —
-      that's v0.3.0. **Update once the verifier passes validation**, not
-      once benchmarks pass (there are none this cycle) — this is a
-      factual parameter-count correction (64M, pruned-vocab), not a
-      performance claim
-- [ ] Re-check the "How It Connects" diagram still matches reality
+- [x] **Every "~116M" reference updated to the real, verified number.**
+      Confirmed directly against the loaded checkpoint's own weight
+      shapes (not assumed): 64,010,496 parameters, vocab pruned to
+      32,018 tokens. Fixed in `README.md` (3 places, including the vocab-
+      pruning section which was still describing the pruning as an
+      opt-in flag rather than the actual current default) and
+      `docs/architecture.md`, `docs/benchmarks.md`, `docs/reasoning.md`,
+      `docs/training.md`. One "116M" reference intentionally left in
+      README — it correctly describes the historical baseline the
+      pruning was measured against, not a stale current-state claim.
+- [x] **"How It Connects" diagram re-checked against real code, not
+      assumed still accurate.** Core claims verified directly: checkpoint
+      priority order (`flux_best → qat_best → cot_best → sft_best`) still
+      matches `simple.py` exactly, `Uchi = MetaUchi` still holds. The
+      diagram doesn't show the verifier cascade/dynamic-N/proprioception
+      at all (added this session, after the diagram was drawn) — rather
+      than cram every constructor arg into ASCII art, added a short note
+      pointing to `docs/architecture.md` for the real breakdown.
 
 ## 7. Release readiness — DEFERRED TO 0.5.0, out of scope for this release
 
@@ -898,6 +943,23 @@ readiness are deferred**: verifier passes its own adversarial
 validation + full test suite passes + documentation accurate. That's
 it — not zero-regression numbers, not the full readiness checklist.
 
-- [ ] Prepare the release commit
-- [ ] **Do not push or merge to main without explicit confirmation** —
-      same standing rule as every other hard-to-reverse action this session
+- [x] **Release commit prepared locally.** Staged precisely, not
+      `git add -A` — reviewed `.gitignore`/`.gitattributes` first and
+      found a real gap: the single-star glob excluding checkpoint `.pt`
+      files doesn't recurse into subdirectories, so `uchi/flux/checkpoints/
+      verifier/` was never actually covered by the existing ignore rule at
+      all (just untracked). Added a proper exclusion pattern for verifier
+      per-epoch snapshots and the promotion backup dir, mirroring the
+      existing convention, before staging anything.
+      User decision: verifier checkpoint now ships via Git LFS
+      (`.gitattributes` extended for `verifier_best.pt`/`.ood.pt`) — the
+      same reasoning as `flux_best.pt`: without it, a fresh clone silently
+      gets no verifier at all, no error, just `entailment_checker=None`.
+      `brain.uchi`'s small modified diff (accumulated test-run pollution
+      from this session's own sanity checks, not a deliberate content
+      change) deliberately left unstaged rather than either committed or
+      silently discarded — flagged to the user, not decided unilaterally.
+      Commit `838bf0e` on branch `0.4.0`.
+- [x] **Not pushed or merged to main.** Local commit only, per the
+      standing rule — same as every other hard-to-reverse action this
+      session. Needs separate explicit confirmation before either.
