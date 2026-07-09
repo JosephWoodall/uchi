@@ -216,7 +216,7 @@ class UchiApp(App):
 
     def on_mount(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write("[bold #7aa2f7]◆ Uchi v0.3.0[/bold #7aa2f7]  [dim]— FLUX proposes, Uchi verifies[/dim]")
+        log.write("[bold #7aa2f7]◆ Uchi v0.4.0[/bold #7aa2f7]  [dim]— FLUX proposes, Uchi verifies[/dim]")
         log.write("[dim]I ground every answer in what I actually know, and say so honestly when I don't.[/dim]")
         log.write("[dim]Type [bold]/help[/bold] for commands, or just start chatting.[/dim]\n")
         self.initialize_brain()

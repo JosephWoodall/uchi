@@ -15,7 +15,7 @@ Quick start
 the raw, un-orchestrated single-instance engine with nothing wrapping it.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .meta import MetaUchi as Uchi
 from .simple import Core
