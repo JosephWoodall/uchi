@@ -35,7 +35,7 @@ To understand Uchi, you must understand the fundamental flaw in modern AI: **LLM
 Here is the exhaustive breakdown of how the architecture achieves this:
 
 #### 1. The FLUX Proposer (The Creative Brain)
-* **What it is:** A custom-built, ultra-lightweight (116M parameter) neural network trained from scratch. 
+* **What it is:** A custom-built, ultra-lightweight (64M parameter, pruned-vocab) neural network trained from scratch. 
 * **The Philosophy:** *Small, fast, and creative.* Modern LLMs are massive because they try to memorize the entire internet. FLUX doesn't memorize trivia; it is trained strictly on *how to reason*, *how to code*, and *how to generalize*. It provides the raw, creative horsepower to tackle novel problems.
 
 #### 2. The Semantic Index / `brain.uchi` (The Factual Anchor)
@@ -72,7 +72,7 @@ Here is the exhaustive breakdown of how the architecture achieves this:
 
 When you type `uchi tui` and ask a question, you aren't just talking to a chatbot. You are kicking off a microscopic software engineering team. The Swarm breaks your question down, the Index pulls the facts, FLUX writes the code, the REPL executes it, the Devil's Advocate audits the logic, and finally, Uchi translates the mathematically proven result back into warm, conversational English. And now, if the answer requires taking an action instead of just reasoning about one, it can.
 
-> **On benchmarks, honestly:** FLUX is a small (~116M-class) from-scratch model. MMLU,
+> **On benchmarks, honestly:** FLUX is a small (~64M-class) from-scratch model. MMLU,
 > SWE-bench, and ARC-Challenge are tracked as a **dashboard** to watch the proposer
 > improve — at this scale they stay near baseline, and that is expected. The point
 > of the pairing is *trustworthiness* (grounded answers or honest abstention), not
@@ -142,6 +142,13 @@ scripts/train_all.sh ─► uchi/flux/checkpoints/flux_best.pt   ◄── the a
    uchi.Core for the raw     → live Glass Brain tool-call       /v1/chat/completions, /chat
    unorchestrated node         trace panel
 ```
+
+The `GenerateAndGround` box above is simplified — `oracle` is itself a layered,
+additive-only veto cascade (word-overlap → entailment classifier + OOD gate →
+numeric plausibility → relational transitivity), and `GenerateAndGround` also
+takes `task_config_cache` (dynamic-N self-consistency voting) and an optional
+`proprioception` component. See [`docs/architecture.md`](docs/architecture.md)
+for the full breakdown of what each layer actually checks.
 
 See [`docs/training.md`](docs/training.md) for the training pipeline and the `flux_best.pt` artifact.
 
@@ -329,15 +336,19 @@ Running `train_v2.py` directly without a pre-tokenized `--data-bin` hits its
 own streaming fallback instead (OpenWebText + Wikipedia + Code), ~10× slower
 but useful for a quick proof run without a separate tokenization step.
 
-**0.4.0 FLUX scale-up (in progress):** two structural changes to reclaim
+**0.4.0 FLUX scale-up (complete):** two structural changes to reclaim
 embedding-table capacity for reasoning layers, both real and measured before
-being folded into a full training run, not just proposed:
-- **Vocab pruning** — the full cl100k_base vocab (100,300 tokens) is ~66% of
-  the model's parameters at `d_model=768`. `scripts/build_pruned_vocab.py`
-  computes which tokens the actual training corpus uses and keeps the top
-  32,000 — measured at 97–99% real coverage depending on the sample, freeing
-  ~52M params. Opt in with `--pruned-vocab uchi/flux/checkpoints/pruned_vocab_32k.json`
-  on `train_v2.py` / `sft_train.py`.
+being folded into the full training run that produced the current default
+checkpoint — not proposed, not in progress, live:
+- **Vocab pruning** — the full cl100k_base vocab (100,300 tokens) was ~66% of
+  the prior 116M-class model's parameters. `scripts/build_pruned_vocab.py`
+  computed which tokens the actual training corpus uses and kept the top
+  32,018 — measured at 97–99% real coverage depending on the sample. The
+  current default checkpoint (`flux_best.pt`) is this pruned-vocab model:
+  64,010,496 parameters total, confirmed directly against the loaded
+  checkpoint's own weight shapes, not a target or an estimate. Still
+  available as an explicit flag (`--pruned-vocab uchi/flux/checkpoints/pruned_vocab_32k.json`
+  on `train_v2.py` / `sft_train.py`) for anyone retraining from scratch.
 - **Fused SSM scan** — `UCHI_FUSE_SSM_SCAN=1` kernel-fuses the sequential scan
   (same algorithm, not a switch to a parallel scan — that was tried before and
   reverted for measured memory-bandwidth reasons) via `torch.compile` over the

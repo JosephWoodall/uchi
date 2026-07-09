@@ -1,7 +1,7 @@
 # Training FLUX — Pipeline & Artifacts
 
 FLUX is the **Proposer** in the FLUX + Uchi architecture: a small, from-scratch
-SSM/attention hybrid language model (~116M parameters) that Uchi's verifier
+SSM/attention hybrid language model (~64M parameters, pruned-vocab) that Uchi's verifier
 gates. This page documents how it is trained and, importantly, **what file you
 end up with**.
 

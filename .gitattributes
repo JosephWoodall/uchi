@@ -2,6 +2,13 @@
 # Requires `git lfs install` once per machine (see README "Training FLUX" section).
 uchi/flux/checkpoints/flux_best.pt filter=lfs diff=lfs merge=lfs -text
 
+# Verifier (entailment classifier + OOD gate) weights, 0.4.0 Item 17 — same
+# reasoning as flux_best.pt: without this, a fresh clone silently degrades
+# to entailment_checker=None with no error, quietly missing the whole
+# layered-veto feature. Shipped so Core() has a working verifier out of the box.
+uchi/flux/checkpoints/verifier/verifier_best.pt filter=lfs diff=lfs merge=lfs -text
+uchi/flux/checkpoints/verifier/verifier_best.ood.pt filter=lfs diff=lfs merge=lfs -text
+
 # Shipped data files (premade brain embeddings, decoder weights). embeddings.pt
 # alone is 231MB — over GitHub's 100MB hard per-file limit without LFS.
 uchi/data/*.pt filter=lfs diff=lfs merge=lfs -text

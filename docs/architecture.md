@@ -9,7 +9,7 @@ Uchi is built on one core mathematical principle: **FLUX as the Proposer, Uchi a
 
 ## The Two-Engine System
 
-1. **The Proposer (FLUX):** A small (~116M) from-scratch SSM/attention model that
+1. **The Proposer (FLUX):** A small (~64M, pruned-vocab) from-scratch SSM/attention model that
    generates candidate answers and human-readable reasoning chains. It supplies
    out-of-distribution *generalization attempts* — bounded by its scale — that a
    pure retrieval system cannot. See [Training FLUX →](training.md).
