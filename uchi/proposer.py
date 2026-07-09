@@ -45,6 +45,17 @@ class Proposer(Protocol):
         """Decompose a complex question into a structural DSL Grid, or None."""
         ...
 
+    def propose_batch(self, question: str, evidence: list[str], n: int, think: bool = False) -> list[str]:
+        """OPTIONAL: generate n candidate answers for self-consistency voting.
+
+        A proposer without a genuinely batched path may just call `propose`
+        n times sequentially -- this method exists so callers that WANT the
+        vectorized speedup (0.5.0 Item 7's "dynamic-N doesn't cost N×
+        latency") can ask for it without caring which proposer they're
+        using; callers that don't care can keep looping `propose` directly.
+        """
+        ...
+
 
 # ── adapter 1: the from-scratch decoder (baseline, ships today) ────────────────
 class DecoderProposer:
@@ -56,6 +67,9 @@ class DecoderProposer:
 
     def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
         return self._d.generate(question, evidence)   # from-scratch decoder has no think-trace format
+
+    def propose_batch(self, question: str, evidence: list[str], n: int, think: bool = False) -> list[str]:
+        return [self.propose(question, evidence, think=think) for _ in range(max(n, 1))]
 
     def plan(self, question: str) -> Optional[str]:
         return None                      # the small decoder can't decompose
@@ -91,14 +105,25 @@ class FluxProposer:
              "into a structured DSL Grid (e.g., State(A)=1, Relation(A,B)=True). Use this grid as a scratchpad.\n\n"
              "Question: {q}\nDSL Grid:\n")
 
-    def __init__(self, generate_fn, max_answer_tokens: int = 64, max_plan_tokens: int = 128,
-                 max_think_tokens: int = 160) -> None:
+    def __init__(self, generate_fn, generate_batch_fn=None, max_answer_tokens: int = 64,
+                 max_plan_tokens: int = 128, max_think_tokens: int = 160) -> None:
         self._gen = generate_fn
+        # OPTIONAL (0.5.0 Item 7's last bullet) -- from build_batch_generate_fn,
+        # a second loaded model instance, not the same one generate_fn uses (see
+        # that factory's docstring on why they don't share weights). None by
+        # default, same graceful-degradation shape as every other optional
+        # signal in this codebase (proprioception, answerability, ...): a
+        # caller that doesn't explicitly ask for it via load(with_batch=True)
+        # pays no extra GPU memory for it.
+        self._gen_batch = generate_batch_fn
         self.max_answer_tokens = max_answer_tokens
         self.max_plan_tokens = max_plan_tokens
         self.max_think_tokens = max_think_tokens   # reasoning + answer needs more room than answer alone
 
-    def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
+    def _build_prompt(self, question: str, evidence: list[str], think: bool) -> tuple[str, int]:
+        """Shared prompt-building logic for `propose`/`propose_batch` -- kept
+        in one place so the batched path can't silently drift from the
+        exact prompt shape `propose` uses."""
         if think:
             # CoT trained on the RAW question with no wrapper text at all
             # (cot_distill.py: prompt_ids = [user_id] + encode_text(question)) —
@@ -113,6 +138,10 @@ class FluxProposer:
             ctx = "\n".join(evidence[:4]) if evidence else "(no context)"
             prompt = self._ANSWER.format(ctx=ctx, q=question)
         max_tokens = self.max_think_tokens if think else self.max_answer_tokens
+        return prompt, max_tokens
+
+    def propose(self, question: str, evidence: list[str], think: bool = False) -> str:
+        prompt, max_tokens = self._build_prompt(question, evidence, think)
         try:
             # `think=True` primes <|think|> instead of jumping straight to
             # <|assistant|>, eliciting CoT's trained reasoning-before-answering.
@@ -125,6 +154,24 @@ class FluxProposer:
         except Exception:
             return ""
 
+    def propose_batch(self, question: str, evidence: list[str], n: int, think: bool = False) -> list[str]:
+        """n candidates for the SAME question in one vectorized forward pass
+        when `generate_batch_fn` is available (0.5.0 Item 7's last bullet);
+        degrades to `n` sequential `propose()` calls otherwise -- so a
+        caller can always use this method without checking first, same
+        graceful-degradation shape as `plan()` returning None when the
+        proposer can't decompose.
+        """
+        if n <= 1:
+            return [self.propose(question, evidence, think=think)]
+        if self._gen_batch is None:
+            return [self.propose(question, evidence, think=think) for _ in range(n)]
+        prompt, max_tokens = self._build_prompt(question, evidence, think)
+        try:
+            return [(c or "").strip() for c in self._gen_batch(prompt, n, max_tokens, think=think)]
+        except Exception:
+            return [self.propose(question, evidence, think=think) for _ in range(n)]
+
     def plan(self, question: str) -> Optional[str]:
         try:
             return (self._gen(self._PLAN.format(q=question), self.max_plan_tokens) or "").strip()
@@ -136,7 +183,8 @@ class FluxProposer:
         return cls(generate_fn, **kw)
 
     @classmethod
-    def load(cls, checkpoint: Optional[str] = None, pruned_vocab: Optional[str] = None):
+    def load(cls, checkpoint: Optional[str] = None, pruned_vocab: Optional[str] = None,
+             with_batch: bool = False):
         """Load FLUX from the vendored `uchi.flux` package (the model now lives in
         this repo). Returns None if the checkpoint/deps are missing, so the loader
         degrades gracefully to the decoder.
@@ -146,12 +194,29 @@ class FluxProposer:
         doesn't match the full tokenizer's (0.4.0 Item 0) -- pass it
         explicitly only if a checkpoint used a pruned vocab other than the
         one at the default path.
+
+        *with_batch*: also load `build_batch_generate_fn`'s vectorized
+        N-candidates path (0.5.0 Item 7's last bullet), enabling
+        `propose_batch`'s real speedup instead of its sequential fallback.
+        Off by default -- it loads a SECOND model instance (see that
+        factory's docstring), so this is an explicit opt-in to the extra
+        GPU memory, not a silent default change for existing callers.
         """
         try:
             from uchi.flux import build_generate_fn
-            return cls(build_generate_fn(checkpoint=checkpoint, pruned_vocab=pruned_vocab))
+            gen_fn = build_generate_fn(checkpoint=checkpoint, pruned_vocab=pruned_vocab)
         except Exception:
             return None
+
+        gen_batch_fn = None
+        if with_batch:
+            try:
+                from uchi.flux import build_batch_generate_fn
+                gen_batch_fn = build_batch_generate_fn(checkpoint=checkpoint, pruned_vocab=pruned_vocab)
+            except Exception:
+                pass  # propose_batch degrades to sequential propose() calls
+
+        return cls(gen_fn, generate_batch_fn=gen_batch_fn)
 
 
 # ── factory: pick the best available proposer ─────────────────────────────────

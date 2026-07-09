@@ -38,6 +38,16 @@ reject; neither can ever turn a reject into a pass. Both default to
 passed in -- zero behavior change for anyone not using them, same graceful-
 degradation pattern as ``FluxProposer.load()`` returning ``None`` when no
 checkpoint exists.
+
+Code-verification veto (0.5.0 Item 7): ``sandbox_checker``
+(``uchi/execution_sandbox.py``'s ``SandboxVerificationChecker``) gates
+code patches through real test execution via ``is_patch_verified()`` --
+a separate method from ``is_grounded()``, since a patch plus
+FAIL_TO_PASS/PASS_TO_PASS test ids isn't a claim+evidence pair. Unlike
+the two layers above, this one fails CLOSED on its own internal errors
+(timeout, sandbox exception) rather than open -- see
+``SandboxVerificationChecker``'s docstring for why silence isn't
+innocence for a test suite the way it is for a classifier hiccup.
 """
 from __future__ import annotations
 
@@ -73,6 +83,7 @@ class FactCheckOracle:
         entailment_checker=None,
         numeric_checker=None,
         relational_checker=None,
+        sandbox_checker=None,
     ) -> None:
         self.min_support = min_support
         # Audit trail for the no-evidence relaxation below -- every time it
@@ -103,6 +114,15 @@ class FactCheckOracle:
         # Audit trail for the two layers above, same reasoning as
         # relaxed_pass_log -- every additional veto they fire gets logged.
         self.layered_veto_log: list[dict] = []
+        # 0.5.0 Item 7: code-verification veto (uchi/execution_sandbox.py's
+        # SandboxVerificationChecker). Not part of _passes_layered_vetoes --
+        # a patch + FAIL_TO_PASS/PASS_TO_PASS test ids isn't a claim+evidence
+        # pair, so it gets its own method (is_patch_verified) rather than
+        # being forced into the claim/evidence signature the other three
+        # layers share. None by default, same constructor symmetry as
+        # entailment_checker/numeric_checker.
+        self.sandbox_checker = sandbox_checker
+        self.sandbox_veto_log: list[dict] = []
 
     @staticmethod
     def _terms(text: str) -> list[str]:
@@ -223,3 +243,38 @@ class FactCheckOracle:
                 pass  # fail open -- additive layer, never the sole gate
 
         return True
+
+    def is_patch_verified(
+        self,
+        repo_path: str,
+        patch_text: str,
+        fail_to_pass: list[str],
+        pass_to_pass: list[str],
+        base_commit: str | None = None,
+    ) -> bool:
+        """True iff *patch_text* is confirmed, by real test execution, to
+        resolve the issue -- 0.5.0 Item 7's execution-gated cascade layer.
+
+        Requires ``sandbox_checker`` to be configured; raises rather than
+        silently passing or rejecting if it isn't, since there is no other
+        layer in this cascade with an opinion about code execution to fall
+        back on -- unlike entailment/numeric/relational, "not configured"
+        here means "never attempted," not "no objection."
+        """
+        if self.sandbox_checker is None:
+            raise RuntimeError(
+                "is_patch_verified called with no sandbox_checker configured -- "
+                "code correctness cannot be verified any other way in this cascade"
+            )
+        unverified = self.sandbox_checker.is_unverified(
+            repo_path=repo_path,
+            patch_text=patch_text,
+            fail_to_pass=fail_to_pass,
+            pass_to_pass=pass_to_pass,
+            base_commit=base_commit,
+        )
+        if unverified:
+            self.sandbox_veto_log.append({
+                "timestamp": time.time(), "repo_path": repo_path,
+            })
+        return not unverified

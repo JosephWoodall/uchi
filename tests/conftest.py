@@ -21,3 +21,19 @@ def no_flux_checkpoint():
     except Exception:
         # If the proposer module is unavailable for some reason, don't block tests.
         yield
+
+
+def pytest_collection_modifyitems(config, items):
+    """`eval` is declared in pyproject.toml as "excluded from normal CI", but
+    a marker declaration alone doesn't skip anything — pytest still collects
+    and runs marked tests unless something acts on the marker. This is that
+    something: skip `eval`-marked tests unless the run explicitly asked for
+    them via `-m eval` (or any `-m` expression mentioning `eval`).
+    """
+    markexpr = config.getoption("-m", default="")
+    if "eval" in markexpr:
+        return
+    skip_eval = pytest.mark.skip(reason="eval: needs live network — run explicitly with `pytest -m eval`")
+    for item in items:
+        if "eval" in item.keywords:
+            item.add_marker(skip_eval)

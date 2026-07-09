@@ -287,20 +287,39 @@ class GenerateAndGround:
                 if callback: callback("thinking", f"DSL Grid established:\n{dsl_grid[:60]}...")
                 base_prompt = f"Problem context (DSL Grid):\n{dsl_grid}\n\nQuestion: {question}"
 
+            # 0.5.0 Item 7's last bullet ("dynamic-N doesn't cost N× latency"):
+            # every branch's FIRST attempt uses the identical base_prompt (only
+            # a later Devil's Advocate/oracle-rejection reflection diverges
+            # per-branch), so that round -- and only that round -- can be
+            # generated for all n_votes branches in one vectorized call
+            # instead of n_votes sequential propose() calls. Falls back to
+            # None (the existing sequential path, unchanged) if the proposer
+            # has no batch path or the batch call itself fails; the reflection
+            # loop below is untouched either way.
+            first_round = None
+            if n_votes > 1:
+                try:
+                    first_round = self.proposer.propose_batch(base_prompt, ev_texts, n_votes, think=True)
+                except Exception:
+                    first_round = None
+
             for i in range(n_votes):
                 if callback: callback("thinking", f"FLUX Proposer generating candidate {i+1}/{n_votes} using DSL Grid...")
                 current_prompt = base_prompt
-                
+
                 for attempt in range(max_reflections + 1):
-                    try:
-                        # think=True elicits CoT's trained reasoning-before-answering
-                        # so production candidates surface the full trace, not just
-                        # a bare answer. (Devil's Advocate/reflection prompts below
-                        # stay plain — they ask for a short critique, not a proof.)
-                        candidate = self.proposer.propose(current_prompt, ev_texts, think=True)
-                    except Exception:
-                        candidate = ""
-                        
+                    if attempt == 0 and first_round is not None:
+                        candidate = first_round[i]
+                    else:
+                        try:
+                            # think=True elicits CoT's trained reasoning-before-answering
+                            # so production candidates surface the full trace, not just
+                            # a bare answer. (Devil's Advocate/reflection prompts below
+                            # stay plain — they ask for a short critique, not a proof.)
+                            candidate = self.proposer.propose(current_prompt, ev_texts, think=True)
+                        except Exception:
+                            candidate = ""
+
                     if not candidate or not candidate.strip():
                         break
 

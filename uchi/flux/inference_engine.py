@@ -80,28 +80,16 @@ class InferenceEngine:
         return self._metrics
 
 
-def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = None,
-                      greedy: bool = True, temperature: float = 0.7,
-                      pruned_vocab: Optional[str] = None):
-    """FLUX-as-Proposer seam for Uchi.
+def _load_flux_for_inference(checkpoint: Optional[str] = None, device: Optional[str] = None,
+                             pruned_vocab: Optional[str] = None):
+    """Shared checkpoint/architecture-matching logic for ``build_generate_fn``
+    and ``build_batch_generate_fn`` -- extracted so both factories load the
+    SAME checkpoint-matching logic without duplicating it, **not** so they
+    share one live model instance. Each factory call still loads its own
+    model onto the device; call whichever one your use case needs rather
+    than both if GPU memory is a concern.
 
-    Returns ``generate_fn(prompt: str, max_tokens: int) -> str`` that continues
-    ``prompt`` as a FLUX assistant turn. Uchi's Proposer owns the prompt (RAG
-    context + question); FLUX generates the grounded continuation, which Uchi's
-    fact-check oracle + answerability gate then verify. FLUX proposes; Uchi verifies.
-
-    Architecture is inferred from the checkpoint tensor shapes so it never drifts
-    from the trained weights (vocab_size + d_model from ``embedding.weight``,
-    ``n_layers`` by counting layer indices, ``d_state`` by trial load).
-
-    0.4.0 Item 0 (vocab pruning): if the checkpoint's inferred ``vocab_size``
-    doesn't match the full tokenizer's, this checkpoint was trained with a
-    pruned vocab (``train_v2.py``/``sft_train.py --pruned-vocab``) -- loading
-    it with the full tokenizer would produce out-of-range token IDs against
-    its smaller embedding table. Auto-detected and loaded from *pruned_vocab*
-    if given, else the known default path this repo's 0.4.0 retraining uses.
-    Raises with an actionable message rather than silently corrupting output
-    if neither tokenizer's size matches.
+    Returns ``(model, tokenizer, device, user_id, asst_id, think_id, stop_ids)``.
     """
     import os, re, torch
     from .model import HybridTSSM
@@ -180,6 +168,38 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
     asst_id = tokenizer.encode_special("<|assistant|>")
     think_id = tokenizer.encode_special("<|think|>")
     stop_ids = {eos, user_id, tokenizer.encode_special("<|end|>")}
+    return model, tokenizer, device, user_id, asst_id, think_id, stop_ids
+
+
+def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = None,
+                      greedy: bool = True, temperature: float = 0.7,
+                      pruned_vocab: Optional[str] = None):
+    """FLUX-as-Proposer seam for Uchi.
+
+    Returns ``generate_fn(prompt: str, max_tokens: int) -> str`` that continues
+    ``prompt`` as a FLUX assistant turn. Uchi's Proposer owns the prompt (RAG
+    context + question); FLUX generates the grounded continuation, which Uchi's
+    fact-check oracle + answerability gate then verify. FLUX proposes; Uchi verifies.
+
+    Architecture is inferred from the checkpoint tensor shapes so it never drifts
+    from the trained weights (vocab_size + d_model from ``embedding.weight``,
+    ``n_layers`` by counting layer indices, ``d_state`` by trial load).
+
+    0.4.0 Item 0 (vocab pruning): if the checkpoint's inferred ``vocab_size``
+    doesn't match the full tokenizer's, this checkpoint was trained with a
+    pruned vocab (``train_v2.py``/``sft_train.py --pruned-vocab``) -- loading
+    it with the full tokenizer would produce out-of-range token IDs against
+    its smaller embedding table. Auto-detected and loaded from *pruned_vocab*
+    if given, else the known default path this repo's 0.4.0 retraining uses.
+    Raises with an actionable message rather than silently corrupting output
+    if neither tokenizer's size matches.
+
+    See ``build_batch_generate_fn`` for the vectorized N-candidates-in-one-
+    forward-pass sibling (0.5.0 Item 7's last bullet).
+    """
+    model, tokenizer, device, user_id, asst_id, think_id, stop_ids = _load_flux_for_inference(
+        checkpoint, device, pruned_vocab,
+    )
 
     @torch.no_grad()
     def generate_fn(prompt: str, max_tokens: int = 64, think: bool = False,
@@ -219,3 +239,120 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
         return tokenizer.decode_text(out).strip()
 
     return generate_fn
+
+
+def build_batch_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = None,
+                            base_temperature: float = 0.7, temperature_spread: float = 0.3,
+                            pruned_vocab: Optional[str] = None):
+    """FLUX-as-Proposer **batched** seam: N diverse candidates for the same
+    prompt in one GPU forward pass, instead of N sequential
+    ``generate_fn`` calls.
+
+    Ports ``efficient_llm_training/src/parallel_thought.py``'s vectorized
+    batch-generation mechanism (the model's own batch dimension carries N
+    branches; one ``prefill`` + one ``decode_step`` loop advances all of
+    them at once) onto FLUX's actual ``prefill``/``decode_step`` API
+    (``uchi/flux/model.py``'s ``HybridTSSM`` -- confirmed batch-dimension-
+    generic throughout, same assumption ``parallel_thought.py``'s source
+    model relies on). Not ported: that source's grad-enabled log-prob
+    computation (REINFORCE-specific, not needed for inference-time
+    candidate generation) and its ``chunk_forward`` (a different
+    long-sequence workaround, unrelated to this bullet).
+
+    **0.5.0 Item 7's last bullet, "so dynamic-N doesn't cost N× latency":**
+    ``generate_and_ground.py``'s self-consistency ``n_votes`` loop
+    (``TaskConfigCache``-driven, up to 8) calls the single-candidate
+    ``generate_fn`` N times sequentially today -- wall-clock cost scales
+    linearly with N. This is the batched replacement for that first round.
+
+    **Real bug found and fixed by building this, not just a latency
+    win:** ``build_generate_fn`` defaults to ``greedy=True``, so N
+    sequential ``propose()`` calls against the *same* prompt were
+    producing N byte-identical strings -- self-consistency voting was
+    silently getting zero diversity from a greedy proposer, the "Plural
+    vote" logic in ``generate_and_ground.py`` had nothing to actually
+    vote between. Per-branch temperature spread (``torch.linspace`` across
+    branches, same mechanism ``parallel_thought.py`` uses) is what makes
+    N>1 genuinely explore different candidates; fixing that falls out of
+    fixing the latency rather than being a separate, bolted-on change.
+
+    Returns ``generate_batch_fn(prompt: str, n: int, max_tokens: int = 64,
+    think: bool = False, repetition_penalty: float = 1.3) -> list[str]``.
+
+    Loads its own model instance (see ``_load_flux_for_inference``'s
+    docstring) -- call this instead of, not in addition to,
+    ``build_generate_fn`` if a proposer only needs the batched path, to
+    avoid holding two copies of the model in GPU memory at once.
+    """
+    model, tokenizer, device, user_id, asst_id, think_id, stop_ids = _load_flux_for_inference(
+        checkpoint, device, pruned_vocab,
+    )
+    bpe_vocab_size = tokenizer.vocab_size
+
+    @torch.no_grad()
+    def generate_batch_fn(prompt: str, n: int, max_tokens: int = 64, think: bool = False,
+                          repetition_penalty: float = 1.3) -> List[str]:
+        if n < 1:
+            raise ValueError(f"n must be >= 1, got {n}")
+
+        lead_id = think_id if think else asst_id
+        base_ids = [user_id] + tokenizer.encode_text(prompt) + [lead_id]
+        x = torch.tensor([base_ids], device=device).long().repeat(n, 1)
+
+        # n=1: a fixed point at base_temperature, not torch.linspace(lo, hi, 1)
+        # -- linspace with steps=1 returns the *low* endpoint, not the
+        # center, which would silently shift a single-candidate call's
+        # temperature away from what the caller actually asked for.
+        temps = (
+            torch.tensor([base_temperature], device=device) if n == 1
+            else torch.linspace(
+                max(0.1, base_temperature - temperature_spread),
+                base_temperature + temperature_spread,
+                n, device=device,
+            )
+        )
+
+        logits, _, cache = model.prefill(x)
+        out: List[List[int]] = [[] for _ in range(n)]
+        done = [False] * n
+        recent = [list(base_ids) for _ in range(n)]
+
+        for _ in range(max_tokens):
+            nl = logits[:, -1, :].clone()  # (n, vocab)
+            if bpe_vocab_size < nl.size(-1):
+                nl[:, bpe_vocab_size:] = float("-inf")
+            if repetition_penalty != 1.0:
+                for b in range(n):
+                    if done[b]:
+                        continue
+                    for tok_id in set(recent[b][-64:]):
+                        nl[b, tok_id] /= repetition_penalty
+            nl = nl / temps.unsqueeze(1)
+            probs = F.softmax(nl, dim=-1)
+            nxt = torch.multinomial(probs, num_samples=1)  # (n, 1)
+
+            for b in range(n):
+                if done[b]:
+                    continue
+                tid = int(nxt[b, 0].item())
+                if tid in stop_ids:
+                    done[b] = True
+                    continue
+                out[b].append(tid)
+                recent[b].append(tid)
+
+            if all(done):
+                break
+            # Finished branches still advance through decode_step (fed their
+            # own stop token as input) rather than being masked out of the
+            # batch -- same no-early-exit-machinery simplification
+            # parallel_thought.py's source makes (its think() doesn't check
+            # for stop tokens at all, ever running the full max_length for
+            # every branch). Their output list is already frozen above, so
+            # this only costs a little wasted compute, never a correctness
+            # issue.
+            logits, _, cache = model.decode_step(nxt, cache)
+
+        return [tokenizer.decode_text(seq).strip() for seq in out]
+
+    return generate_batch_fn
