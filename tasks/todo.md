@@ -147,13 +147,19 @@ upstream dependency at all — they start in parallel, today.
       firing on any run shorter than that, meaning no `ckpt_best.pt` and
       no mid-run validation signal) so this shorter run actually produces
       periodic checkpoints and a monitorable val-loss curve.
-      **Launched** (2026-07-09, detached/nohup, survives independent of
-      any session): 305 steps, ~20M tokens, `--eval-interval 50
-      --checkpoint-interval 100`, checkpoints to
-      `uchi/flux/checkpoints/v050_phase1/` (not the shared production
-      `checkpoints/` dir — won't touch `flux_best.pt`). Log:
-      `.uchi/corpus/train_0_5_0_phase1.log`. Non-regression checkpoint
-      (next bullet) runs once this finishes.
+      **COMPLETE** (launched 2026-07-09 15:01, finished 22:25, ~7h24m):
+      305/305 steps, clean run, no crashes/NaN. Val PPL 1433.8 (step 50)
+      → **490.0** (step 300, best). Checkpoints in
+      `uchi/flux/checkpoints/v050_phase1/` (`ckpt_best.pt`/`ckpt_final.pt`
+      /`ckpt_latest.pt`) — isolated from production `flux_best.pt`, which
+      is untouched. Log: `.uchi/corpus/train_0_5_0_phase1.log`. User
+      explicitly said skip the non-regression-checkpoint bullet below and
+      continue the training pipeline instead — see Phase 2 note under
+      "Addendum" at the bottom of this file.
+      **Real bug found in the completion summary, not yet fixed**:
+      printed "305 steps in 0.1h" — obviously wrong (real time ~7.4h);
+      cosmetic only, doesn't affect the checkpoints or loss curve, low
+      priority.
 - [x] Micro-benchmark attention FLOPs/memory at 512/1024/2048 tokens vs.
       current 256 — `scripts/benchmark_seq_len.py`, real hardware (RTX
       5070), the actual `AttentionBlock`/`TSSMBlock` classes at the real
@@ -420,3 +426,45 @@ upstream dependency at all — they start in parallel, today.
 - [x] `tasks/core_principle.md` — added clarification that Item 6's GRPO
       reward (real test execution) is not the previously-rejected
       "RL-tune the proposer against the verifier's reward" failure mode.
+
+## Post-Item-2 FLUX pipeline phases (not separate 0.5.0 items, but real
+## prerequisites for Item 6 — see below for why)
+
+Item 6 (GRPO self-play) cannot run sensibly on a bare Phase 1 (pretrain-only)
+checkpoint: Phase 1's corpus is flat text, no `<|user|>`/`<|assistant|>`/
+`<|think|>` special-token structure at all — the model has never learned
+what those tokens mean. `agentic_repair.py`'s ReAct loop and
+`FluxProposer.propose(think=True)` both depend on that structure being
+trained in. 0.4.0's precedent: Phase 1 -> Phase 2 (SFT) -> Phase 3 (CoT) ->
+Phase 4 (QAT), chained. Continuing that chain for the new 0.5.0 Phase 1
+base, user's explicit direction ("move onto the next phase of training").
+
+- [ ] **Phase 2 (SFT)** — `uchi/flux/sft_train.py`, unmodified (0.4.0's
+      exact recipe: SQuAD 2.0 + Dolly-15K + CodeAlpaca + UltraChat-200K,
+      fair-budgeted, seq_len=512). Considered extending to seq_len=1024 to
+      match Item 2's context extension, decided against it: SQuAD/Dolly/
+      CodeAlpaca examples are capped at 300(context)+200(answer) tokens
+      regardless, so a longer window would mostly pad, not add signal —
+      the context-extension payoff matters more for CoT's longer reasoning
+      traces or later repo-context code tasks, not short-form QA/instruction
+      data. Smoke-tested first (200 examples): architecture loaded
+      correctly from the new Phase 1 checkpoint (d_model=768, n_layers=12,
+      d_state=64 auto-inferred), loss ~6.4-6.6 at start — consistent with
+      Phase 1's final ~6.2 train loss, confirms clean handoff.
+      **Launched** (2026-07-10, detached/nohup): full DEFAULTS scale
+      (50,000 max examples, 1 epoch), `--base
+      uchi/flux/checkpoints/v050_phase1/ckpt_best.pt`, checkpoints to
+      `uchi/flux/checkpoints/v050_phase2/`. Log:
+      `.uchi/corpus/train_0_5_0_phase2_sft.log`. **Known gap in this
+      script, accepted not fixed**: checkpoints only save at end-of-epoch
+      (no mid-run periodic save like Phase 1's `--checkpoint-interval` —
+      a crash partway through loses all progress). Low risk given Phase 1
+      ran clean, but worth adding if this becomes a repeated pattern.
+- [ ] Phase 3 (CoT distillation) — `uchi/flux/cot_distill.py`, not yet
+      started. Next after Phase 2 finishes and its checkpoint is sane.
+- [ ] Phase 4 (QAT) — `uchi/flux/qat_train.py`, not yet started. After
+      Phase 3.
+- [ ] Once Phases 2-4 land: decide whether/when to promote the result to
+      `flux_best.pt` (production), or keep it isolated in
+      `checkpoints/v050_phase*/` pending Item 6 self-play results first —
+      not yet decided, a real product decision, not an engineering one.
