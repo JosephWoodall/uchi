@@ -439,32 +439,89 @@ trained in. 0.4.0's precedent: Phase 1 -> Phase 2 (SFT) -> Phase 3 (CoT) ->
 Phase 4 (QAT), chained. Continuing that chain for the new 0.5.0 Phase 1
 base, user's explicit direction ("move onto the next phase of training").
 
-- [ ] **Phase 2 (SFT)** — `uchi/flux/sft_train.py`, unmodified (0.4.0's
+- [x] **Phase 2 (SFT)** — `uchi/flux/sft_train.py`, unmodified (0.4.0's
       exact recipe: SQuAD 2.0 + Dolly-15K + CodeAlpaca + UltraChat-200K,
-      fair-budgeted, seq_len=512). Considered extending to seq_len=1024 to
-      match Item 2's context extension, decided against it: SQuAD/Dolly/
-      CodeAlpaca examples are capped at 300(context)+200(answer) tokens
-      regardless, so a longer window would mostly pad, not add signal —
-      the context-extension payoff matters more for CoT's longer reasoning
-      traces or later repo-context code tasks, not short-form QA/instruction
-      data. Smoke-tested first (200 examples): architecture loaded
-      correctly from the new Phase 1 checkpoint (d_model=768, n_layers=12,
-      d_state=64 auto-inferred), loss ~6.4-6.6 at start — consistent with
-      Phase 1's final ~6.2 train loss, confirms clean handoff.
-      **Launched** (2026-07-10, detached/nohup): full DEFAULTS scale
-      (50,000 max examples, 1 epoch), `--base
-      uchi/flux/checkpoints/v050_phase1/ckpt_best.pt`, checkpoints to
-      `uchi/flux/checkpoints/v050_phase2/`. Log:
-      `.uchi/corpus/train_0_5_0_phase2_sft.log`. **Known gap in this
-      script, accepted not fixed**: checkpoints only save at end-of-epoch
-      (no mid-run periodic save like Phase 1's `--checkpoint-interval` —
-      a crash partway through loses all progress). Low risk given Phase 1
-      ran clean, but worth adding if this becomes a repeated pattern.
-- [ ] Phase 3 (CoT distillation) — `uchi/flux/cot_distill.py`, not yet
-      started. Next after Phase 2 finishes and its checkpoint is sane.
-- [ ] Phase 4 (QAT) — `uchi/flux/qat_train.py`, not yet started. After
-      Phase 3.
-- [ ] Once Phases 2-4 land: decide whether/when to promote the result to
-      `flux_best.pt` (production), or keep it isolated in
-      `checkpoints/v050_phase*/` pending Item 6 self-play results first —
-      not yet decided, a real product decision, not an engineering one.
+      fair-budgeted 12,500 each, seq_len=512 kept deliberately — SQuAD/
+      Dolly/CodeAlpaca examples are capped at 300(context)+200(answer)
+      tokens regardless, so 1024 would mostly pad, not add signal; the
+      context-extension payoff matters more for CoT's longer reasoning
+      traces. **COMPLETE** (2026-07-10 10:12 → 14:45, 743 steps, 4h33m):
+      train loss 5.7330, **val loss 5.5115 (PPL 247.5, best)** — smooth,
+      healthy convergence throughout, no crashes. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase2/{sft_best.pt,sft_epoch1.pt}`.
+      **Known gap in this script, accepted not fixed**: checkpoints only
+      save at end-of-epoch (no mid-run periodic save like Phase 1's
+      `--checkpoint-interval`) — acceptable given both Phase 1 and this
+      run went clean start to finish.
+- [ ] Phase 3 (CoT distillation) — `uchi/flux/cot_distill.py`, unmodified
+      (0.4.0's exact recipe: GSM8K + OpenOrca + Magicoder + CommitPackFT
+      real teacher traces, fair-budgeted). Smoke-tested first (100
+      examples): all 4 sources loaded, architecture handoff from the new
+      SFT checkpoint clean, no crash. **Launched** (2026-07-10 14:48,
+      detached/nohup, autonomous chain — user explicitly authorized
+      auto-continuing Phases 3→4 without a check-in between each): `--base
+      uchi/flux/checkpoints/v050_phase2/sft_best.pt`, checkpoints to
+      `uchi/flux/checkpoints/v050_phase3/`. Log:
+      `.uchi/corpus/train_0_5_0_phase3_cot.log`.
+      **COMPLETE** (2026-07-10 14:49 → 17:59, 3h10m, 420 steps, 4 epochs):
+      val PPL improved every epoch — 94.8 → 72.3 → 66.1 → **64.4 (best)**.
+      Checkpoints: `uchi/flux/checkpoints/v050_phase3/cot_best.pt` (+ one
+      per epoch). **Honest, expected gap vs 0.4.0**: 0.4.0's CoT run
+      reached PPL 7.2 — this run's 64.4 is notably worse, because this
+      whole chain inherits a deliberately-scoped-down Phase 1 (~20M
+      tokens vs 0.4.0's much larger budget, chosen to fit a same-day
+      timeline rather than 0.4.0's multi-day one). Not a bug — a known,
+      accepted tradeoff from the timeline-scoping decision made earlier.
+- [ ] Phase 4 (QAT) — `uchi/flux/qat_train.py`, unmodified. Smoke-tested
+      first (5 macro-steps): BitNet ternary quantization activated
+      correctly, all 4 CoT sources loaded, clean handoff from the new CoT
+      checkpoint. **Running** (launched 2026-07-10 18:03, detached/nohup,
+      600 macro-steps, `mixed cot_frac=0.5`): `--base
+      uchi/flux/checkpoints/v050_phase3/cot_best.pt --data-bin
+      uchi/flux/data_0_5_0/train.bin --val-bin
+      uchi/flux/data_0_5_0/val.bin`, checkpoints to
+      `uchi/flux/checkpoints/v050_phase4/`. Log:
+      `.uchi/corpus/train_0_5_0_phase4_qat.log`. `--no-compile` used —
+      this script also defaults to whole-model `torch.compile`,
+      previously found unusable (>5.5min compile). Chain-monitor already
+      armed (`by6fvuqac`), will report on completion.
+
+## Decision gate before Item 6/8/9 (2026-07-10, user's explicit direction)
+
+Diagnostic finding (2026-07-10, real checkpoint comparison, not guesswork):
+0.5.0's Phase 1 trained on ~20M tokens vs `train_v2.py`'s own design
+default of ~491M (deliberately scoped down to fit a same-day timeline —
+real measured throughput is ~750 tok/s regardless of seq_len on this GPU,
+so the full budget would take ~7.6 days). CoT val PPL (64.4) is
+correspondingly far worse than 0.4.0's (7.2) on the identical eval script/
+data — expected consequence of the token-budget cut, not a bug; the
+backbone architecture and Phases 2-4's recipes are unchanged from 0.4.0.
+
+**Plan: don't preemptively pay for a multi-day retrain on a hunch — measure
+first, then decide.**
+
+- [ ] Once Phase 4 finishes: run a real coding/proposer-quality check
+      against the finished `v050_phase4` checkpoint — `benchmarks/
+      swebench_real_eval.py` at a modest sample size (not the full set),
+      plus direct generation testing (same discipline 0.4.0's own history
+      used: verify via actual output, not just loss numbers — a low-PPL
+      checkpoint can still degenerate/loop in practice, and vice versa).
+- [ ] **If coding/overall performance is bad**: restart Phase 1 with a
+      real budget along the lines already scoped in this conversation:
+      (a) a proportionally-larger Stack v2/SWE-Gym pull (NOT just a bigger
+      `--train-tokens` on the same fixed 23.3M-token local corpus — that
+      would dilute the code fraction as the budget grows, undermining the
+      whole point of this release), (b) `--train-tokens` matching or
+      exceeding `train_v2.py`'s ~491M default, (c) optionally a fresh
+      pruned vocab built from the 0.5.0 corpus specifically (`scripts/
+      build_pruned_vocab.py`, not reusing 0.4.0's old one) to shrink the
+      embedding table and concentrate gradient signal. Real cost at
+      confirmed throughput: **~7.6 days**, accepted as the cost of doing
+      this properly once evidence (not a hunch) says it's needed.
+      Then re-run Phases 2-4 on the new Phase 1 base.
+- [ ] **If coding/overall performance is acceptable**: proceed to
+      complete the rest of the itemized deliverables on the current chain
+      — decide on `flux_best.pt` promotion, then Item 6 (GRPO self-play),
+      Item 8 (j-space MCTS), Item 9 (full re-validation: MMLU/ARC re-run,
+      TruthfulQA/HumanEval baselines, the real SWE-bench number, and
+      non-regression confirmation vs 0.4.0).
