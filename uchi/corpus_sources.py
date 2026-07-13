@@ -156,14 +156,25 @@ def _load_streaming(dataset_id: str, **kwargs: Any):
         ) from e
 
 
-def _swh_s3_client() -> Any:
+def _swh_s3_client(max_pool_connections: int = 64) -> Any:
     """Anonymous/unsigned S3 client for Software Heritage's public content
     mirror — no SWH-side auth needed, separate from the HF token gating the
-    dataset index itself."""
+    dataset index itself.
+
+    *max_pool_connections* must be raised to match (or exceed) the fetch
+    thread pool's worker count -- botocore's own default is only 10,
+    silently capping concurrency far below whatever `ThreadPoolExecutor`
+    size `_iter_stack_v2` actually uses (found live: 150 fetch threads
+    against the 10-connection default performed *worse* than 100 threads
+    against it, extra threads just queuing and contending for the same 10
+    connections rather than adding real parallelism).
+    """
     import boto3
     from botocore import UNSIGNED
     from botocore.config import Config
-    return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    return boto3.client(
+        "s3", config=Config(signature_version=UNSIGNED, max_pool_connections=max_pool_connections),
+    )
 
 
 def _fetch_swh_content(client: Any, blob_id: str, src_encoding: str) -> str | None:
@@ -193,21 +204,54 @@ def _fetch_swh_content(client: Any, blob_id: str, src_encoding: str) -> str | No
         return None
 
 
-def _iter_stack_v2(limit: int | None) -> Iterator[dict[str, Any]]:
+def _iter_stack_v2(limit: int | None, max_workers: int = 32) -> Iterator[dict[str, Any]]:
+    """Bounded-concurrency SWH fetch. Confirmed live (0.5.0 Item 1 real-scale
+    pull): sequential fetches ran at ~4.1 files/s -- an I/O-bound bottleneck
+    (network round-trip per file), not CPU-bound, so a thread pool helps a
+    lot here despite the GIL (boto3/botocore release it during the actual
+    HTTP call, and a single client is documented thread-safe for concurrent
+    read calls -- standard AWS SDK usage pattern, not a hack). Order isn't
+    preserved (results come back as fetches complete, not as HF streamed
+    them) -- fine here, this corpus gets interleaved/shuffled downstream
+    regardless (`pretokenize_0_5_0.py`).
+    """
     ds = _load_streaming(STACK_V2_DATASET_ID, name=STACK_V2_LANGUAGE_CONFIG)
-    client = _swh_s3_client()
+    client = _swh_s3_client(max_pool_connections=max_workers)
+
+    import concurrent.futures
+
+    def qualifies(row: dict) -> bool:
+        return not (row["is_generated"] or row["is_vendor"] or row["license_type"] != "permissive")
 
     count = 0
-    for row in ds:
-        if row["is_generated"] or row["is_vendor"] or row["license_type"] != "permissive":
-            continue
-        content = _fetch_swh_content(client, row["blob_id"], row["src_encoding"])
-        if content is None:
-            continue
-        yield {"repo": row["repo_name"], "path": row["path"], "content": content}
-        count += 1
-        if limit is not None and count >= limit:
-            return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        row_iter = iter(ds)
+        in_flight: dict[concurrent.futures.Future, dict] = {}
+
+        def submit_next() -> bool:
+            for row in row_iter:
+                if qualifies(row):
+                    fut = executor.submit(_fetch_swh_content, client, row["blob_id"], row["src_encoding"])
+                    in_flight[fut] = row
+                    return True
+            return False
+
+        for _ in range(max_workers):
+            if not submit_next():
+                break
+
+        while in_flight:
+            done, _ = concurrent.futures.wait(in_flight, return_when=concurrent.futures.FIRST_COMPLETED)
+            for fut in done:
+                row = in_flight.pop(fut)
+                submit_next()
+                content = fut.result()
+                if content is None:
+                    continue
+                yield {"repo": row["repo_name"], "path": row["path"], "content": content}
+                count += 1
+                if limit is not None and count >= limit:
+                    return
 
 
 def _iter_stack_v1_fallback(limit: int | None) -> Iterator[dict[str, Any]]:
@@ -226,6 +270,7 @@ def _iter_stack_v1_fallback(limit: int | None) -> Iterator[dict[str, Any]]:
 def iter_general_code_python(
     limit: int | None = None,
     use_fallback: bool = False,
+    max_workers: int = 32,
 ) -> Iterator[dict[str, Any]]:
     """Stream Python files from The Stack, normalized to
     ``{"repo", "path", "content"}``. Falls back to the v1 dedup dataset (no
@@ -233,12 +278,17 @@ def iter_general_code_python(
     as ``pretokenize.py``'s FineWeb-Edu source, not a silent one. Pass
     *use_fallback=True* to go straight to v1 (e.g. once v1 access clears and
     v2's per-row SWH fetch latency isn't worth it for a given run).
+
+    *max_workers* controls the v2 path's SWH fetch concurrency (ignored by
+    the v1 fallback, which has no per-row fetch to parallelize) — see
+    ``_iter_stack_v2``'s docstring for why this is a real, not premature,
+    optimization at real-scale pull sizes.
     """
     if use_fallback:
         yield from _iter_stack_v1_fallback(limit)
         return
     try:
-        yield from _iter_stack_v2(limit)
+        yield from _iter_stack_v2(limit, max_workers=max_workers)
     except CorpusSourceError as e:
         print(f"  [!] {STACK_V2_DATASET_ID} unavailable ({e}); "
               f"falling back to {STACK_V1_FALLBACK_DATASET_ID}", file=sys.stderr)
@@ -279,9 +329,11 @@ def iter_issue_diff_pairs(
 
 
 _SOURCES = {
-    "stack": iter_general_code_python,
-    "swe-gym": iter_issue_diff_pairs,
-    "swe-gym-raw": lambda limit=None: iter_issue_diff_pairs(limit=limit, dataset_id=SWE_GYM_RAW_DATASET_ID),
+    "stack": lambda limit=None, max_workers=32: iter_general_code_python(limit=limit, max_workers=max_workers),
+    "swe-gym": lambda limit=None, max_workers=32: iter_issue_diff_pairs(limit=limit),
+    "swe-gym-raw": lambda limit=None, max_workers=32: iter_issue_diff_pairs(
+        limit=limit, dataset_id=SWE_GYM_RAW_DATASET_ID,
+    ),
 }
 
 
@@ -301,10 +353,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Local SWE-bench repo-list snapshot; if omitted, resolves live (see corpus_decontamination.py).",
     )
+    parser.add_argument(
+        "--max-workers", type=int, default=32,
+        help="Concurrent SWH fetch workers for --source stack (ignored by the other sources). "
+             "Confirmed live: sequential fetching was the bottleneck at real-scale pull sizes.",
+    )
     args = parser.parse_args(argv)
 
     excluded_repos = load_repo_cache(args.cache_file) if args.cache_file else resolve_excluded_repos()
-    records = _SOURCES[args.source](limit=args.limit)
+    records = _SOURCES[args.source](limit=args.limit, max_workers=args.max_workers)
     kept, summary = filter_corpus(records, excluded_repos)
 
     fh = sys.stdout if args.output == "-" else open(args.output, "w", encoding="utf-8")

@@ -1,17 +1,23 @@
 {
   "dataset": "SWE-bench/SWE-bench_Lite",
-  "instances": 1,
+  "instances": 2,
   "resolved": 0,
-  "failed": 1,
+  "failed": 2,
   "abstained": 0,
   "resolve_rate": 0.0,
-  "elapsed_s": 4.5,
+  "elapsed_s": 15.7,
   "per_instance": [
     {
-      "instance_id": "django__django-13551",
+      "instance_id": "django__django-15790",
       "repo": "django/django",
       "outcome": "fail",
-      "attempts": 1
+      "attempts": 4
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-25747",
+      "repo": "scikit-learn/scikit-learn",
+      "outcome": "fail",
+      "attempts": 4
     }
   ]
 }

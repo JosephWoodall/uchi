@@ -62,7 +62,10 @@ class _FakeSWHClient:
 
 
 def _patch_swh_client(monkeypatch, blobs):
-    monkeypatch.setattr("uchi.corpus_sources._swh_s3_client", lambda: _FakeSWHClient(blobs))
+    monkeypatch.setattr(
+        "uchi.corpus_sources._swh_s3_client",
+        lambda max_pool_connections=64: _FakeSWHClient(blobs),
+    )
 
 
 def _stack_v2_row(blob_id, **overrides):

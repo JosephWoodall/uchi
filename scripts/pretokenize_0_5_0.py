@@ -1,20 +1,28 @@
 """pretokenize_0_5_0.py -- 0.5.0 Item 2's mixed-corpus tokenization.
 
-Extends ``pretokenize.py``'s FineWeb-Edu-only approach with Item 1's new
-local corpus (``.uchi/corpus/stack_v2_sample.jsonl`` -- 14,991 real Stack
-v2 Python files, 13,959 repos; ``.uchi/corpus/swe_gym_full.jsonl`` -- 2,438
-real GitHub issue->diff pairs), both already decontaminated against
+Extends ``pretokenize.py``'s FineWeb-Edu-only approach with Item 1's local
+corpus: ``.uchi/corpus/stack_v2_sample.jsonl`` (14,991 real Stack v2 Python
+files, 13,959 repos), ``.uchi/corpus/swe_gym_full.jsonl`` (2,438 curated
+real GitHub issue->diff pairs), and ``.uchi/corpus/swe_gym_raw_full.jsonl``
+(63,835 additional real issue->diff pairs, the larger/less-curated
+SWE-Gym-Raw release) -- all three already decontaminated against
 SWE-bench's eval-set repos by ``uchi/corpus_sources.py``.
 
-**Budget, not a new ratio scheme**: the local corpus is fixed-size
-(~23.3M tokens: ~18.8M Stack v2 + ~4.5M SWE-Gym) -- Item 1's real pull,
-not something this script can grow. All of it is used, once. FineWeb-Edu
-fills the *remainder* of an 80M-token train budget, matching 0.4.0's own
-Phase 1 scale -- the established anchor for "how much pretraining data
-this model size needs" for THIS release, not a freshly invented number.
-This is the non-regression requirement made concrete: 0.5.0 adds code/
-issue-diff capability on top of, not instead of, the general capability
-80M tokens of FineWeb-Edu already validated.
+**Budget, retargeted after the first (scoped-down, ~20M-token) Phase 1 run
+was measured and found genuinely undertrained** (real generation testing +
+a real SWE-bench sample both showed the model incoherent -- see
+``tasks/todo.md``'s decision-gate section). Real local-corpus size grew a
+lot once SWE-Gym-Raw was pulled: ~365.9M tokens (18.8M Stack v2 + 4.5M
+SWE-Gym curated + ~342.6M SWE-Gym-Raw), not the ~23.3M the first run used.
+User's explicit call given that: use ALL of it (don't discard real,
+already-decontaminated data) and fill the remainder of a ~491M-token
+total budget with FineWeb-Edu -- ~491M matches ``train_v2.py``'s own
+design default (its `max_steps=30_000` at the original 256-token/64-batch
+config), the anchor for "how much pretraining data this model size was
+sized for," not a freshly invented number. This makes the corpus
+~75% code/issue-diff by token count this time, a deliberate large shift
+toward the "considerably better at coding" goal versus the first run's
+~29% -- accepted as the point of this retrain, not an accident.
 
 **Interleaved, not concatenated in blocks**: local documents are folded
 into the FineWeb-Edu stream at roughly even intervals (not "all local
@@ -48,15 +56,30 @@ from scripts.pretokenize import OUT_DIR, _text_stream, build_bin
 CORPUS_DIR = os.path.join(".uchi", "corpus")
 STACK_PATH = os.path.join(CORPUS_DIR, "stack_v2_sample.jsonl")
 SWEGYM_PATH = os.path.join(CORPUS_DIR, "swe_gym_full.jsonl")
+SWEGYM_RAW_PATH = os.path.join(CORPUS_DIR, "swe_gym_raw_full.jsonl")
+
+
+def _load_issue_diff_docs(path: str, label: str) -> list[str]:
+    docs: list[str] = []
+    if not os.path.exists(path):
+        print(f"  [!] {path} not found -- skipping {label}")
+        return docs
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            docs.append(f"# Issue: {row['problem_statement']}\n\n# Fix:\n{row['patch']}")
+    print(f"  loaded {len(docs):,} {label} docs from {path}")
+    return docs
 
 
 def _load_local_docs() -> list[str]:
     """Load Item 1's pulled corpus into memory as plain text documents.
 
-    Small enough to hold in RAM whole (77MB Stack v2 + a few hundred KB
-    JSON overhead for SWE-Gym) -- this is exactly the buffering trade
-    ``uchi/corpus_sources.py``'s own docstring already accepted at this
-    scale, not a new limitation introduced here.
+    ~1.7GB of raw JSON across the three sources at this scale (confirmed
+    system has 20GB+ available) -- still held in RAM whole rather than
+    streamed, the same buffering trade ``uchi/corpus_sources.py``'s own
+    docstring already accepted at the smaller first-run scale, just
+    checked against real headroom before assuming it still holds here.
     """
     docs: list[str] = []
     if os.path.exists(STACK_PATH):
@@ -70,16 +93,8 @@ def _load_local_docs() -> list[str]:
     else:
         print(f"  [!] {STACK_PATH} not found -- skipping Stack v2 portion")
 
-    n_before = len(docs)
-    if os.path.exists(SWEGYM_PATH):
-        with open(SWEGYM_PATH, encoding="utf-8") as f:
-            for line in f:
-                row = json.loads(line)
-                text = f"# Issue: {row['problem_statement']}\n\n# Fix:\n{row['patch']}"
-                docs.append(text)
-        print(f"  loaded {len(docs) - n_before:,} SWE-Gym docs from {SWEGYM_PATH}")
-    else:
-        print(f"  [!] {SWEGYM_PATH} not found -- skipping SWE-Gym portion")
+    docs.extend(_load_issue_diff_docs(SWEGYM_PATH, "SWE-Gym (curated)"))
+    docs.extend(_load_issue_diff_docs(SWEGYM_RAW_PATH, "SWE-Gym-Raw"))
 
     return docs
 

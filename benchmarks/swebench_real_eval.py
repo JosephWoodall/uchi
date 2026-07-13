@@ -50,7 +50,8 @@ def _as_list(value) -> list[str]:
     return list(value)
 
 
-def run(sample: int, dataset_id: str, max_attempts: int, max_iterations: int, verbose: bool) -> dict:
+def run(sample: int, dataset_id: str, max_attempts: int, max_iterations: int, verbose: bool,
+        checkpoint: str | None = None) -> dict:
     from datasets import load_dataset
 
     from uchi.flux.inference_engine import build_generate_fn
@@ -62,8 +63,8 @@ def run(sample: int, dataset_id: str, max_attempts: int, max_iterations: int, ve
         ds = ds.select(random.sample(range(len(ds)), sample))
     print(f"  Running {len(ds)} instance(s) through the real execution harness")
 
-    print("  Loading FLUX generate_fn ...")
-    generate_fn = build_generate_fn()
+    print(f"  Loading FLUX generate_fn ({checkpoint or 'default flux_best.pt'}) ...")
+    generate_fn = build_generate_fn(checkpoint=checkpoint)
 
     sandbox = ExecutionSandbox(timeout=120.0)
     agent = AgenticRepairAgent(
@@ -134,13 +135,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--checkpoint", default=None,
+                        help="FLUX checkpoint to evaluate (default: production flux_best.pt). "
+                             "Point this at a candidate checkpoint (e.g. a new v050_phase4/qat_best.pt) "
+                             "to gate it before promoting to production.")
     args = parser.parse_args(argv)
 
     print("\n" + "=" * 70)
     print(" Uchi SWE-bench Benchmark — REAL Execution (0.5.0 Item 9)")
     print("=" * 70 + "\n")
 
-    results = run(args.sample, args.dataset, args.max_attempts, args.max_iterations, args.verbose)
+    results = run(args.sample, args.dataset, args.max_attempts, args.max_iterations, args.verbose,
+                  checkpoint=args.checkpoint)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:

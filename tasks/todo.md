@@ -472,19 +472,25 @@ base, user's explicit direction ("move onto the next phase of training").
       tokens vs 0.4.0's much larger budget, chosen to fit a same-day
       timeline rather than 0.4.0's multi-day one). Not a bug — a known,
       accepted tradeoff from the timeline-scoping decision made earlier.
-- [ ] Phase 4 (QAT) — `uchi/flux/qat_train.py`, unmodified. Smoke-tested
+- [x] Phase 4 (QAT) — `uchi/flux/qat_train.py`, unmodified. Smoke-tested
       first (5 macro-steps): BitNet ternary quantization activated
       correctly, all 4 CoT sources loaded, clean handoff from the new CoT
-      checkpoint. **Running** (launched 2026-07-10 18:03, detached/nohup,
-      600 macro-steps, `mixed cot_frac=0.5`): `--base
-      uchi/flux/checkpoints/v050_phase3/cot_best.pt --data-bin
-      uchi/flux/data_0_5_0/train.bin --val-bin
-      uchi/flux/data_0_5_0/val.bin`, checkpoints to
-      `uchi/flux/checkpoints/v050_phase4/`. Log:
-      `.uchi/corpus/train_0_5_0_phase4_qat.log`. `--no-compile` used —
-      this script also defaults to whole-model `torch.compile`,
-      previously found unusable (>5.5min compile). Chain-monitor already
-      armed (`by6fvuqac`), will report on completion.
+      checkpoint. **COMPLETE** (2026-07-10 18:03 → 22:31, 4h28m, 600/600
+      macro-steps, `cot_frac=0.5`): best CoT val loss 4.0068 (**PPL 55.0**),
+      text val PPL 579.4. CoT reasoning quality held up well through
+      quantization — minimal degradation from Phase 3's pre-quantization
+      55-65 PPL range, the QAT recovery design (mixing CoT + general text
+      every macro-step) worked as intended. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase4/{qat_best.pt,qat_00200.pt,
+      qat_00400.pt,qat_00600.pt}`. **The full 4-phase pipeline (Phase 1
+      pretrain → 2 SFT → 3 CoT → 4 QAT) is now done, one clean pass, no
+      crashes at any stage.** Note: 5 of the ~7 background wait-monitors
+      used to track this run got killed by something in the harness
+      environment (not the actual detached training process, which was
+      unaffected every time — confirmed by direct `ps`/log checks after
+      each kill). Worth remembering: long-running background monitor
+      loops here have a real lifetime limit; direct periodic checks are
+      the reliable fallback, not a failure of the approach.
 
 ## Decision gate before Item 6/8/9 (2026-07-10, user's explicit direction)
 
@@ -500,14 +506,28 @@ backbone architecture and Phases 2-4's recipes are unchanged from 0.4.0.
 **Plan: don't preemptively pay for a multi-day retrain on a hunch — measure
 first, then decide.**
 
-- [ ] Once Phase 4 finishes: run a real coding/proposer-quality check
-      against the finished `v050_phase4` checkpoint — `benchmarks/
-      swebench_real_eval.py` at a modest sample size (not the full set),
-      plus direct generation testing (same discipline 0.4.0's own history
-      used: verify via actual output, not just loss numbers — a low-PPL
-      checkpoint can still degenerate/loop in practice, and vice versa).
-- [ ] **If coding/overall performance is bad**: restart Phase 1 with a
-      real budget along the lines already scoped in this conversation:
+- [x] Once Phase 4 finished: ran a real coding/proposer-quality check
+      against `v050_phase4/qat_best.pt` — direct generation testing
+      (added no CLI flags needed, used `build_generate_fn(checkpoint=...)`
+      directly) + `benchmarks/swebench_real_eval.py --sample 2
+      --checkpoint ...` (added a `--checkpoint` flag to the harness itself,
+      a real reusable capability now, not a one-off hack — every future
+      gate-check can point it at any candidate checkpoint).
+      **Result: bad, clearly.** Generation test: "What is 2+2?" ->
+      "The number of the total of $4.The answer is 1." (wrong answer,
+      incoherent, though it does follow the trained "...The answer is X"
+      format — not fully degenerate). The code-writing prompt produced
+      **complete word salad, no code at all** — "The number of the given
+      to be used in the first step, and then it is not only 1." SWE-bench
+      check: **0/2 resolved**, both instances exhausted all 4 retry
+      attempts without a working patch (7.8s/instance — fast because it's
+      failing fast, not because it's doing anything well). This matches
+      exactly what the PPL numbers predicted — not a surprise, a
+      confirmation.
+- [ ] **Confirmed bad → restart Phase 1 with a real budget**, not yet
+      launched (needs explicit go-ahead given the real ~7.6-day cost —
+      same discipline as every other multi-hour+ launch this session, an
+      order of magnitude bigger than any prior one). Plan already scoped:
       (a) a proportionally-larger Stack v2/SWE-Gym pull (NOT just a bigger
       `--train-tokens` on the same fixed 23.3M-token local corpus — that
       would dilute the code fraction as the budget grows, undermining the
@@ -515,13 +535,11 @@ first, then decide.**
       exceeding `train_v2.py`'s ~491M default, (c) optionally a fresh
       pruned vocab built from the 0.5.0 corpus specifically (`scripts/
       build_pruned_vocab.py`, not reusing 0.4.0's old one) to shrink the
-      embedding table and concentrate gradient signal. Real cost at
-      confirmed throughput: **~7.6 days**, accepted as the cost of doing
-      this properly once evidence (not a hunch) says it's needed.
-      Then re-run Phases 2-4 on the new Phase 1 base.
-- [ ] **If coding/overall performance is acceptable**: proceed to
-      complete the rest of the itemized deliverables on the current chain
-      — decide on `flux_best.pt` promotion, then Item 6 (GRPO self-play),
+      embedding table and concentrate gradient signal. Then re-run
+      Phases 2-4 on the new Phase 1 base.
+- [~] ~~If coding/overall performance is acceptable, proceed straight to
+      Item 6/8/9 on the current chain~~ — **ruled out**, performance is
+      bad (see above). `flux_best.pt` promotion, Item 6 (GRPO self-play),
       Item 8 (j-space MCTS), Item 9 (full re-validation: MMLU/ARC re-run,
       TruthfulQA/HumanEval baselines, the real SWE-bench number, and
       non-regression confirmation vs 0.4.0).
