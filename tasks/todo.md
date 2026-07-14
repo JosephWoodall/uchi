@@ -524,19 +524,44 @@ first, then decide.**
       failing fast, not because it's doing anything well). This matches
       exactly what the PPL numbers predicted — not a surprise, a
       confirmation.
-- [ ] **Confirmed bad → restart Phase 1 with a real budget**, not yet
-      launched (needs explicit go-ahead given the real ~7.6-day cost —
-      same discipline as every other multi-hour+ launch this session, an
-      order of magnitude bigger than any prior one). Plan already scoped:
-      (a) a proportionally-larger Stack v2/SWE-Gym pull (NOT just a bigger
-      `--train-tokens` on the same fixed 23.3M-token local corpus — that
-      would dilute the code fraction as the budget grows, undermining the
-      whole point of this release), (b) `--train-tokens` matching or
-      exceeding `train_v2.py`'s ~491M default, (c) optionally a fresh
-      pruned vocab built from the 0.5.0 corpus specifically (`scripts/
-      build_pruned_vocab.py`, not reusing 0.4.0's old one) to shrink the
-      embedding table and concentrate gradient signal. Then re-run
-      Phases 2-4 on the new Phase 1 base.
+- [x] **Confirmed bad → Phase 1 restarted with a real budget** — user's
+      explicit go-ahead given. Concretely, ahead of the original plan in
+      one real way: pulling more corpus revealed **SWE-Gym-Raw alone is
+      ~342.6M tokens** (not the ~126M estimated), so the local
+      code/issue-diff corpus is ~365.9M tokens total (Stack v2 18.8M +
+      SWE-Gym curated 4.5M + SWE-Gym-Raw 342.6M, all real, all already
+      decontaminated — 854 SWE-Gym-Raw instances correctly excluded).
+      User's call given that: use all of it, fill the remainder of a
+      ~491M-token total with FineWeb-Edu (~125M) — **~75% code by token
+      count this time**, a deliberate large shift from the first run's
+      ~29%, matching the "considerably better at coding" goal directly.
+      **Real, valuable optimizations found before launching, not assumed**:
+      (1) parallelized the Stack v2 SWH fetch (`uchi/corpus_sources.py`'s
+      `_iter_stack_v2`, bounded `ThreadPoolExecutor`) — sequential fetch
+      was 4.1 files/s; found and fixed a real bug along the way
+      (botocore's default `max_pool_connections=10` was silently capping
+      concurrency regardless of thread count) — real confirmed rate after
+      the fix: **26.2 files/s**, 6.4x. (2) Built a 0.5.0-specific pruned
+      vocab (`scripts/build_pruned_vocab_0_5_0.py`, sampling the ACTUAL
+      new corpus mix, not reusing 0.4.0's OpenWebText/Wikipedia-based one)
+      — 32,018 tokens, 97.1% coverage, and this alone gave the model the
+      exact same 64.0M-param size as 0.4.0's `flux_best.pt`. (3) The
+      smaller pruned embedding table freed enough VRAM to double
+      `--micro-batch` (2→4, same effective batch via `--grad-accum`
+      16 vs 32) — confirmed real throughput 750→885→**1,313 tok/s**
+      (calibrated at each step, not assumed), pushed until GPU memory
+      left only ~2GB headroom, deliberately not pursued further to avoid
+      OOM risk on an unattended multi-day run. **Net effect: same ~491M-token
+      scope, real ETA cut from ~7.6 days to ~4.3 days**, zero training-scope
+      compromise.
+      **Launched** (2026-07-13 09:21, detached/nohup): 7,492 steps,
+      `--eval-interval 250 --checkpoint-interval 250` (frequent enough for
+      real resume-safety on a multi-day run), checkpoints to
+      `uchi/flux/checkpoints/v050_phase1_v2/` (kept separate from the
+      first attempt's `v050_phase1/`, both preserved). Log:
+      `.uchi/corpus/train_0_5_0_phase1_v2.log`. Will re-run Phases 2-4 on
+      this new base once it finishes, then re-clear the same decision
+      gate before Item 6/8/9.
 - [~] ~~If coding/overall performance is acceptable, proceed straight to
       Item 6/8/9 on the current chain~~ — **ruled out**, performance is
       bad (see above). `flux_best.pt` promotion, Item 6 (GRPO self-play),
