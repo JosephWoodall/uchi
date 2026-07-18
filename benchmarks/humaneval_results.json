@@ -1,0 +1,21 @@
+{
+  "dataset": "openai/openai_humaneval",
+  "n": 3,
+  "n_pass": 0,
+  "pass_at_1": 0.0,
+  "elapsed_s": 48.2,
+  "per_problem": [
+    {
+      "task_id": "HumanEval/153",
+      "passed": false
+    },
+    {
+      "task_id": "HumanEval/123",
+      "passed": false
+    },
+    {
+      "task_id": "HumanEval/68",
+      "passed": false
+    }
+  ]
+}

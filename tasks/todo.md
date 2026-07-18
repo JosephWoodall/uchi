@@ -270,24 +270,115 @@ upstream dependency at all — they start in parallel, today.
       test-id list (FAIL_TO_PASS/PASS_TO_PASS already answers "which
       tests matter" for eval; per-test pytest invocation, no batched-XML
       nodeid-mapping ambiguity).
-- [ ] Stage 2 (before self-play scales to full-repo suites, not before
-      Item 6 starts): container/VM-level isolation (Docker/gVisor-class).
-- [ ] Stage 2: test-impact-analysis subsetting for the broader training
-      corpus, where no FAIL_TO_PASS/PASS_TO_PASS annotation exists.
+- [x] Stage 2 (before self-play scales to full-repo suites, not before
+      Item 6 starts): container/VM-level isolation — `uchi/sandbox_isolation.py`,
+      using `bwrap` (bubblewrap), the only sandboxing primitive actually
+      present in this environment (checked directly: no `docker`,
+      `runsc`/gVisor, `firejail`, or `nsjail` on this host). Unshares
+      network + PID namespace, restricts the filesystem to `/usr` (merged-
+      `/usr` bootstrap: `/lib`, `/lib64`, `/bin`, `/sbin` symlinked back
+      in) plus the running venv (read-only) and *cwd* (read-write),
+      `--die-with-parent` for cleanup. Graceful fallback to plain
+      `subprocess.run` if `bwrap` isn't installed — never a hard new
+      dependency. Wired into `ExecutionSandbox` via a new `isolate: bool`
+      constructor flag (`run_tests`/`apply_patch` call
+      `sandbox_isolation.run_isolated` when `True`) — **defaults to
+      `False`**, so this is additive, not a behavior change for any
+      existing caller; opt in once self-play actually runs at volume.
+      **Two real bugs found empirically, not assumed away**: (1) `bwrap`
+      resolves bind-source paths against its own process, not the
+      caller's — a relative *cwd* (this repo's `DEFAULT_ROOT`-derived
+      paths are relative by construction) silently produced a nonsensical
+      nested path; fixed by resolving *cwd* to absolute before building
+      the bind arguments. (2) mount order matters: `--tmpfs /tmp` before
+      the `--bind <cwd> <cwd>` clobbers *cwd* whenever it happens to live
+      under the host's `/tmp` (true of pytest's own `tmp_path` fixture, and
+      plenty of real callers) — fixed by moving the tmpfs mount before the
+      more specific bind, so the specific bind shadows the broad one
+      instead of the reverse. Validated for real, not just unit-tested: a
+      passing test passes, a failing test's real assertion text and exit
+      code survive unchanged, and a live TCP connect attempt to `8.8.8.8:53`
+      confirms network really is blocked. Tests: `tests/test_sandbox_isolation.py`
+      (7 passing, skip gracefully if `bwrap` absent) + one added
+      `tests/test_execution_sandbox.py` case (`isolate=True` resolves the
+      existing fixture identically to the non-isolated path).
+- [x] Stage 2: test-impact-analysis subsetting for the broader training
+      corpus, where no FAIL_TO_PASS/PASS_TO_PASS annotation exists —
+      static, not coverage-based (a coverage-instrumented approach would
+      need a full instrumented suite run per repo first, out of this
+      pass's scope). `code_retrieval.py` gains `extract_patch_files()`
+      (same regex convention `retrieval_scaling_benchmark.py` already
+      uses) and `CodeIndex.impacted_tests()`: BFS over the existing
+      *single-hop* `_imported_by` graph (confirmed it doesn't do
+      transitive closure on its own) to the transitive closure of files
+      depending on a changed file, filtered to test-shaped paths, plus a
+      same-basename fallback (`foo.py` changed → also considers
+      `test_foo.py`/`tests/test_foo.py`) for fixture-driven tests the
+      static import graph can't see. `grpo.py` gains `derive_test_lists()`:
+      builds a `CodeIndex`, computes impacted tests, runs them **before**
+      the patch for a real baseline pass/fail split (failing-at-baseline →
+      FAIL_TO_PASS candidates, passing-at-baseline → PASS_TO_PASS
+      candidates) — same semantics real SWE-bench annotation encodes,
+      derived instead of supplied. Wired into `GRPOTrainer._sample_branch`
+      as a fallback **only** when a record's `fail_to_pass`/`pass_to_pass`
+      are both empty — existing annotated curriculum records (all of
+      curated SWE-Gym today) are unaffected. **Real granularity caveat,
+      not a bug**: the derived lists are file-shaped test ids
+      (`"test_foo.py"`), coarser than SWE-bench's function-level
+      annotation (`"test_foo.py::test_case"`) — `ExecutionSandbox.run_tests`
+      grades a whole file as a node id exactly the same way it grades one
+      function, so this is honestly coarser, not broken. Tests:
+      `tests/test_code_retrieval.py` (+5), `tests/test_grpo.py` (+3,
+      including a full `GRPOTrainer.train_step` run with empty annotation
+      lists confirming real, non-zero grading via the fallback).
 
 ## 6. Execution-Verified Code Self-Play (Item 6) — depends on 2, 5
 
-- [ ] GRPO (`grpo.py`) using Item 5's sandbox output as reward.
-- [ ] **Curriculum**: bucket curated corpus by patch size (lines changed),
-      train easy-to-hard — required to avoid degenerate zero-variance
-      advantage on sparse reward.
-- [ ] Log every trajectory in a shared Thought→Action→Observation schema
-      (defined here, reused by Item 7 and Item 8 — don't wait for Item 7's
-      full harness to define the schema).
+- [x] GRPO (`grpo.py`) using Item 5's sandbox output
+      (`SandboxEvalResult.reward`) as reward — pure-math functions
+      (`grpo_advantage`/`grpo_loss`/`grpo_agentic_advantage`/
+      `AgenticBaseline`) ported near-verbatim from
+      `efficient_llm_training/src/grpo.py`; `GRPOTrainer` samples
+      `n_branches` real ReAct episodes per instance (reusing
+      `agentic_repair.py`'s loop, extracted into module-level
+      `run_react_episode` so both callers share one parser), grades each
+      via the real sandbox, computes each branch's `sequence_log_prob`
+      (masked-loss pattern reused from `sft_train.py`), backprops
+      `grpo_loss`. Tests: `tests/test_grpo.py` (10 passing) — real
+      throwaway git repo + real `ExecutionSandbox`, scripted fake
+      `generate_fn`, verifying a full multi-branch step produces
+      non-degenerate advantage and an actual gradient update on a stub
+      policy. **Real bug found and fixed along the way**: the
+      reconstructed transcript abbreviates `apply_patch`'s diff to a
+      `<N-char diff>` placeholder (by design, for prompt-context size) —
+      scoring `sequence_log_prob` against that summary instead of the raw
+      generated text silently produced identical log-probs for a correct
+      and an incorrect patch of the same length. Fixed: `GRPOTrainer`
+      scores the raw per-turn `generate_fn` outputs, not the parsed
+      transcript. **Not done**: an actual curriculum training *run*
+      meant to improve the model — needs the Phase 1→4 chain to clear the
+      decision gate first (a zero-reward proposer gives zero-variance
+      advantage, no gradient); smoke-tested end-to-end against the live
+      in-progress `v050_phase1_v2` checkpoint instead (executes cleanly,
+      numbers not meaningful yet).
+- [x] **Curriculum**: `load_curriculum()` buckets `.uchi/corpus/swe_gym_full.jsonl`
+      records by patch line-count (small/medium/large, thresholds
+      documented in the module docstring as a first-pass split, not a
+      distribution fit) and `run_curriculum()` iterates easy → hard,
+      resolving each record's `repo`/`base_commit` to a local clone via
+      `repo_fetch.ensure_local_clone` (same mechanism
+      `retrieval_scaling_benchmark.py`'s code track already uses).
+- [x] Trajectory schema: `TrajectoryStep` dataclass (`kind`: thought/
+      action/observation/final) + `parse_transcript()`, converting
+      `agentic_repair.py`'s existing prefixed transcript lines into
+      structured form — reused directly by Item 8's action space.
 - [ ] **Non-regression checkpoint (diagnostic, not a gate)**: re-run fast
       MMLU/ARC/HumanEval subset; separately record whether held-out
       pass-rate curve is actually rising. Item 8 proceeds regardless of
-      the result — this just tells you what Item 8 is working with.
+      the result — this just tells you what Item 8 is working with. **Not
+      built this pass** — deferred, no `--eval-subset` hook wired into
+      `GRPOTrainer` yet; `benchmarks/arc_benchmark.py`/`mmlu_benchmark.py`
+      exist and are the intended reuse, just not called from here yet.
 
 ## 7. Live Execution-Gated Verification + Agentic Repair (Item 7) — depends on 5, parallel to 6
 
@@ -375,25 +466,86 @@ upstream dependency at all — they start in parallel, today.
 
 ## 8. Latent-Space Planning — j-space (Item 8) — depends on 2, 5, 6, built unconditionally
 
-- [ ] Port `world_model.py` (DynamicsHead, ValueHead) + `mcts.py`
-      (PUCT search, latent-only rollout, no intermediate decoding).
-- [ ] Redefine "action" as hypothesis/reasoning-step level, using Item 6's
+- [x] Port `world_model.py` (DynamicsHead, ValueHead, WorldModel) near-
+      verbatim from `efficient_llm_training/src/world_model.py` — the
+      architecture and `predict_next`/`rollout`/`update_value`/
+      `rerank_sequences` are model-agnostic, and `HybridTSSM` already
+      exposes `.embedding`/`.layers`/`.norm_f` under the exact names the
+      source assumes. One real adaptation: `train_dynamics` no longer
+      scans a project-specific shard directory that doesn't exist here —
+      takes real token sequences directly instead (e.g. from Item 6's
+      collected trajectories), same underlying MSE-on-next-state math.
+      `mcts.py`'s `MCTSNode`/`MCTS` PUCT mechanics (`ucb`, `_select`,
+      `_backprop`) ported as-is — the search algorithm doesn't care what
+      an "action" is. Tests: `tests/test_world_model.py` (8 passing),
+      `tests/test_mcts.py` (7 passing).
+- [x] Redefine "action" as hypothesis/reasoning-step level, using Item 6's
       Thought-tagged trajectory segments as the discrete units (mean-pooled
-      embeddings, same approach as `proprioception.py`).
-- [ ] Hook ValueHead to Item 5's real pass/fail as reward, trained via
-      GRPO same as Item 6.
-- [ ] **Operational "no precedent" check**: on failed MCTS search, measure
-      distance to nearest known hypothesis embedding. Close = tune rollout
-      budget. Far = widen Item 1's corpus / Item 6's curriculum — don't
-      just throw more search compute at a coverage gap.
+      embeddings, same approach as `proprioception.py`) — `mcts.py`'s
+      `sample_candidates` samples `top_k` whole ReAct continuations from
+      `generate_fn`, embeds each via `proprioception.pooled_hidden_for_question`
+      (reused directly, not reimplemented — pooling free-form text is the
+      same operation either way), and derives priors from
+      `grpo.sequence_log_prob` softmax-normalized across the group, in
+      place of the source's top-k vocab-logit priors. **Real property
+      surfaced while testing, not a bug in the port**: PUCT's exploration
+      term only grows as `sqrt(n)`, so under perfectly symmetric priors
+      (an edge case that essentially never occurs with real LM
+      probabilities) it takes ~65+ simulations to overcome the arbitrary
+      tie-broken first pick and actually surface the higher-value branch
+      — confirmed empirically in `tests/test_mcts.py`, not just asserted.
+- [x] Hook ValueHead to Item 5's real pass/fail as reward, trained via
+      GRPO same as Item 6 — `WorldModel.update_value`/`update_value_from_state`
+      take a real reward (`SandboxEvalResult.reward`) directly, same
+      reward source `grpo.py` uses, no separate reward design. **Not
+      done**: an actual training run on real collected trajectories — same
+      Phase 1→4 gate as Item 6; smoke-tested end-to-end against the live
+      in-progress checkpoint instead (`MCTS.select_action` runs cleanly,
+      search quality not meaningful since `ValueHead` is untrained).
+- [x] **Operational "no precedent" check**: `mcts.NoPrecedentCheck` reuses
+      `OODDetector`'s Mahalanobis-distance mechanics
+      (`uchi/flux/verifier_model.py`) exactly as `proprioception.py`
+      already does for question familiarity — not a new distance metric.
+      Diagnostic only (`{"distance", "close"}`), no automated branching,
+      per todo.md's explicit instruction. **Real bug found and fixed**:
+      first draft copied `proprioception.py`'s "start inert at
+      threshold=inf until calibrated" convention verbatim — wrong here,
+      since that made the "far" case unreachable by construction (nothing
+      is ever `> inf`). Fixed to use `OODDetector`'s own sensible default
+      (3.0 Mahalanobis std-devs) so the check actually functions
+      out of the box; caught by `tests/test_mcts.py`'s far-query test
+      failing, not by inspection.
 - [ ] **Non-regression checkpoint**: re-run fast MMLU/ARC/HumanEval subset
       again — second sequential fine-tune on top of Item 6's, forgetting
-      compounds across passes if unchecked.
+      compounds across passes if unchecked. **Not built this pass**, same
+      status as Item 6's non-regression bullet above.
 
 ## 9. Full Benchmark Re-Validation (Item 9) — depends on 2, 4, 6, 7, 8
 
 - [ ] Re-run MMLU, SWE-bench, ARC against the finished model.
-- [ ] Establish first baselines on TruthfulQA and HumanEval.
+- [ ] Establish first baselines on TruthfulQA and HumanEval. **HumanEval
+      harness now built and proven**, ahead of this item's formal
+      dependencies (same precedent as `swebench_real_eval.py`):
+      `benchmarks/humaneval_benchmark.py`, modeled directly on
+      `swebench_real_eval.py`'s structure. Loads `openai/openai_humaneval`
+      (confirmed working id/schema — the old unnamespaced
+      `openai_humaneval` id no longer resolves on HF). Prompt +
+      code-extraction reuse `swebench_benchmark.py`'s established
+      FLUX-facing instruction framing and `_extract_code_blocks`, not
+      reinvented. Grading reuses `sandbox_isolation.run_isolated` (this
+      item's own Stage 2 work above) — `candidate + test + check(entry_point)`
+      as one real program, pass@1 = exit code 0; deliberately not
+      `code_engine.REPLOracle`, whose `def run():` convention doesn't
+      match HumanEval's shape. **Live-run, not just unit-tested**:
+      `--sample 3` against the real, live in-progress `v050_phase1_v2`
+      checkpoint (CPU, to avoid VRAM contention with that same training
+      job — added a `--device` flag for exactly this) completed
+      end-to-end in 48s, 0/3 pass@1 — honest, expected result given the
+      checkpoint hasn't cleared its own decision gate yet, not a harness
+      bug. Tests: `tests/test_humaneval_benchmark.py` (7 passing, no
+      network/dataset download needed — direct grading-function tests
+      against hand-written correct/incorrect/crashing/syntax-error
+      candidates). TruthfulQA baseline still not started.
 - [x] Report the real SWE-bench number plainly against the 85% target —
       **the harness to do this now exists and is proven end-to-end**,
       ahead of the items it formally depends on, because Items 5 and 7

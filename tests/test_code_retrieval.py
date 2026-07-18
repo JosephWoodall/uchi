@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from uchi.code_retrieval import CodeIndex, _tokenize_code
+from uchi.code_retrieval import CodeIndex, _tokenize_code, extract_patch_files
 
 
 DATABASE_PY = '''"""Database connection pooling helpers."""
@@ -211,3 +211,83 @@ def test_graph_context_boost_prioritizes_imported_file(index):
     rank_before = best_rank(without_graph, "pkg/database.py")
     rank_after = best_rank(with_graph, "pkg/database.py")
     assert rank_after < rank_before
+
+
+# ── test-impact analysis (0.5.0 Item 5 Stage 2) ───────────────────────────
+
+TEST_DATABASE_PY = '''"""Real import-graph-reachable test for pkg/database.py."""
+from pkg.database import ConnectionPool
+
+
+def test_acquire_returns_connection():
+    pool = ConnectionPool(":memory:")
+    assert pool.acquire() is not None
+'''
+
+TEST_MATH_UTILS_PY = '''"""Same-basename fallback test -- does NOT import pkg.math_utils,
+exercises it only via a fixture-style indirection the static import graph
+can't see, same real-world case the fallback covers."""
+
+
+def test_add_via_indirection():
+    import importlib
+    add = importlib.import_module("pkg.math_utils").add
+    assert add(2, 3) == 5
+'''
+
+TEST_UNRELATED_PY = '''"""Distractor -- unrelated to any changed file, must not be pulled in."""
+
+
+def test_unrelated():
+    assert True
+'''
+
+
+@pytest.fixture
+def repo_with_tests(tmp_path):
+    repo = tmp_path / "repo"
+    pkg = repo / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "database.py").write_text(DATABASE_PY)
+    (pkg / "math_utils.py").write_text(MATH_UTILS_PY)
+
+    tests_dir = repo / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("")
+    (tests_dir / "test_database.py").write_text(TEST_DATABASE_PY)
+    (tests_dir / "test_math_utils.py").write_text(TEST_MATH_UTILS_PY)
+    (tests_dir / "test_unrelated.py").write_text(TEST_UNRELATED_PY)
+    return repo
+
+
+def test_extract_patch_files():
+    patch = (
+        "diff --git a/pkg/database.py b/pkg/database.py\n"
+        "--- a/pkg/database.py\n+++ b/pkg/database.py\n"
+        "diff --git a/pkg/math_utils.py b/pkg/math_utils.py\n"
+        "--- a/pkg/math_utils.py\n+++ b/pkg/math_utils.py\n"
+    )
+    assert extract_patch_files(patch) == {"pkg/database.py", "pkg/math_utils.py"}
+
+
+def test_impacted_tests_finds_import_graph_reachable_test(repo_with_tests):
+    index = CodeIndex.build(repo_with_tests, dim=32, epochs=5, seed=0)
+    impacted = index.impacted_tests({"pkg/database.py"})
+    assert "tests/test_database.py" in impacted
+    assert "tests/test_unrelated.py" not in impacted
+
+
+def test_impacted_tests_same_basename_fallback(repo_with_tests):
+    # test_math_utils.py deliberately does NOT import pkg.math_utils
+    # directly (see its docstring) -- only the naming-convention fallback
+    # can find it, not the import graph.
+    index = CodeIndex.build(repo_with_tests, dim=32, epochs=5, seed=0)
+    impacted = index.impacted_tests({"pkg/math_utils.py"})
+    assert "tests/test_math_utils.py" in impacted
+    assert "tests/test_unrelated.py" not in impacted
+
+
+def test_impacted_tests_empty_for_unchanged_files(repo_with_tests):
+    index = CodeIndex.build(repo_with_tests, dim=32, epochs=5, seed=0)
+    assert index.impacted_tests({"pkg/nonexistent.py"}) == set()

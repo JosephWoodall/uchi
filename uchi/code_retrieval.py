@@ -498,3 +498,69 @@ class CodeIndex:
 
     def __len__(self) -> int:
         return len(self.chunks)
+
+    # ── test-impact analysis (0.5.0 Item 5 Stage 2) ────────────────────────
+
+    def impacted_tests(self, changed_files: set[str]) -> set[str]:
+        """Test-shaped files impacted by *changed_files*, for corpus
+        records with no pre-annotated FAIL_TO_PASS/PASS_TO_PASS list
+        (`tasks/todo.md`'s Item 5 Stage 2: "test-impact-analysis
+        subsetting for the broader training corpus, where no ...
+        annotation exists").
+
+        Static, not coverage-based: BFS the transitive closure of
+        `self._imported_by` (which is single-hop only -- built once per
+        file by `_build_import_graph`, no transitivity built in) starting
+        from *changed_files*, then filters to test-shaped paths. Plus a
+        same-basename fallback (`foo.py` changed -> also considers
+        `test_foo.py`/`tests/test_foo.py` if indexed) for fixture-driven
+        tests that don't literally `import` the module under test, which
+        the static import graph can't see on its own.
+
+        A coverage-instrumented (dynamic) approach would be more complete
+        but needs a full instrumented suite run per repo first -- out of
+        this pass's scope, see the module docstring's "buildable-now"
+        framing repeated across 0.5.0's Item 5/6/8 work.
+        """
+        all_files = {c.file for c in self.chunks}
+        reached: set[str] = set(changed_files)
+        frontier = list(changed_files)
+        while frontier:
+            f = frontier.pop()
+            for dependent in self._imported_by.get(f, ()):
+                if dependent not in reached:
+                    reached.add(dependent)
+                    frontier.append(dependent)
+
+        for changed in changed_files:
+            stem = Path(changed).stem
+            parent = str(Path(changed).parent)
+            candidates = {
+                f"test_{stem}.py", f"{stem}_test.py",
+                f"tests/test_{stem}.py", f"test/test_{stem}.py",
+            }
+            if parent not in (".", ""):
+                candidates |= {f"{parent}/test_{stem}.py", f"{parent}/{stem}_test.py"}
+            reached |= candidates & all_files
+
+        return {f for f in reached if _is_test_file(f)}
+
+
+_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]+\.py|[^/]+_test\.py)$")
+_TEST_DIR_RE = re.compile(r"(^|/)tests?/")
+
+
+def _is_test_file(path: str) -> bool:
+    """pytest's own default discovery convention: `test_*.py`/`*_test.py`
+    anywhere, or anything under a `test(s)/` directory."""
+    return bool(_TEST_FILE_RE.search(path) or _TEST_DIR_RE.search(path))
+
+
+def extract_patch_files(patch: str) -> set[str]:
+    """Repo-relative files touched by a unified diff -- same
+    `diff --git a/(.+?) b/` convention
+    `benchmarks/retrieval_scaling_benchmark.py`'s `_extract_patch_files`
+    already uses (duplicated here rather than importing a benchmark
+    script into a core module -- the wrong layering direction, for one
+    regex line)."""
+    return set(re.findall(r"^diff --git a/(.+?) b/", patch, re.MULTILINE))

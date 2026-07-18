@@ -112,6 +112,27 @@ def test_garbage_patch_does_not_apply(buggy_repo):
     assert result.reward == 0.0
 
 
+def test_correct_patch_resolves_under_isolation(buggy_repo):
+    """0.5.0 Item 5 Stage 2: the same real evaluate() call, isolated via
+    bwrap (uchi/sandbox_isolation.py) instead of bare subprocess -- must
+    resolve the fixture identically to the non-isolated path."""
+    from uchi.sandbox_isolation import bwrap_available
+    if not bwrap_available():
+        pytest.skip("bwrap not installed in this environment")
+
+    sandbox = ExecutionSandbox(timeout=30.0, isolate=True)
+    result = sandbox.evaluate(
+        repo_path=buggy_repo["repo_path"],
+        patch_text=buggy_repo["fix_patch"],
+        fail_to_pass=["test_bug.py::test_add"],
+        pass_to_pass=["test_sanity.py::test_sanity"],
+        base_commit=buggy_repo["base_commit"],
+    )
+    assert result.patch_applied
+    assert result.resolved
+    assert result.reward == pytest.approx(1.0)
+
+
 def test_unpatched_repo_fails_fail_to_pass(buggy_repo):
     """Sanity check on the fixture itself: without any patch, the bug test
     genuinely fails and the sanity test genuinely passes.

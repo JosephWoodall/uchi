@@ -1,0 +1,10 @@
+{
+  "item3.5_code_retrieval": {
+    "track": "item3.5_code_retrieval",
+    "n_queries": 50,
+    "n_repos_indexed": 50,
+    "avg_index_build_s": 108.93,
+    "hit_rate_at_10": 0.42,
+    "avg_query_ms": 26.142
+  }
+}

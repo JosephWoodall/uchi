@@ -41,6 +41,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import sandbox_isolation
 from .workspace import DEFAULT_ROOT
 
 SANDBOX_SUBDIR = "sandbox"
@@ -119,9 +120,15 @@ class SandboxEvalResult:
 class ExecutionSandbox:
     """Copies a repo at a commit, applies a patch, runs real tests, grades the result."""
 
-    def __init__(self, timeout: float = 120.0, root: str = DEFAULT_ROOT):
+    def __init__(self, timeout: float = 120.0, root: str = DEFAULT_ROOT, isolate: bool = False):
         self.timeout = timeout
         self.root = Path(root) / SANDBOX_SUBDIR
+        # Stage 2 (0.5.0 Item 5): container/VM-level isolation via
+        # sandbox_isolation.run_isolated, on top of Stage 1's bare
+        # subprocess execution. Defaults False -- additive, not a
+        # behavior change for any existing caller; opt in once self-play
+        # actually runs at volume (see sandbox_isolation.py's docstring).
+        self.isolate = isolate
 
     def _new_sandbox_dir(self) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -158,15 +165,25 @@ class ExecutionSandbox:
         No fallback to increasingly permissive apply modes on failure —
         a patch that doesn't apply cleanly is a failed candidate, not
         something to coerce into applying.
+
+        When ``self.isolate``, the patch tempfile is written inside
+        *repo_dir* itself rather than the system temp dir -- a bwrap
+        sandbox only sees *repo_dir* (read-write) and `/usr` (read-only),
+        not the host's real `/tmp` (replaced by an empty `--tmpfs`), so a
+        patch path outside *repo_dir* would be invisible to the isolated
+        `git apply` call. Cleaned up in `finally` either way, before any
+        other diff-taking touches *repo_dir*.
         """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
+        patch_dir = str(repo_dir) if self.isolate else None
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False, dir=patch_dir) as f:
             f.write(patch_text)
             patch_path = f.name
         try:
-            result = subprocess.run(
-                ["git", "apply", "--whitespace=fix", patch_path],
-                cwd=repo_dir, capture_output=True, text=True, timeout=30.0,
-            )
+            cmd = ["git", "apply", "--whitespace=fix", patch_path]
+            if self.isolate:
+                result = sandbox_isolation.run_isolated(cmd, cwd=repo_dir, timeout=30.0)
+            else:
+                result = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=30.0)
             return PatchResult(
                 applied=result.returncode == 0,
                 stdout=result.stdout,
@@ -211,16 +228,23 @@ class ExecutionSandbox:
         output: dict[str, str] = {}
         timed_out = False
         error = ""
-        run_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        pytest_env = {"PYTHONDONTWRITEBYTECODE": "1"}
+        run_env = dict(os.environ, **pytest_env)
+        cmd = [sys.executable, "-m", "pytest", "", "-q", "--no-header"]
         for test_id in test_ids:
             for cache_dir in repo_dir.rglob("__pycache__"):
                 shutil.rmtree(cache_dir, ignore_errors=True)
+            cmd[3] = test_id
             try:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pytest", test_id, "-q", "--no-header"],
-                    cwd=repo_dir, capture_output=True, text=True, timeout=self.timeout,
-                    env=run_env,
-                )
+                if self.isolate:
+                    result = sandbox_isolation.run_isolated(
+                        cmd, cwd=repo_dir, timeout=self.timeout, env=pytest_env,
+                    )
+                else:
+                    result = subprocess.run(
+                        cmd, cwd=repo_dir, capture_output=True, text=True, timeout=self.timeout,
+                        env=run_env,
+                    )
                 results[test_id] = result.returncode == 0
                 output[test_id] = result.stdout + result.stderr
             except subprocess.TimeoutExpired as e:

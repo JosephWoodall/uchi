@@ -117,6 +117,88 @@ def classify_outcome(result: SandboxEvalResult) -> Outcome:
     return Outcome.FAIL
 
 
+def _build_system_prompt(tools: RepoToolRegistry) -> str:
+    return (
+        "You are a software engineer fixing a real bug in a real repository.\n"
+        "Follow this format:\n\n"
+        "Thought: reason about the current situation and what to do next\n"
+        "Action: tool_name[input]\n"
+        "Observation: (result from the tool will appear here)\n"
+        "... (repeat Thought/Action/Observation as needed)\n"
+        "Thought: I have applied a patch that should resolve the issue\n"
+        "Final Answer: brief summary of the fix\n\n"
+        "apply_patch's input is a full unified diff, which is not safe to "
+        "put inside [...] (diffs commonly contain ']'). Use this form for "
+        "apply_patch only:\n"
+        "Action: apply_patch\n"
+        "<<<PATCH>>>\n"
+        "<the unified diff>\n"
+        "<<<END_PATCH>>>\n\n"
+        f"Available tools:\n{tools.descriptions()}\n\n"
+        "You must call apply_patch with a real unified diff before giving "
+        "your Final Answer -- reasoning alone does not change the repo."
+    )
+
+
+def run_react_episode(
+    generate_fn: Callable[..., str],
+    tools: RepoToolRegistry,
+    problem_statement: str,
+    feedback: str = "",
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> list[str]:
+    """One Thought/Action/Observation ReAct episode against *tools*, driven
+    by *generate_fn*.
+
+    Extracted from ``AgenticRepairAgent._run_react_loop`` (0.5.0 Item 7) so
+    Item 6's GRPO self-play trainer can sample the same kind of episode for
+    a training branch without duplicating the parser/loop -- both callers
+    need the identical Thought-tagged transcript shape, since Item 8's
+    action space is defined directly on top of it (see ``grpo.py``'s
+    ``parse_transcript``).
+    """
+    system_prompt = _build_system_prompt(tools)
+    memory: list[str] = []
+
+    for _ in range(max_iterations):
+        prompt = f"{system_prompt}\n\nIssue:\n{problem_statement}\n\n"
+        if feedback:
+            prompt += f"Feedback from your previous attempt:\n{feedback}\n\n"
+        if memory:
+            prompt += "\n".join(memory) + "\n"
+
+        response = generate_fn(prompt, max_tokens=max_tokens, think=True)
+
+        final_match = _FINAL_PATTERN.search(response)
+        thought_match = _THOUGHT_PATTERN.search(response)
+        patch_match = _PATCH_ACTION_PATTERN.search(response)
+        action_match = patch_match or _ACTION_PATTERN.search(response)
+
+        if thought_match:
+            memory.append(f"Thought: {thought_match.group(1).strip()}")
+
+        if final_match and (not action_match or final_match.start() < action_match.start()):
+            memory.append(f"Final Answer: {final_match.group(1).strip()}")
+            break
+
+        if patch_match:
+            tool_name, tool_arg = "apply_patch", patch_match.group(1)
+            memory.append(f"Action: apply_patch[<{len(tool_arg)}-char diff>]")
+            result = tools.execute(tool_name, tool_arg)
+            memory.append(f"Observation: {result.output[:_OBSERVATION_CHAR_CAP]}")
+        elif action_match:
+            tool_name, tool_arg = action_match.group(1).strip(), action_match.group(2).strip()
+            memory.append(f"Action: {tool_name}[{tool_arg}]")
+            result = tools.execute(tool_name, tool_arg)
+            memory.append(f"Observation: {result.output[:_OBSERVATION_CHAR_CAP]}")
+        else:
+            # No action, no final answer -- nothing left to drive the loop.
+            break
+
+    return memory
+
+
 def _diff_against_head(repo_dir: Path) -> str:
     """Unified diff of *repo_dir*'s working tree against its checked-out
     HEAD (== base_commit, since `ExecutionSandbox.checkout_repo` already
@@ -180,7 +262,10 @@ class AgenticRepairAgent:
         for attempt in range(1, self.max_attempts + 1):
             repo_dir = self.sandbox.checkout_repo(repo_path, base_commit=base_commit)
             tools = RepoToolRegistry(self.sandbox, repo_dir)
-            transcript = self._run_react_loop(problem_statement, tools, feedback)
+            transcript = run_react_episode(
+                self.generate_fn, tools, problem_statement, feedback,
+                self.max_iterations, self.max_tokens,
+            )
             patch_text = _diff_against_head(repo_dir)
 
             if not patch_text.strip():
@@ -205,70 +290,3 @@ class AgenticRepairAgent:
             feedback = _format_failure_feedback(eval_result)
 
         return RepairOutcome(Outcome.FAIL, patch_text, self.max_attempts, eval_result, transcript)
-
-    # ── ReAct loop ────────────────────────────────────────────────────────
-
-    def _build_system_prompt(self, tools: RepoToolRegistry) -> str:
-        return (
-            "You are a software engineer fixing a real bug in a real repository.\n"
-            "Follow this format:\n\n"
-            "Thought: reason about the current situation and what to do next\n"
-            "Action: tool_name[input]\n"
-            "Observation: (result from the tool will appear here)\n"
-            "... (repeat Thought/Action/Observation as needed)\n"
-            "Thought: I have applied a patch that should resolve the issue\n"
-            "Final Answer: brief summary of the fix\n\n"
-            "apply_patch's input is a full unified diff, which is not safe to "
-            "put inside [...] (diffs commonly contain ']'). Use this form for "
-            "apply_patch only:\n"
-            "Action: apply_patch\n"
-            "<<<PATCH>>>\n"
-            "<the unified diff>\n"
-            "<<<END_PATCH>>>\n\n"
-            f"Available tools:\n{tools.descriptions()}\n\n"
-            "You must call apply_patch with a real unified diff before giving "
-            "your Final Answer -- reasoning alone does not change the repo."
-        )
-
-    def _run_react_loop(
-        self, problem_statement: str, tools: RepoToolRegistry, feedback: str,
-    ) -> list[str]:
-        system_prompt = self._build_system_prompt(tools)
-        memory: list[str] = []
-
-        for _ in range(self.max_iterations):
-            prompt = f"{system_prompt}\n\nIssue:\n{problem_statement}\n\n"
-            if feedback:
-                prompt += f"Feedback from your previous attempt:\n{feedback}\n\n"
-            if memory:
-                prompt += "\n".join(memory) + "\n"
-
-            response = self.generate_fn(prompt, max_tokens=self.max_tokens, think=True)
-
-            final_match = _FINAL_PATTERN.search(response)
-            thought_match = _THOUGHT_PATTERN.search(response)
-            patch_match = _PATCH_ACTION_PATTERN.search(response)
-            action_match = patch_match or _ACTION_PATTERN.search(response)
-
-            if thought_match:
-                memory.append(f"Thought: {thought_match.group(1).strip()}")
-
-            if final_match and (not action_match or final_match.start() < action_match.start()):
-                memory.append(f"Final Answer: {final_match.group(1).strip()}")
-                break
-
-            if patch_match:
-                tool_name, tool_arg = "apply_patch", patch_match.group(1)
-                memory.append(f"Action: apply_patch[<{len(tool_arg)}-char diff>]")
-                result = tools.execute(tool_name, tool_arg)
-                memory.append(f"Observation: {result.output[:_OBSERVATION_CHAR_CAP]}")
-            elif action_match:
-                tool_name, tool_arg = action_match.group(1).strip(), action_match.group(2).strip()
-                memory.append(f"Action: {tool_name}[{tool_arg}]")
-                result = tools.execute(tool_name, tool_arg)
-                memory.append(f"Observation: {result.output[:_OBSERVATION_CHAR_CAP]}")
-            else:
-                # No action, no final answer -- nothing left to drive the loop.
-                break
-
-        return memory
