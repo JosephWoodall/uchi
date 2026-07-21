@@ -202,15 +202,54 @@ class GenerateAndGround:
 
         # Try synthesis (neural decoder) first, then fall back to the grounded
         # extractive answer. We evaluate ALL candidates to perform Plural Voting (Simulation Engine).
+        #
+        # Real bug found (0.5.0 Item 9 investigation): `_candidates()` always
+        # yields `self._extractive(question, evidence)` as an unconditional
+        # FINAL candidate (guaranteed by its own code structure -- the "2.
+        # always keep..." step runs unconditionally after the proposer/
+        # decoder branch, every call). Because it IS a retrieved passage, it
+        # trivially passes `is_grounded()` (support against itself is 1.0)
+        # regardless of whether that passage actually answers the question
+        # -- e.g. a "New France" (the historical Quebec colony) passage
+        # confidently "answering" a "capital of France" (the country)
+        # question, because both share the literal word "france". When
+        # every genuinely generated candidate fails grounding (the common
+        # case against an undertrained proposer) and the extractive
+        # fallback is the ONLY thing that passes, no real synthesis was
+        # ever verified -- silently returning it anyway is exactly the
+        # confabulation this system's own stated principle says to avoid.
+        #
+        # Tracked by POSITION, not string equality: a real proposer/decoder
+        # candidate can legitimately be identical text to the extractive
+        # passage (e.g. a simple factual lookup correctly quoting the one
+        # piece of evidence verbatim -- a real prior test already covers
+        # exactly this: a fake proposer configured to answer correctly).
+        # `_candidates()`'s structure guarantees its LAST yield is always
+        # the extractive fallback and nothing else can come after it, so
+        # only that final slot is exempt from counting as "synthesized";
+        # every earlier slot is a genuine proposer/decoder attempt. When no
+        # proposer/decoder is configured at all (pure extractive mode, a
+        # fully legitimate configuration per this class's own docstring),
+        # exactly one candidate is ever yielded and this whole check is
+        # skipped -- there was nothing to "synthesize" in the first place.
+        raw_candidates = list(self._candidates(question, evidence, ev_texts, callback=callback, n_votes=n_votes))
         valid_candidates = []
-        for candidate in self._candidates(question, evidence, ev_texts, callback=callback, n_votes=n_votes):
+        synthesized_passed = len(raw_candidates) <= 1
+        for i, candidate in enumerate(raw_candidates):
             if not candidate or not candidate.strip():
                 continue
             if callback: callback("thinking", f"Oracle verifying candidate: '{candidate[:40]}...'")
             if self.oracle.is_grounded(candidate, ev_texts):
                 valid_candidates.append(candidate)
+                if i < len(raw_candidates) - 1:
+                    synthesized_passed = True
             else:
                 if callback: callback("prune", "Ungrounded claim pruned by Oracle.")
+
+        if valid_candidates and not synthesized_passed:
+            if callback: callback("prune", "Only the raw extractive fallback passed grounding -- "
+                                           "no verified synthesis, treating as unresolved rather than answering.")
+            valid_candidates = []
 
         if valid_candidates:
             # Plural vote: pick the most frequent verified candidate (Self-Consistency)

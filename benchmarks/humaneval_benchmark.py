@@ -102,7 +102,7 @@ def grade_candidate(
 def run(
     sample: int, dataset_id: str, timeout: float, isolate: bool, verbose: bool,
     checkpoint: str | None = None, think: bool = False, max_tokens: int = 300,
-    device: str | None = None,
+    device: str | None = None, pruned_vocab: str | None = None,
 ) -> dict:
     from datasets import load_dataset
 
@@ -116,7 +116,7 @@ def run(
     print(f"  Running {len(ds)} HumanEval problem(s) through real execution grading")
 
     print(f"  Loading FLUX generate_fn ({checkpoint or 'default flux_best.pt'}, device={device or 'auto'}) ...")
-    generate_fn = build_generate_fn(checkpoint=checkpoint, device=device)
+    generate_fn = build_generate_fn(checkpoint=checkpoint, device=device, pruned_vocab=pruned_vocab)
 
     n_pass = 0
     per_problem = []
@@ -171,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default=None,
                         help="Force cpu/cuda (default: auto-detect). Useful to avoid VRAM "
                              "contention with a concurrent training run on the same GPU.")
+    parser.add_argument("--pruned-vocab", default=None,
+                        help="Path to the PrunedVocab JSON the --checkpoint was trained with. "
+                             "build_generate_fn's own auto-detection falls back to 0.4.0's "
+                             "pruned_vocab_32k.json whenever this is omitted and the checkpoint's "
+                             "vocab_size doesn't match the full tokenizer -- silently wrong for any "
+                             "0.5.0 checkpoint using a different pruned vocab of the same size. "
+                             "Always pass this explicitly for non-default checkpoints.")
     parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -182,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     results = run(
         args.sample, args.dataset, args.timeout, not args.no_isolate, args.verbose,
         checkpoint=args.checkpoint, think=args.think, max_tokens=args.max_tokens,
-        device=args.device,
+        device=args.device, pruned_vocab=args.pruned_vocab,
     )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

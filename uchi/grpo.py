@@ -209,7 +209,17 @@ def sequence_log_prob(
     n_prompt = min(len(prompt_ids), len(full_ids))
     n_response = len(full_ids) - n_prompt
     if n_response <= 0 or len(full_ids) < 2:
-        return torch.zeros((), device=device)
+        # Differentiable zero, NOT torch.zeros(()) -- that returns a fresh
+        # tensor disconnected from the model's graph. A GRPOTrainer group
+        # where *every* branch hits this (e.g. every branch's ReAct episode
+        # produced an empty/degenerate response -- a real, observed case
+        # against an undertrained proposer, not a hypothetical) stacks
+        # nothing but disconnected zeros into `log_probs`, and `grpo_loss`'s
+        # `.backward()` then has no graph to differentiate through at all:
+        # "element 0 of tensors does not require grad and does not have a
+        # grad_fn". Multiplying a real model parameter by 0.0 keeps the
+        # same numeric value while keeping it wired into the graph.
+        return 0.0 * model.embedding.weight.sum()
 
     x = torch.tensor([full_ids], dtype=torch.long, device=device)
     lang_logits, _ = model(x[:, :-1])

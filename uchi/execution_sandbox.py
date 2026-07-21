@@ -146,7 +146,15 @@ class ExecutionSandbox:
         """
         sandbox_dir = self._new_sandbox_dir()
         repo_dir = sandbox_dir / "repo"
-        shutil.copytree(repo_path, repo_dir, symlinks=False)
+        # symlinks=True (preserve as symlinks, don't dereference): real repos
+        # at scale include broken/dangling symlinks (e.g. python/mypy's
+        # mypyc/lib-rt tree, hit by a real 300-instance construction run --
+        # symlinks=False tries to read the link's target file's bytes and
+        # crashes the WHOLE copytree with "No such file or directory" on a
+        # single bad entry, taking down every other file in the tree with it).
+        # Preserving the symlink as-is is also the safer default regardless --
+        # dereferencing an untrusted repo's symlinks has no upside here.
+        shutil.copytree(repo_path, repo_dir, symlinks=True)
         if base_commit:
             result = subprocess.run(
                 ["git", "checkout", "--force", base_commit],

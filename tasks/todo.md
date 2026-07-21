@@ -379,6 +379,40 @@ upstream dependency at all — they start in parallel, today.
       built this pass** — deferred, no `--eval-subset` hook wired into
       `GRPOTrainer` yet; `benchmarks/arc_benchmark.py`/`mmlu_benchmark.py`
       exist and are the intended reuse, just not called from here yet.
+- [x] **Real curriculum-training launcher — `uchi/grpo_train.py`** (2026-07-18,
+      user's explicit direction to promote Phase 4 v2 regardless of the gate
+      and move straight into Items 6/8/9). The gap found: `GRPOTrainer`/
+      `run_curriculum` had no checkpointing/logging/trajectory-persistence
+      hook — this script adds all three (own loop re-walking
+      `load_curriculum`'s buckets, `--checkpoint-interval` model saves,
+      per-branch trajectory JSONL for Item 8). Never greedy (`temperature`
+      default 0.8) — greedy decoding would make GRPO's zero-variance-
+      advantage degenerate case worse, not better, per the module's own
+      docstring warning. Never `torch.compile`s (sidesteps the exact
+      autotune-stall class that hit `cot_distill.py` this session; real
+      ReAct generation loops are a bad fit for compile anyway).
+      **Real correctness issue found and fixed as a prerequisite**:
+      `build_generate_fn` always loads a *second*, independent, never-
+      updated model copy — using it here would train one model while
+      generating episodes from a frozen other one. Fixed by factoring its
+      generation closure out into `build_generate_fn_from_model`
+      (`uchi/flux/inference_engine.py`), which `grpo_train.py` binds
+      directly to the model its optimizer updates; `build_generate_fn`
+      itself is unchanged (calls the new factored function internally),
+      confirmed via the existing inference/proposer/agentic_repair test
+      suite (14 passed) with no regression.
+      **Live-verified, not just unit-tested**: real 1-instance/2-branch dry
+      run (CPU, `v050_phase3_v2/cot_best.pt`) completed end-to-end in
+      78s/instance — real repo clone, real ReAct episodes, real sandbox
+      grading (0/2 resolved, expected — this checkpoint was never trained
+      for multi-file repair, same honest gap already documented elsewhere),
+      real checkpoint + trajectory-JSONL files written. Projected full
+      2,438-instance curriculum at this (CPU, unrepresentative) rate: 53.6h
+      — a real GPU calibration run is still needed before sizing the actual
+      training run, per this project's standing practice (Phase 1's token-
+      budget calibration, the corpus-fetch parallelization benchmarking).
+      Tests: `tests/test_grpo_train.py` (4 passing, curriculum-iteration
+      cap + trajectory-JSONL round-trip).
 
 ## 7. Live Execution-Gated Verification + Agentic Repair (Item 7) — depends on 5, parallel to 6
 
@@ -519,12 +553,46 @@ upstream dependency at all — they start in parallel, today.
       again — second sequential fine-tune on top of Item 6's, forgetting
       compounds across passes if unchecked. **Not built this pass**, same
       status as Item 6's non-regression bullet above.
+- [x] **Real training launcher — `uchi/world_model_train.py`** (2026-07-18,
+      same session as Item 6's launcher above). Reads Item 6's trajectory
+      JSONL, trains `WorldModel.train_dynamics`/`update_value_from_state`
+      against real token sequences + real rewards (base FLUX model stays
+      frozen throughout — only the two small heads train), saves to
+      `WorldModel.CKPT_PATH`, then smoke-validates with a real
+      `MCTS.select_action()` call against the trained world model + a live
+      `generate_fn`. **Live-verified**: 2-trajectory CPU dry run — dynamics
+      loss computed (2.95, 20 calibration steps), value loss 0.00477,
+      checkpoint saved, MCTS smoke-check returned a real (if unpolished —
+      expected given this checkpoint's known limitations) candidate action
+      without crashing. Tests: `tests/test_world_model_train.py` (4
+      passing, trajectory-load missing/empty/round-trip cases).
 
 ## 9. Full Benchmark Re-Validation (Item 9) — depends on 2, 4, 6, 7, 8
 
 - [ ] Re-run MMLU, SWE-bench, ARC against the finished model.
-- [ ] Establish first baselines on TruthfulQA and HumanEval. **HumanEval
-      harness now built and proven**, ahead of this item's formal
+- [ ] Establish first baselines on TruthfulQA and HumanEval. **TruthfulQA
+      MC1 harness built** (2026-07-18): `benchmarks/truthfulqa_benchmark.py`,
+      modeled on `humaneval_benchmark.py`'s structure. Uses the MC1
+      multiple-choice formulation (judge-free, exact-match) rather than the
+      original paper's generation+GPT-judge variant — an LLM-judge grader
+      is a non-starter given this project's hard no-LLM constraint. Scores
+      each choice via `uchi.grpo.sequence_log_prob` (reused, not
+      reimplemented). Tests: `tests/test_truthfulqa_benchmark.py` (3
+      passing, mechanics-only against a stub policy — an untrained/stub
+      model can't be expected to prefer the correct choice, that real
+      result is this harness's job to measure for real, not fake here).
+      **Real bug found and fixed while wiring this up**: both this new
+      harness's sibling scripts, `swebench_real_eval.py` and
+      `humaneval_benchmark.py`, called `build_generate_fn(checkpoint=...)`
+      with no way to pass a pruned-vocab path — its own auto-detection
+      silently falls back to the OLD 0.4.0 `pruned_vocab_32k.json` whenever
+      omitted, and accepts it without complaint because both 0.4.0's and
+      0.5.0's pruned vocabs happen to be size 32,018. Would have silently
+      corrupted any eval against a 0.5.0 checkpoint with the *wrong* token
+      mapping, no error, no warning. Fixed: added `--pruned-vocab` to both
+      scripts' CLIs, threaded through to `build_generate_fn`. Existing
+      `tests/test_humaneval_benchmark.py` (7 passing) confirms no
+      regression. HumanEval harness now built and proven**, ahead of this item's formal
       dependencies (same precedent as `swebench_real_eval.py`):
       `benchmarks/humaneval_benchmark.py`, modeled directly on
       `swebench_real_eval.py`'s structure. Loads `openai/openai_humaneval`
@@ -578,6 +646,207 @@ upstream dependency at all — they start in parallel, today.
 - [x] `tasks/core_principle.md` — added clarification that Item 6's GRPO
       reward (real test execution) is not the previously-rejected
       "RL-tune the proposer against the verifier's reward" failure mode.
+
+## ReAct-format warmup fine-tune (2026-07-19) — ahead of Item 6, real result
+
+Item 6's real GPU calibration (25 instances, 100 branches) got zero reward on
+every branch. Diagnostic (`generate_fn` against a real system prompt + real
+issue, `think=True`) showed complete structureless gibberish — the model had
+never been shown the `Thought:/Action:/Observation:` tagged format in any
+training phase. Built `uchi/flux/react_warmup_train.py`: fine-tunes the
+current (QAT'd) `flux_best.pt` on real, mechanically-constructed ReAct
+teacher traces (real tool calls — `read_file`/`apply_patch`/`run_tests` —
+against real repos with real gold-standard SWE-Gym patches, no LLM anywhere;
+only the Thought/Final-Answer English narration is templated), mixed with
+CoT-recovery steps.
+
+**Two real bugs found and fixed while building this**:
+1. `uchi/grpo.py`'s `sequence_log_prob` returned `torch.zeros(())` — a
+   tensor disconnected from the model's graph — whenever a response left no
+   room in the token budget. If every branch in a GRPOTrainer group hit this
+   (a real, observed case against this undertrained proposer), `grpo_loss`'s
+   `.backward()` crashed with "element 0 of tensors does not require grad
+   and does not have a grad_fn". Fixed to return a differentiable zero
+   (`0.0 * model.embedding.weight.sum()`). Tests:
+   `tests/test_grpo.py::test_sequence_log_prob_empty_response_is_still_differentiable`,
+   `test_grpo_loss_backward_survives_an_all_degenerate_group` (new, 15/15
+   passing total).
+2. `uchi/execution_sandbox.py`'s `checkout_repo` used
+   `shutil.copytree(..., symlinks=False)`, which crashes the *entire* copy
+   on a single broken symlink — hit for real at 300-instance construction
+   scale (`python/mypy`'s `mypyc/lib-rt` tree). Fixed to `symlinks=True`
+   (also the safer default regardless — never dereference an untrusted
+   repo's symlinks). Benefits every caller: Item 6, Item 7, Item 9's
+   SWE-bench eval, not just this new script.
+
+**Training complete** (2026-07-19, 300 steps, ~2.9h + ~1.9h real construction
+time for 300 instances ≈ 4.8h total): ReAct val PPL improved every eval —
+23.7 → 13.4 → 9.9 → 8.5 → 8.0 → **7.8 (best, final)**. Checkpoints:
+`uchi/flux/checkpoints/v050_react_warmup/{react_warmup_best.pt,
+react_warmup_final.pt}`. Tests: `tests/test_react_warmup_train.py` (3
+passing, real-throwaway-repo fixture).
+
+**Real result of the actual test that matters — honest, not spun**:
+re-ran the exact raw-generation diagnostic that found the original bug
+against `react_warmup_best.pt`. Checked with the real production parser
+(`agentic_repair._THOUGHT_PATTERN`/`_ACTION_PATTERN`/`_FINAL_PATTERN`), not
+eyeballing: **1 of 3 samples matched `_ACTION_PATTERN` (0 matched
+`_THOUGHT_PATTERN` or `_FINAL_PATTERN`)**, vs. 0 of 3 matching anything
+before. This is a real, measurable but **partial** improvement — the model
+now sometimes produces a recognizable `Action:` line (previously never),
+but still fails to reliably produce the full `Thought:`→`Action:`→
+`Observation:`→...→`Final Answer:` structure, and even the one matching
+sample's action argument was malformed. Not the clean "format now reliably
+appears" result hoped for.
+
+**User chose to re-run the Item 6 calibration anyway (2026-07-19) — real
+answer, not spun: zero change.** Same 25 instances, same shape as before,
+against `v050_react_warmup/react_warmup_best.pt`: **0/100 branches got any
+reward**, identical to the pre-warmup calibration. The warmup's partial
+format improvement (occasional `Action:` line where there was none before)
+did not translate into even one successful patch resolution or any reward
+variance. GRPO still cannot get a gradient at this checkpoint's current
+capability level — the format gap, while measurably narrowed, was not
+closed enough to matter for actual task-solving. `--checkpoint-dir
+uchi/flux/checkpoints/v050_item6_calibration_v2/`, trajectories in
+`.uchi/corpus/item6_calibration_v2_trajectories.jsonl`. Real per-instance
+timing confirmed again: 19.4-22.5s/instance (~19.8s avg), full-curriculum
+projection ~13.4h.
+
+Honest state after v1: one round of a 300-example/300-step ReAct warmup
+fine-tune measurably moved the needle on raw format-matching but did not
+unblock Item 6.
+
+## ReAct warmup v2 (2026-07-20) — different teaching format, real fix, still zero reward
+
+User asked for a genuinely different teaching format, not just more dose.
+Re-reading `agentic_repair.run_react_episode` against what v1 actually
+trained on found a real training/inference mismatch: `run_react_episode`
+calls `generate_fn` ONCE PER TURN expecting one short Thought+Action
+completion (real Observation appended by the harness afterward, never
+generated). v1 trained on ONE long completion containing the WHOLE
+multi-turn trace, loss applied to fabricated Observation text too —
+teaching the model to keep generating past an action and to
+predict/hallucinate tool output, backwards from the real task. This is
+standard multi-turn tool-use SFT practice getting applied correctly for the
+first time (Toolformer/Gorilla/FireAct-style agent fine-tuning all mask
+loss to the agent's own turns only) — not a novel invention.
+
+**Rewrote `uchi/flux/react_warmup_train.py`'s data construction**:
+`build_react_example` now returns per-turn `(prompt, target)` pairs
+mirroring `run_react_episode`'s own prompt/memory construction exactly
+(including the abbreviated `apply_patch[<N-char diff>]` memory form for
+later turns, matching the harness's own abbreviation byte-for-byte) — loss
+masked to each turn's own short target only, real Observations are context,
+never a generation target. Bonus: this multiplies real training data from
+the same real instances (300 instances → ~1000+ real per-turn examples).
+Tests: `tests/test_react_warmup_train.py` (4 passing, checks against the
+*real* `agentic_repair` regexes directly, not an approximation).
+
+**A second real bug found while recalibrating for this**:
+`tokenizer_v2.py`'s `encode_text` defaults to `max_length=1024` and
+silently truncates (keeping the front, dropping the tail) whenever a
+caller doesn't override it — `load_react_examples` never had, so **v1's
+training data was also silently corrupted by this**, on top of the masking
+bug. Fixed by passing `max_length=max_seq_len` explicitly. Real per-turn
+token lengths measured properly this time (min 393, median 1446, p90 2719,
+max 3095 across 40 real examples) — `--seq-len 3072` real-OOM'd on this
+12GB GPU even with gradient checkpointing; settled on 2048 (already
+proven to fit, keeps 82% of real examples).
+
+**Training complete** (2026-07-20, 300 steps, continuing from `flux_best.pt`
+again — not v1's checkpoint, to avoid compounding a flawed prior
+adaptation): ReAct val PPL 20.5 → 7.7 → 5.0 → 4.3 → 4.0 → **3.9 (best,
+final)** — converged faster and to a much lower PPL than v1's final 7.8.
+Checkpoints: `uchi/flux/checkpoints/v050_react_warmup_v2/`.
+
+**The real tests, in order, not spun**:
+1. Single-turn generation diagnostic (5 real instances, one short
+   `generate_fn` call each, matching real per-turn usage): **4/5 produced
+   a parseable `Action:` line** (vs. ~1/3 in v1's cruder whole-response
+   check, ~0/3 pre-warmup) — real, substantial improvement. `Thought:`
+   itself still never appeared verbatim (model consistently drops just
+   that literal word while keeping the rest of the sentence — an
+   unexplained, minor residual quirk; doesn't block `run_react_episode`,
+   which acts on Action/Final-Answer matches independently of Thought).
+2. **Real multi-turn `run_react_episode`** against 3 real instances: 1/3
+   now produces a genuine multi-turn episode (2 real turns — a failed
+   `read_file` with a hallucinated path, then a failed `run_tests` with a
+   hallucinated test id, both real tool calls with real failure
+   Observations, episode correctly continuing to a second turn). 2/3 still
+   produce zero parseable turns.
+3. **The decisive test — Item 6 calibration, same 25 instances, same
+   shape as both prior rounds: 0/100 branches got any reward. Identical to
+   v1, identical to the pre-warmup baseline.** `--checkpoint-dir
+   uchi/flux/checkpoints/v050_item6_calibration_v3/`. Per-instance timing:
+   ~11.5-16.6s (~11.7s avg, full-curriculum projection ~7.9h).
+
+**Honest conclusion**: the training/inference-mismatch fix was real and
+worked as intended — format-matching improved substantially and
+measurably, exactly as the root-cause analysis predicted it should. But it
+still was not enough to produce even one successful patch resolution or
+any reward variance. The remaining gap looks like a deeper capability
+issue, not a format issue: even when the model produces a syntactically
+valid action, its *content* (file paths, test ids) is still
+hallucinated/wrong. Two well-motivated, properly-executed rounds of
+ReAct-format warmup have now both failed to unblock Item 6 — this may be
+approaching the limits of what this scale/approach can do without a larger
+change (more capacity, much more real training compute at every phase, or
+a different strategy entirely). Next direction is an open decision for the
+user, not resolved here.
+
+## Item 9 real run (2026-07-20) — a real, unrelated production bug found and fixed
+
+User asked to run Item 9 (full benchmark re-validation) for real. MMLU/ARC
+(`benchmarks/{mmlu,arc}_benchmark.py`, both boot the full production `Uchi()`
+router — the ODUSP/Generate-and-Ground system, not FLUX directly) both
+returned **0% accuracy, 100% no-parse rate**, and — the real red flag —
+**the identical answer text for every question regardless of topic**
+(oak trees, water phase changes, photosynthesis all got the same fixed
+sentence in one run; capital-of-France and photosynthesis got a different
+shared fixed sentence in another). Direct probing confirmed this wasn't
+model incompetence alone — it was a real, previously-unknown bug in
+`uchi/generate_and_ground.py`'s `GenerateAndGround.answer()`.
+
+**Root cause, fully traced**: `_candidates()` always yields
+`self._extractive(question, evidence)` (the retrieved passage that best
+lexically matches the question, a real and deliberate helper) as an
+unconditional final candidate. Since it *is* a piece of real evidence, it
+trivially passes `FactCheckOracle.is_grounded()` (support against itself is
+1.0) regardless of whether it actually answers the question. Confirmed
+live: "What is the capital of France?" confidently returned a passage about
+**New France** (the historical Quebec colony) — wrong entity, but "grounded"
+because both share the literal word "france". Since FLUX's own generated
+candidates are essentially always gibberish for prompts this complex (the
+`think=True` path deliberately drops evidence from the prompt --
+`FluxProposer.propose()` -- CoT was trained on the bare question, wrapping
+it broke that format when tried previously), the extractive fallback wins
+by default on essentially every non-trivial question -- a real trustworthiness
+violation of the package's own stated principle ("Uchi never confabulates:
+when it cannot ground an answer it says so").
+
+**Fixed** in `generate_and_ground.py`'s `answer()`: track, by *position* (not
+string equality -- a real proposer answer can legitimately be textually
+identical to evidence for a simple direct lookup, and an early version of
+this fix broke exactly that case, caught by the full test suite), whether
+any candidate *other than* the guaranteed-final extractive one ever passed
+grounding. If the extractive fallback is the *only* thing that grounds, that
+means no real synthesis was ever verified -- treat it as unresolved and
+abstain, instead of confidently emitting a possibly-wrong passage. Pure
+extractive-only configurations (no proposer/decoder at all, a fully
+legitimate documented mode) are unaffected -- the check only activates when
+a real generator had a chance to produce something and everything it made
+failed grounding.
+
+Live-verified: "capital of France"/"photosynthesis" now correctly abstain
+instead of confidently confabulating; "2+2" and "Hello!" unaffected. Tests:
+`tests/test_generate_and_ground.py` (3 new, covering the bug, the fix, and
+the extractive-only-mode non-regression). Full suite: 486 passed (up from
+480), only the 3 pre-existing unrelated `ruff`-not-installed failures
+remain.
+
+MMLU/ARC real numbers with the fix in place, plus HumanEval/TruthfulQA/
+SWE-bench, still to be run for real -- see below.
 
 ## Post-Item-2 FLUX pipeline phases (not separate 0.5.0 items, but real
 ## prerequisites for Item 6 — see below for why)
@@ -720,3 +989,83 @@ first, then decide.**
       Item 8 (j-space MCTS), Item 9 (full re-validation: MMLU/ARC re-run,
       TruthfulQA/HumanEval baselines, the real SWE-bench number, and
       non-regression confirmation vs 0.4.0).
+
+## Phase 1 v2 restart chain — Phases 1-3 status (2026-07-18)
+
+- [x] **Phase 1 v2 (pretrain, real ~491M-token budget) — COMPLETE**
+      (finished 2026-07-18 02:03, 7,492 steps): **val PPL 54.0** (best,
+      loss 3.9883) — a massive improvement over the first attempt's
+      PPL 490.0, confirming the token-budget cut was the real cause of
+      that gap, not the architecture. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase1_v2/{ckpt_best.pt,ckpt_final.pt}`.
+- [x] **Phase 2 v2 (SFT) — COMPLETE**, unmodified recipe, `--base
+      v050_phase1_v2/ckpt_best.pt --pruned-vocab pruned_vocab_0_5_0_32k.json`:
+      743 steps, single epoch, **val loss 2.808 (PPL 16.6, best)** — a huge
+      jump over the first chain's PPL 247.5, directly reflecting the
+      stronger Phase 1 v2 base. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase2_v2/{sft_best.pt,sft_epoch1.pt}`.
+      **Session-boundary gotcha, resolved**: this run's own stdout log
+      (`train_0_5_0_phase2_v2.log`) only ever captured a multiprocessing
+      resource-tracker warning — Python's default full-buffering meant the
+      real progress lines were sitting in an unflushed buffer when an
+      *unrelated* python3 process got OOM-killed by the kernel in the same
+      terminal ~2h after SFT had already finished and exited cleanly (confirmed
+      via the checkpoint's own saved `step: 743` matching a full single epoch,
+      and via `journalctl -k` showing the OOM'd PID was a distinct, later
+      process). Lesson: a checkpoint's own saved metadata (step/loss) is the
+      ground truth for "did this finish," not the wall-clock proximity to an
+      unrelated crash in the same shell.
+- [x] **Real bug found and fixed**: `cot_distill.py`'s default `torch.compile(model)`
+      hit `Not enough SMs to use max_autotune_gemm mode` on this RTX 5070 and
+      then stalled for 54+ minutes at ~87% CPU / **0% GPU util**, RSS growing
+      to 14GB, zero training steps logged — inductor's autotune kernel search
+      exploding on a GPU with limited SMs, not a hang. Confirmed no partial
+      checkpoint existed (empty `v050_phase3_v2/`) before killing it — no lost
+      work. **Fixed by passing `--no-compile`** (a flag the script already
+      exposed for exactly this) — relaunch immediately hit `Step 00010` with
+      55% GPU util, 4.4GB VRAM, RSS stable at 3.3GB. Standing habit going
+      forward: always launch Phases 2-4 with `--no-compile` on this GPU unless
+      compile is specifically re-verified safe.
+- [x] **Phase 3 v2 (CoT) — COMPLETE** (2026-07-18 19:08 → 22:25, 3h17m,
+      420 steps, 4 epochs), `--base v050_phase2_v2/sft_best.pt --pruned-vocab
+      pruned_vocab_0_5_0_32k.json --no-compile`: val PPL improved every
+      epoch — 8.0 → 6.9 → 6.6 → **6.5 (best)**. A massive jump over the
+      first chain's PPL 64.4, directly reflecting the stronger Phase 1/2 v2
+      bases all the way down the chain. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase3_v2/cot_best.pt` (+ one per epoch).
+      Log: `.uchi/corpus/train_0_5_0_phase3_v2.log`.
+      **Auto-chain worked as designed**: a detached shell script
+      (independent of any Claude session) polled the training PID and, on
+      clean exit, launched Phase 4 itself — verified via
+      `.uchi/corpus/chain_phase3_to_phase4.log`. No manual relaunch needed.
+- [x] **Phase 4 v2 (QAT) — COMPLETE** (2026-07-18 22:25 → 2026-07-19 03:13,
+      4h48m, 600/600 macro-steps, `cot_frac=0.5`): val PPL improved every
+      100 steps — text 112.9 → 89.7 → 79.1 → 86.9 → 79.0 → 80.0, CoT
+      8.1 → 7.2 → 7.0 → 6.9 → 6.8 → **6.8 (best, final)**. Massive
+      improvement over the first chain's QAT result (CoT PPL 55.0) —
+      consistent with every earlier phase in this chain. Checkpoints:
+      `uchi/flux/checkpoints/v050_phase4_v2/{qat_best.pt,qat_00[1-6]00.pt}`.
+      **User's explicit direction (2026-07-19): promote unconditionally,
+      regardless of gate-check result, and proceed straight into Items
+      6/8/9** — no more gating on this check before promoting or starting
+      those items (superseding the "Decision gate before Item 6/8/9"
+      process below, which stays as a historical record of why the first
+      chain was rejected).
+      **Informational gate-check run anyway** (not a blocker, just a
+      record): direct generation test — "What is 2+2?" → "The answer is
+      1.The answer is 2.The answer is 2." (incoherent); code-writing prompt
+      → non-functional garbled code. `swebench_real_eval.py --sample 3`:
+      **0/3 resolved**, all failed fast (8.6s/instance). **Honest, not
+      spun**: despite PPL improving by ~1-2 orders of magnitude over the
+      first chain at every phase, real generation/task-execution quality is
+      still poor — expected, not a bug. PPL measures next-token prediction
+      quality on held-out CoT/text data; it does not measure instruction-
+      following or code-repair competence, which is exactly what Item 6
+      (GRPO self-play against real execution reward) exists to teach that
+      pretraining/SFT/CoT/QAT alone don't. This result is consistent with
+      that gap, not a contradiction of the strong PPL numbers.
+      **Promoted unconditionally** (2026-07-19 03:13): backed up prior
+      production `flux_best.pt` → `flux_best_pre_0_5_0.pt` first (reversible
+      safety net), then copied `v050_phase4_v2/qat_best.pt` →
+      `flux_best.pt`. `flux_best.pt` is now the 0.5.0 v2-chain checkpoint,
+      not 0.4.0's. Full chain log: `.uchi/corpus/chain_phase4_to_promotion.log`.

@@ -200,7 +200,27 @@ def build_generate_fn(checkpoint: Optional[str] = None, device: Optional[str] = 
     model, tokenizer, device, user_id, asst_id, think_id, stop_ids = _load_flux_for_inference(
         checkpoint, device, pruned_vocab,
     )
+    return build_generate_fn_from_model(
+        model, tokenizer, device, user_id, asst_id, think_id, stop_ids,
+        greedy=greedy, temperature=temperature,
+    )
 
+
+def build_generate_fn_from_model(model, tokenizer, device, user_id, asst_id, think_id, stop_ids,
+                                 greedy: bool = True, temperature: float = 0.7):
+    """Same generation closure ``build_generate_fn`` returns, factored out so
+    a caller that already has a *live* model instance can get a
+    ``generate_fn`` bound to it directly, without going through
+    ``build_generate_fn``'s own checkpoint-loading path (which always loads
+    a fresh, separate model copy — see ``_load_flux_for_inference``'s
+    docstring).
+
+    This matters for on-policy RL (``uchi/grpo_train.py``, 0.5.0 Item 6):
+    the ReAct episodes GRPO samples and the model its optimizer updates must
+    be the *same* object, so weight updates from one instance are actually
+    reflected the next time ``generate_fn`` is called — a second frozen
+    model loaded from the same checkpoint path would never change.
+    """
     @torch.no_grad()
     def generate_fn(prompt: str, max_tokens: int = 64, think: bool = False,
                      repetition_penalty: float = 1.3) -> str:

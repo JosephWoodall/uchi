@@ -136,11 +136,15 @@ class _StubPolicy(torch.nn.Module):
     """Minimal trainable stand-in for HybridTSSM -- only needs to be
     callable as `model(x) -> (lang_logits, syntax_logits)` with real
     gradients, same call shape `sequence_log_prob` uses against the real
-    model."""
+    model. `.embedding` aliases `.embed` -- `sequence_log_prob`'s
+    empty-response path reads `model.embedding.weight` directly (matching
+    the real HybridTSSM's attribute name), so the stub needs to expose it
+    under both names to stand in for that path too."""
 
     def __init__(self, vocab_size: int = 64, d_model: int = 8):
         super().__init__()
         self.embed = torch.nn.Embedding(vocab_size, d_model)
+        self.embedding = self.embed
         self.proj = torch.nn.Linear(d_model, vocab_size)
 
     def forward(self, x):
@@ -155,6 +159,46 @@ def test_sequence_log_prob_is_finite_and_differentiable():
     assert torch.isfinite(lp)
     lp.backward()
     assert model.embed.weight.grad is not None
+
+
+def test_sequence_log_prob_empty_response_is_still_differentiable():
+    # Real bug found running a live GRPO calibration: a branch whose
+    # response leaves no room in the token budget (e.g. a long prompt with
+    # a tight max_length, or -- the real, observed case -- a ReAct episode
+    # that produced nothing against an undertrained proposer) hits the
+    # "no room for a response" early-return path. The old code returned
+    # torch.zeros(()) there -- a fresh tensor disconnected from the model's
+    # graph. If EVERY branch in a GRPOTrainer group hits this
+    # simultaneously, grpo_loss's stacked log_probs ends up with no graph
+    # at all, and .backward() crashes with "element 0 of tensors does not
+    # require grad and does not have a grad_fn". max_length=1 forces the
+    # prompt alone to consume the whole budget, deterministically
+    # triggering the same n_response<=0 path.
+    model = _StubPolicy()
+    tok = _StubTokenizer()
+    lp = sequence_log_prob(model, tok, prompt="Issue: fix the bug", response="Thought: ok", max_length=1)
+    assert torch.isfinite(lp)
+    assert lp.item() == pytest.approx(0.0)
+    lp.backward()
+    assert model.embed.weight.grad is not None
+
+
+def test_grpo_loss_backward_survives_an_all_degenerate_group():
+    # The exact failure mode: every branch in a group hits the degenerate
+    # case above, so log_probs is built entirely from sequence_log_prob's
+    # differentiable-zero path, not real per-token log-probs. grpo_loss's
+    # backward() must not crash even here.
+    model = _StubPolicy()
+    tok = _StubTokenizer()
+    log_probs = torch.stack([
+        sequence_log_prob(model, tok, prompt="Issue: fix the bug", response="Thought: ok", max_length=1)
+        for _ in range(4)
+    ])
+    rewards = torch.tensor([0.0, 0.0, 0.0, 0.0])
+    advantage = grpo_advantage(rewards)
+    loss = grpo_loss(advantage, log_probs)
+    assert torch.isfinite(loss)
+    loss.backward()  # must not raise
 
 
 def _run(cmd, cwd):
